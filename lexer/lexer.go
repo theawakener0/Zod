@@ -1,6 +1,6 @@
 package lexer
 
-import tk "../token"
+import tk "github.com/theawakener0/zod/token"
 
 type Lexer struct {
 	input			string
