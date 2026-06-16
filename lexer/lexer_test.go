@@ -6,16 +6,52 @@ import (
 )
 
 func TestNextToken(t *testing.T) {
-	input := "=+(){},;"
+	input := `let five = 5;
+	let ten = 10;
+
+	let add = fn(x, y) {
+		x+y;
+	};
+
+	let result = add(five, ten);
+	`
 
 	tests := []tk.Token {
-		{tk.ASSIN, "="},
-		{tk.PLUS, "+"},
+		{tk.LET, "let"},
+		{tk.IDENT, "five"},
+		{tk.ASSIGN, "="},
+		{tk.INT, "5"},
+		{tk.SEMICOLON, ";"},
+		{tk.LET, "let"},
+		{tk.IDENT, "ten"},
+		{tk.ASSIGN, "="},
+		{tk.INT, "10"},
+		{tk.SEMICOLON, ";"},
+		{tk.LET, "let"},
+		{tk.IDENT, "add"},
+		{tk.ASSIGN, "="},
+		{tk.FUNCTION, "fn"},
 		{tk.LPAREN, "("},
+		{tk.IDENT, "x"},
+		{tk.COMMA, ","},
+		{tk.IDENT, "y"},
 		{tk.RPAREN, ")"},
 		{tk.LBRACE, "{"},
+		{tk.IDENT, "x"},
+		{tk.PLUS, "+"},
+		{tk.IDENT, "y"},
+		{tk.SEMICOLON, ";"},
 		{tk.RBRACE, "}"},
+		{tk.SEMICOLON, ";"},
+		{tk.LET, "let"},
+		{tk.IDENT, "result"},
+		{tk.ASSIGN, "="},
+		{tk.IDENT, "add"},
+		{tk.LPAREN, "("},
+		{tk.IDENT, "five"},
 		{tk.COMMA, ","},
+		{tk.IDENT, "ten"},
+		{tk.RPAREN, ")"},
 		{tk.SEMICOLON, ";"},
 		{tk.EOF, ""},
 	}

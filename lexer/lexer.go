@@ -1,6 +1,8 @@
 package lexer
 
-import tk "github.com/theawakener0/zod/token"
+import (
+	tk "github.com/theawakener0/zod/token"
+)
 
 type Lexer struct {
 	input			string
@@ -33,9 +35,11 @@ func newToken(tokenType tk.TokenType, ch byte) tk.Token {
 func (l *Lexer) NextToken() tk.Token {
 	var tok tk.Token
 
+	l.skipWhitespace()
+
 	switch l.ch {
 	case '=':
-		tok = newToken(tk.ASSIN, l.ch)
+		tok = newToken(tk.ASSIGN, l.ch)
 	case ';':
 		tok = newToken(tk.SEMICOLON, l.ch)
 	case '(':
@@ -53,10 +57,52 @@ func (l *Lexer) NextToken() tk.Token {
 	case 0:
 		tok.Literal = ""
 		tok.Type = tk.EOF
+	default:
+		if isLetter(l.ch) {
+			tok.Literal = l.readIdentifier()
+			tok.Type = tk.LookupIdent(tok.Literal)
+			return tok
+		} else if isDigit(l.ch) {
+			tok.Type = tk.INT
+			tok.Literal = l.readNumber()
+			return tok
+		} else {
+			tok = newToken(tk.ILLEGAL, l.ch)
+		}
 	}
 
 	l.readChar()
 	return tok
 }
 
+func (l *Lexer) readIdentifier() string {
+	position := l.position
 
+	for isLetter(l.ch) {
+		l.readChar()
+	}
+	return l.input[position:l.position]
+}
+
+func (l *Lexer) readNumber() string {
+	position := l.position
+
+	for isDigit(l.ch) {
+		l.readChar()
+	}
+	return l.input[position:l.position]
+}
+
+func (l *Lexer) skipWhitespace() {
+	for l.ch == ' ' || l.ch == '\t' || l.ch == '\n' || l.ch == '\r' {
+		l.readChar()
+	}
+}
+
+func isLetter(ch byte) bool {
+	return 'a' <= ch && ch <= 'z' || 'A' <= ch && ch <= 'Z'
+}
+
+func isDigit(ch byte) bool {
+	return '0' <= ch && ch <= '9'
+}
