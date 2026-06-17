@@ -13,6 +13,19 @@ func TestNextToken(t *testing.T) {
 		x+y;
 	};
 
+	FiveAndTen := 10 + 5 * 1;
+
+	loop {FiveAndTen -= 1;}
+
+	if (five >= ten) {
+		for (;;) {
+			FiveAndTen += 1/1;
+		}
+	} else {
+		end := add(FiveAndTen, ten) / 2; 
+	}
+
+
 	let result = add(five, ten);
 	`
 
@@ -43,6 +56,56 @@ func TestNextToken(t *testing.T) {
 		{tk.SEMICOLON, ";"},
 		{tk.RBRACE, "}"},
 		{tk.SEMICOLON, ";"},
+		{tk.IDENT, "FiveAndTen"},
+		{tk.ASSIGNCHAR, ":="},
+		{tk.INT, "10"},
+		{tk.PLUS, "+"},
+		{tk.INT, "5"},
+		{tk.ASTERISK, "*"},
+		{tk.INT, "1"},
+		{tk.SEMICOLON, ";"},
+		{tk.LOOP, "loop"},
+		{tk.LBRACE, "{"},
+		{tk.IDENT, "FiveAndTen"},
+		{tk.DECDASSIGN, "-="},
+		{tk.INT, "1"},
+		{tk.SEMICOLON, ";"},
+		{tk.RBRACE, "}"},
+		{tk.IF, "if"},
+		{tk.LPAREN, "("},
+		{tk.IDENT, "five"},
+		{tk.GTEQ, ">="},
+		{tk.IDENT, "ten"},
+		{tk.RPAREN, ")"},
+		{tk.LBRACE, "{"},
+		{tk.FOR, "for"},
+		{tk.LPAREN, "("},
+		{tk.SEMICOLON, ";"},
+		{tk.SEMICOLON, ";"},
+		{tk.RPAREN, ")"},
+		{tk.LBRACE, "{"},
+		{tk.IDENT, "FiveAndTen"},
+		{tk.INCASSIGN, "+="},
+		{tk.INT, "1"},
+		{tk.SLASH, "/"},
+		{tk.INT, "1"},
+		{tk.SEMICOLON, ";"},
+		{tk.RBRACE, "}"},
+		{tk.RBRACE, "}"},
+		{tk.ELSE, "else"},
+		{tk.LBRACE, "{"},
+		{tk.IDENT, "end"},
+		{tk.ASSIGNCHAR, ":="},
+		{tk.IDENT, "add"},
+		{tk.LPAREN, "("},
+		{tk.IDENT, "FiveAndTen"},
+		{tk.COMMA, ","},
+		{tk.IDENT, "ten"},
+		{tk.RPAREN, ")"},
+		{tk.SLASH, "/"},
+		{tk.INT, "2"},
+		{tk.SEMICOLON, ";"},
+		{tk.RBRACE, "}"},
 		{tk.LET, "let"},
 		{tk.IDENT, "result"},
 		{tk.ASSIGN, "="},
