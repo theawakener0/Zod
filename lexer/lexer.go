@@ -28,6 +28,14 @@ func (l *Lexer) readChar() {
 	l.readPosition += 1
 }
 
+func (l *Lexer) peekChar() byte {
+	if l.readPosition >= len(l.input) {
+		return 0
+	} else {
+		return l.input[l.readPosition]
+	}
+}
+
 func newToken(tokenType tk.TokenType, ch byte) tk.Token {
 	return tk.Token{Type: tokenType, Literal: string(ch)}
 }
@@ -39,7 +47,13 @@ func (l *Lexer) NextToken() tk.Token {
 
 	switch l.ch {
 	case '=':
-		tok = newToken(tk.ASSIGN, l.ch)
+		if l.peekChar() == '=' {
+			ch := l.ch
+			l.readChar()
+			tok = tk.Token{tk.EQ, string(ch) + string(l.ch)}
+		} else {
+			tok = newToken(tk.ASSIGN, l.ch)
+		}
 	case ';':
 		tok = newToken(tk.SEMICOLON, l.ch)
 	case '(':
@@ -49,11 +63,81 @@ func (l *Lexer) NextToken() tk.Token {
 	case ',':
 		tok = newToken(tk.COMMA, l.ch)
 	case '+':
-		tok = newToken(tk.PLUS, l.ch)
+		if l.peekChar() == '=' {
+			ch := l.ch
+			l.readChar()
+			tok = tk.Token{tk.INCASSIGN, string(ch) + string(l.ch)}
+		} else if l.peekChar() == '+' {
+			ch := l.ch
+			l.readChar()
+			tok = tk.Token{tk.INC, string(ch) + string(l.ch)}
+		} else {
+			tok = newToken(tk.PLUS, l.ch)
+		}
+	case '-':
+		if l.peekChar() == '=' {
+			ch := l.ch
+			l.readChar()
+			tok = tk.Token{tk.DECDASSIGN, string(ch) + string(l.ch)}
+		} else if l.peekChar() == '-' {
+			ch := l.ch
+			l.readChar()
+			tok = tk.Token{tk.DEC, string(ch) + string(l.ch)}
+		} else {
+			tok = newToken(tk.MINUS, l.ch)
+		}
+	case '*':
+		if l.peekChar() == '=' {
+			ch := l.ch
+			l.readChar()
+			tok = tk.Token{tk.MLTASSIGN, string(ch) + string(l.ch)}
+		} else {
+			tok = newToken(tk.ASTERISK, l.ch)
+		}
+	case '/':
+		if l.peekChar() == '=' {
+			ch := l.ch
+			l.readChar()
+			tok = tk.Token{tk.DIVASSIGN, string(ch) + string(l.ch)}
+		} else {
+			tok = newToken(tk.SLASH, l.ch)
+		}
+	case '!':
+		if l.peekChar() == '=' {
+			ch := l.ch
+			l.readChar()
+			tok = tk.Token{tk.NOTEQ, string(ch) + string(l.ch)}
+		} else {
+			tok = newToken(tk.BANG, l.ch)
+		}
+	case '<':
+		if l.peekChar() == '=' {
+			ch := l.ch
+			l.readChar()
+			tok = tk.Token{tk.LTEQ, string(ch) + string(l.ch)}
+		} else {
+			tok	= newToken(tk.LT, l.ch)
+		}
+	case '>':
+		if l.peekChar() == '=' {
+			ch := l.ch
+			l.readChar()
+			tok = tk.Token{tk.GTEQ, string(ch) + string(l.ch)}
+		} else {
+			tok = newToken(tk.GT, l.ch)
+		}
 	case '{':
 		tok = newToken(tk.LBRACE, l.ch)
 	case '}':
 		tok = newToken(tk.RBRACE, l.ch)
+	case ':':
+		if l.peekChar() == '=' {
+			ch := l.ch
+			l.readChar()
+			tok = tk.Token{tk.ASSIGNCHAR, string(ch) + string(l.ch)}
+		} else {
+			tok = newToken(tk.COLOMN, l.ch)
+		}
 	case 0:
 		tok.Literal = ""
 		tok.Type = tk.EOF
