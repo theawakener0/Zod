@@ -6,7 +6,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/theawakener0/zod/lexer"
+	lx "github.com/theawakener0/zod/lexer"
 	tk "github.com/theawakener0/zod/token"
 )
 
@@ -34,7 +34,7 @@ func Start(in io.Reader, out io.Writer) {
 			os.Exit(0)
 		}
 
-		l := lexer.New(line)
+		l := lx.New(line)
 
 		for tok := l.NextToken(); tok.Type != tk.EOF; tok = l.NextToken() {
 			fmt.Printf("%+v\n", tok)
