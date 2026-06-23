@@ -68,6 +68,8 @@ func (p *Parser) parseStatement() ast.Statement {
 			// it returns nil for now.
 			return nil
 		}
+	case tk.RETURN:
+		return p.parseReturnStatement()
 	default:
 		return nil
 	}
@@ -109,6 +111,18 @@ func (p *Parser) parseAssignCharStatement() *ast.AssignStatement {
 		p.nextToken()
 	}
 	
+	return stmt
+}
+
+func (p *Parser) parseReturnStatement() *ast.ReturnStatement {
+	stmt := &ast.ReturnStatement{Token: p.curToken}
+
+	p.nextToken()
+
+	for !p.curTokenIs(tk.SEMICOLON) && !p.curTokenIs(tk.EOF) {
+		p.nextToken()
+	}
+
 	return stmt
 }
 
