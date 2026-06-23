@@ -20,7 +20,7 @@ func TestAssigningStatements(t *testing.T) {
 	if program == nil {
 		t.Fatalf("ParseProgram() returned nil")
 	}
-	if len(program.Statements) != 3 {
+	if len(program.Statements) != 4 {
 		t.Fatalf("program.Statements does not contain 3 statements. got=%d", len(program.Statements))
 	}
 	
@@ -42,7 +42,7 @@ func TestAssigningStatements(t *testing.T) {
 }
 
 func testAssigningStatements(t *testing.T, s ast.Statement, name string) bool {
-	if s.TokenLiteral() != "let" || s.TokenLiteral() != ":=" {
+	if s.TokenLiteral() != "let" && s.TokenLiteral() != ":=" {
 		t.Errorf("s.TokenLiteral not 'let' or ':='. got=%q", s.TokenLiteral())
 		return false
 	}
