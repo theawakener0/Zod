@@ -75,6 +75,8 @@ func New(l *lx.Lexer) *Parser {
 
 	p.registerPrefix(tk.LPAREN, p.parseGroupedExpression)
 	
+	p.registerPrefix(tk.IF, p.parseIfExpression)
+	
 	p.nextToken()
 	p.nextToken()
 
@@ -295,6 +297,56 @@ func (p *Parser) parseGroupedExpression() ast.Expression {
 	}
 
 	return exp
+}
+
+func (p *Parser) parseIfExpression() ast.Expression {
+	exp := &ast.IfExpression{Token: p.curToken}
+
+	if !p.expectPeek(tk.LPAREN) {
+		return nil
+	}
+
+	p.nextToken()
+	exp.Condition = p.parseExpression(LOWEST)
+
+	if !p.expectPeek(tk.RPAREN) {
+		return nil
+	}
+
+	if !p.expectPeek(tk.LBRACE) {
+		return nil
+	}
+
+	exp.Consequence = p.parseBlockStatement()
+
+	if p.peekTokenIs(tk.ELSE) {
+		p.nextToken()
+
+		if !p.expectPeek(tk.LBRACE) {
+			return nil
+		}
+		
+		exp.Alternative = p.parseBlockStatement()
+	}
+
+	return exp
+}
+
+func (p *Parser) parseBlockStatement() *ast.BlockStatement {
+	block := &ast.BlockStatement{Token: p.curToken}
+	block.Statements = []ast.Statement{}
+
+	p.nextToken()
+
+	for !p.curTokenIs(tk.RBRACE) && !p.curTokenIs(tk.EOF) {
+		stmt := p.parseStatement()
+		if stmt != nil {
+			block.Statements = append(block.Statements, stmt)
+		}
+		p.nextToken()
+	}
+
+	return block
 }
 
 func (p *Parser) noPrefixParseFnError(t tk.TokenType) {
