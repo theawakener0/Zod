@@ -69,6 +69,11 @@ func New(l *lx.Lexer) *Parser {
 	p.registerInfix(tk.NOTEQ, p.parseInfixExpression)
 	p.registerInfix(tk.LT, p.parseInfixExpression)
 	p.registerInfix(tk.GT, p.parseInfixExpression)
+
+	p.registerPrefix(tk.TRUE, p.parseBoolean)
+	p.registerPrefix(tk.FALSE, p.parseBoolean)
+
+	p.registerPrefix(tk.LPAREN, p.parseGroupedExpression)
 	
 	p.nextToken()
 	p.nextToken()
@@ -274,6 +279,22 @@ func (p *Parser) parseInfixExpression(left ast.Expression) ast.Expression {
 	expression.Right = p.parseExpression(precedence)
 
 	return expression
+}
+
+func (p *Parser) parseBoolean() ast.Expression {
+	return &ast.Boolean{Token: p.curToken, Value: p.curTokenIs(tk.TRUE)}
+}
+
+func (p *Parser) parseGroupedExpression() ast.Expression {
+	p.nextToken()
+
+	exp := p.parseExpression(LOWEST)
+
+	if !p.expectPeek(tk.RPAREN) {
+		return nil
+	}
+
+	return exp
 }
 
 func (p *Parser) noPrefixParseFnError(t tk.TokenType) {
