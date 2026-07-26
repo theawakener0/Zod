@@ -46,6 +46,7 @@ var precedences = map[tk.TokenType]int {
 	tk.MINUS: 		SUM,
 	tk.SLASH: 		PRODUCT,
 	tk.ASTERISK: 	PRODUCT,
+	tk.LPAREN:		CALL,
 }
 
 func New(l *lx.Lexer) *Parser {
@@ -69,6 +70,7 @@ func New(l *lx.Lexer) *Parser {
 	p.registerInfix(tk.NOTEQ, p.parseInfixExpression)
 	p.registerInfix(tk.LT, p.parseInfixExpression)
 	p.registerInfix(tk.GT, p.parseInfixExpression)
+	p.registerInfix(tk.LPAREN, p.parseCallExpression)
 
 	p.registerPrefix(tk.TRUE, p.parseBoolean)
 	p.registerPrefix(tk.FALSE, p.parseBoolean)
@@ -76,6 +78,8 @@ func New(l *lx.Lexer) *Parser {
 	p.registerPrefix(tk.LPAREN, p.parseGroupedExpression)
 	
 	p.registerPrefix(tk.IF, p.parseIfExpression)
+	
+	p.registerPrefix(tk.FUNCTION, p.parseFunctionLiteral)
 	
 	p.nextToken()
 	p.nextToken()
@@ -347,6 +351,84 @@ func (p *Parser) parseBlockStatement() *ast.BlockStatement {
 	}
 
 	return block
+}
+
+func (p *Parser) parseFunctionLiteral() ast.Expression {
+	fl := &ast.FunctionLiteral{Token: p.curToken}
+
+	if !p.expectPeek(tk.LPAREN) {
+		return nil
+	}
+
+	fl.Parameters = p.parseFunctionParameters()
+
+	if !p.expectPeek(tk.LBRACE) {
+		return nil
+	}
+	
+	fl.Body = p.parseBlockStatement()
+
+	return fl
+}
+
+func (p *Parser) parseFunctionParameters() []*ast.Identifier {
+	identifiers := []*ast.Identifier{}
+
+	if p.peekTokenIs(tk.RPAREN) {
+		p.nextToken()
+		return identifiers
+	}
+
+	p.nextToken()
+
+	ident := &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	identifiers = append(identifiers, ident)
+
+	for p.peekTokenIs(tk.COMMA) {
+		p.nextToken()
+		p.nextToken()
+
+		nextIdent := &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
+		identifiers = append(identifiers, nextIdent)
+	}
+
+	if !p.expectPeek(tk.RPAREN) {
+		return nil
+	}
+
+	return identifiers
+}
+
+func (p *Parser) parseCallExpression(function ast.Expression) ast.Expression {
+	exp := &ast.CallExpression{Token: p.curToken, Function: function}
+	exp.Arguments = p.parseCallArguments()
+
+	return exp
+}
+
+func (p *Parser) parseCallArguments() []ast.Expression {
+	arguments := []ast.Expression{}
+
+	if p.peekTokenIs(tk.RPAREN) {
+		p.nextToken()
+		return arguments
+	}
+	
+	p.nextToken()
+	arguments = append(arguments, p.parseExpression(LOWEST))
+
+	for p.peekTokenIs(tk.COMMA) {
+		p.nextToken()
+		p.nextToken()
+		nextArg := p.parseExpression(LOWEST)
+		arguments = append(arguments, nextArg)
+	}
+
+	if !p.expectPeek(tk.RPAREN) {
+		return nil
+	}
+
+	return arguments
 }
 
 func (p *Parser) noPrefixParseFnError(t tk.TokenType) {
