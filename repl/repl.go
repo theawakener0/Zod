@@ -7,7 +7,7 @@ import (
 	"os"
 
 	lx "github.com/theawakener0/zod/lexer"
-	tk "github.com/theawakener0/zod/token"
+	ps "github.com/theawakener0/zod/parser"
 )
 
 const PROMPT = "\x1b[0;32m>>\x1b[0m "
@@ -35,11 +35,24 @@ func Start(in io.Reader, out io.Writer) {
 		}
 
 		l := lx.New(line)
+		p := ps.New(l)
 
-		for tok := l.NextToken(); tok.Type != tk.EOF; tok = l.NextToken() {
-			fmt.Printf("%+v\n", tok)
+		program := p.ParseProgram()
+		if len(p.Errors()) != 0 {
+			printParseErrors(out, p.Errors())
+			continue
 		}
+		
+		io.WriteString(out, program.String())
+		io.WriteString(out, "\n")
+	}
+}
 
+func printParseErrors(out io.Writer, error []string) {
+	io.WriteString(out, "We ran into some problems while parsing your program.\n")
+	io.WriteString(out, "Parse errors:\n")
+	for _, msg := range error {
+		io.WriteString(out, "\t" + msg + "\n")
 	}
 }
 

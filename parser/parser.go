@@ -169,7 +169,10 @@ func (p *Parser) parseLetStatement() *ast.LetStatement {
 		return nil
 	}
 
-	for !p.curTokenIs(tk.SEMICOLON) && !p.curTokenIs(tk.EOF){
+	p.nextToken()
+	stmt.Value = p.parseExpression(LOWEST)
+
+	if p.peekTokenIs(tk.SEMICOLON) {
 		p.nextToken()
 	}
 
@@ -187,8 +190,9 @@ func (p *Parser) parseAssignCharStatement() *ast.AssignStatement {
 	stmt.Name = &ast.Identifier{Token: nameTok, Value: nameTok.Literal}
 
 	p.nextToken()
+	stmt.Value = p.parseExpression(LOWEST)
 	
-	for !p.curTokenIs(tk.SEMICOLON) && !p.curTokenIs(tk.EOF) {
+	if p.peekTokenIs(tk.SEMICOLON) {
 		p.nextToken()
 	}
 	
@@ -199,8 +203,9 @@ func (p *Parser) parseReturnStatement() *ast.ReturnStatement {
 	stmt := &ast.ReturnStatement{Token: p.curToken}
 
 	p.nextToken()
+	stmt.ReturnValue = p.parseExpression(LOWEST)
 
-	for !p.curTokenIs(tk.SEMICOLON) && !p.curTokenIs(tk.EOF) {
+	if p.peekTokenIs(tk.SEMICOLON) {
 		p.nextToken()
 	}
 
