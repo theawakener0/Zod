@@ -1,0 +1,318 @@
+package evaluator
+
+import (
+	"fmt"
+
+	"github.com/theawakener0/zod/ast"
+	obj "github.com/theawakener0/zod/object"
+)
+
+var (
+	NULL  = &obj.Null{}
+	TRUE  = &obj.Boolean{Value: true}
+	FALSE = &obj.Boolean{Value: false}
+)
+
+func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
+	switch n := node.(type) {
+	case *ast.Program:
+		return evalProgram(n, env)
+
+	case *ast.ExpressionStatement:
+		return Eval(n.Expression, env)
+
+	case *ast.IntegerLiteral:
+		return &obj.Integer{Value: n.Value}
+	
+	case *ast.Boolean:
+		return nattiveBoolToBooleanObject(n.Value)
+	
+	case *ast.PrefixExpression:
+		right := Eval(n.Right, env)
+		if isError(right) {
+			return right
+		}
+		return evalPrefixExpression(n.Opt, right)
+	
+	case *ast.InfixExpression:
+		left := Eval(n.Left, env)
+		if isError(left) {
+			return left
+		}
+
+		right := Eval(n.Right, env)
+		if isError(right) {
+			return right
+		}
+
+		return evalInfixExpression(n.Opt, left, right)
+	
+	case *ast.BlockStatement:
+		return evalBlockStatement(n, env)
+	
+	case *ast.IfExpression:
+		return evalIfExpression(n, env)
+
+	case *ast.ReturnStatement:
+		val := Eval(n.ReturnValue, env)
+		if isError(val) {
+			return val
+		}
+		return &obj.ReturnValue{Value: val}
+
+	case *ast.LetStatement:
+		val := Eval(n.Value, env)
+		if isError(val) {
+			return val
+		}
+		env.Set(n.Name.Value, val)
+
+	case *ast.AssignStatement:
+		val := Eval(n.Value, env)
+		if isError(val) {
+			return val
+		}
+
+		env.Set(n.Name.Value, val)
+
+	case *ast.Identifier:
+		return evalIdentifier(n, env)
+
+	case *ast.FunctionLiteral:
+		params := n.Parameters
+		body := n.Body
+		return &obj.Function{Parameters: params, Env: env, Body: body}
+
+	case *ast.CallExpression:
+		fn := Eval(n.Function, env)
+		if isError(fn) {
+			return fn
+		}
+		args := evalExpressions(n.Arguments, env)
+		if len(args) == 1 && isError(args[0]) {
+			return args[0]
+		}
+
+		return applyFunction(fn, args)
+	}
+
+	return nil
+}
+
+func evalStatements(stmts []ast.Statement, env *obj.Enviroment) obj.Object {
+	var result obj.Object
+
+	for _, stmt := range stmts {
+		result = Eval(stmt, env)
+
+		if returnValue, ok := result.(*obj.ReturnValue); ok {
+			return returnValue.Value
+		}
+	}
+
+	return result
+}
+
+func nattiveBoolToBooleanObject(input bool) *obj.Boolean {
+	if input {
+		return TRUE
+	}
+
+	return FALSE
+}
+
+func evalBangOperatorExpression(right obj.Object) obj.Object {
+	switch right {
+	case TRUE:
+		return FALSE
+	case FALSE:
+		return TRUE
+	case NULL:
+		return TRUE
+	default:
+		return FALSE
+	}
+}
+
+func evalMinusPrefixOperatorExpression(right obj.Object) obj.Object {
+	if right.Type() != obj.INTEGER_OBJ {
+		return newError("unknown prefix operator: -%s", right.Type())
+	}
+
+	value := right.(*obj.Integer).Value
+	return &obj.Integer{Value: -value}
+}
+
+func evalPrefixExpression(operator string, right obj.Object) obj.Object {
+	switch operator {
+	case "!":
+		return evalBangOperatorExpression(right)
+	case "-":
+		return evalMinusPrefixOperatorExpression(right)
+	default:
+		return newError("unknown prefix operator: %s%s", operator, right.Type())
+	}
+}
+
+func evalIntegerInfixExpression(operator string, left obj.Object, right obj.Object) obj.Object {
+	leftValue := left.(*obj.Integer).Value
+	rightValue := right.(*obj.Integer).Value
+
+	switch operator {
+	case "+":
+		return &obj.Integer{Value: leftValue + rightValue}
+	case "-":
+		return &obj.Integer{Value: leftValue - rightValue}
+	case "*":
+		return &obj.Integer{Value: leftValue * rightValue}
+	case "/":
+		return &obj.Integer{Value: leftValue / rightValue}
+	case "<":
+		return nattiveBoolToBooleanObject(leftValue < rightValue)
+	case ">":
+		return nattiveBoolToBooleanObject(leftValue > rightValue)
+	case "==":
+		return nattiveBoolToBooleanObject(leftValue == rightValue)
+	case "!=":
+		return nattiveBoolToBooleanObject(leftValue != rightValue)
+	default:
+		return newError("unknown infix operator: %s %s %s", left.Type(), operator, right.Type())
+	}
+}
+
+func evalInfixExpression(operator string, left obj.Object, right obj.Object) obj.Object {
+	switch {
+	case left.Type() == obj.INTEGER_OBJ && right.Type() == obj.INTEGER_OBJ:
+		return evalIntegerInfixExpression(operator, left, right)
+	case operator == "==":
+		return nattiveBoolToBooleanObject(left == right)
+	case operator == "!=":
+		return nattiveBoolToBooleanObject(left != right)
+	default:
+		return newError("unknown infix operator: %s %s %s", left.Type(), operator, right.Type())
+	}
+}
+
+func isTruthy(object obj.Object) bool {
+	switch object {
+	case TRUE:
+		return true
+	case FALSE:
+		return false
+	case NULL:
+		return false
+	default:
+		return true
+	}
+}
+
+func evalIfExpression(ie *ast.IfExpression, env *obj.Enviroment) obj.Object {
+	condition := Eval(ie.Condition, env)
+	if isError(condition) {
+		return condition
+	}
+
+	if isTruthy(condition) {
+		return Eval(ie.Consequence, env)
+	} else if ie.Alternative != nil {
+		return Eval(ie.Alternative, env)
+	} else {
+		return NULL
+	}
+}
+
+func evalProgram(p *ast.Program, env *obj.Enviroment) obj.Object {
+	var result obj.Object
+
+	for _, stmt := range p.Statements {
+		result = Eval(stmt, env)
+		
+		switch result := result.(type) {
+		case *obj.ReturnValue:
+			return result.Value
+		case *obj.Error:
+			return result
+		}
+	}
+
+	return result
+}
+
+func evalBlockStatement(b *ast.BlockStatement, env *obj.Enviroment) obj.Object {
+	var result obj.Object
+
+	for _, stmt := range b.Statements {
+		result = Eval(stmt, env)
+
+		if result != nil {
+			rt := result.Type()
+			if rt == obj.RETURN_VALUE_OBJ || rt == obj.ERROR_OBJ {
+				return result
+			}
+		}
+	}
+
+	return result
+}
+
+func newError(format string, args ...any) *obj.Error {
+	return &obj.Error{Message: fmt.Sprintf(format, args...)}
+}
+
+func isError(object obj.Object) bool {
+	if object != nil {
+		return object.Type() == obj.ERROR_OBJ
+	}
+	return false
+}
+
+func evalIdentifier(node *ast.Identifier, env *obj.Enviroment) obj.Object {
+	val, ok := env.Get(node.Value)
+	if !ok {
+		return newError("identifier not found: %s", node.Value)
+	}
+	return val
+}
+
+func evalExpressions(exps []ast.Expression, env *obj.Enviroment) []obj.Object {
+	var result []obj.Object
+
+	for _, exp := range exps {
+		eval := Eval(exp, env)
+		if isError(eval) {
+			return []obj.Object{eval}
+		}
+		result = append(result, eval)
+	}
+
+	return result
+}
+
+func unwrapReturnValue(object obj.Object) obj.Object {
+	if returnValue, ok := object.(*obj.ReturnValue); ok {
+		return returnValue.Value
+	}
+
+	return object
+}
+
+func extendFunctonEnv(fn *obj.Function, args []obj.Object) *obj.Enviroment {
+	env := obj.NewEnclosedEnviroment(fn.Env)
+
+	for id, arg := range fn.Parameters {
+		env.Set(arg.Value, args[id])
+	}
+
+	return env
+}
+
+func applyFunction(fn obj.Object, args []obj.Object) obj.Object {
+	function, ok := fn.(*obj.Function)
+	if !ok {
+		return newError("not a function: %s", fn.Type())
+	}
+
+	extendedEnv := extendFunctonEnv(function, args)
+	eval := Eval(function.Body, extendedEnv)
+	return unwrapReturnValue(eval)
+}

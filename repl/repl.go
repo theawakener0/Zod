@@ -6,7 +6,9 @@ import (
 	"io"
 	"os"
 
+	ev "github.com/theawakener0/zod/evaluator"
 	lx "github.com/theawakener0/zod/lexer"
+	obj "github.com/theawakener0/zod/object"
 	ps "github.com/theawakener0/zod/parser"
 )
 
@@ -15,6 +17,7 @@ const PROMPT = "\x1b[0;32m>>\x1b[0m "
 
 func Start(in io.Reader, out io.Writer) {
 	scanner := bufio.NewScanner(in)
+	env := obj.NewEnviroment()
 
 	for {
 		fmt.Printf(PROMPT)
@@ -42,9 +45,13 @@ func Start(in io.Reader, out io.Writer) {
 			printParseErrors(out, p.Errors())
 			continue
 		}
+
+		eval := ev.Eval(program, env)
+		if eval != nil {
+			io.WriteString(out, eval.Inspect())
+			io.WriteString(out, "\n")
+		}
 		
-		io.WriteString(out, program.String())
-		io.WriteString(out, "\n")
 	}
 }
 
