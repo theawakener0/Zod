@@ -14,6 +14,7 @@ const (
 
 	IDENT = "IDENT"
 	INT = "INT"
+	STRING = "STRING"
 
 	ASSIGN = "="
 	PLUS = "+"
@@ -33,6 +34,8 @@ const (
 	DECDASSIGN = "-="
 	MLTASSIGN = "*="
 	DIVASSIGN = "/="
+	LAND = "&&"
+	LOR = "||"
 	INC = "++"
 	DEC = "--"
 	ASSIGNCHAR = ":="
@@ -54,7 +57,6 @@ const (
 	ELSE = "ELSE"
 	RETURN = "RETURN"
 	FOR = "FOR"
-	WHILE = "WHILE"
 	LOOP = "LOOP"
 )
 
@@ -67,7 +69,6 @@ var keywords = map[string]TokenType {
 	"else": ELSE,
 	"return": RETURN,
 	"for": FOR,
-	"while": WHILE,
 	"loop": LOOP,
 }
 

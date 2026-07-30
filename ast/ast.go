@@ -301,6 +301,71 @@ func (ce *CallExpression) String() string {
 	return out.String()
 }
 
+type StringLiteral struct {
+	Token	tk.Token
+	Value	string
+}
+
+func (sl *StringLiteral) expressionNode() {}
+func (sl *StringLiteral) TokenLiteral() string {
+	return sl.Token.Literal
+}
+func (sl *StringLiteral) String() string {
+	return sl.Token.Literal
+}
+
+type ForExpression struct {
+	Token     tk.Token
+	Init      Expression
+	Condition Expression
+	Update    Expression
+	Body      *BlockStatement
+}
+
+func (fe *ForExpression) expressionNode() {}
+func (fe *ForExpression) TokenLiteral() string {
+	return fe.Token.Literal
+}
+func (fe *ForExpression) String() string {
+	var out bytes.Buffer
+
+	out.WriteString("for")
+	out.WriteString("(")
+	if fe.Init != nil {
+		out.WriteString(fe.Init.String())
+	}
+	out.WriteString(";")
+	if fe.Condition != nil {
+		out.WriteString(fe.Condition.String())
+	}
+	out.WriteString(";")
+	if fe.Update != nil {
+		out.WriteString(fe.Update.String())
+	}
+	out.WriteString(")")
+	out.WriteString(fe.Body.String())
+
+	return out.String()
+}
+
+type LoopExpression struct {
+	Token tk.Token
+	Body  *BlockStatement
+}
+
+func (le *LoopExpression) expressionNode() {}
+func (le *LoopExpression) TokenLiteral() string {
+	return le.Token.Literal
+}
+func (le *LoopExpression) String() string {
+	var out bytes.Buffer
+
+	out.WriteString("loop")
+	out.WriteString(le.Body.String())
+
+	return out.String()
+}
+
 type Identifier struct {
 	Token tk.Token
 	Value string

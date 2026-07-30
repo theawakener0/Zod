@@ -28,6 +28,9 @@ func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
 		return nattiveBoolToBooleanObject(n.Value)
 	
 	case *ast.PrefixExpression:
+		if n.Opt == "++" || n.Opt == "--" {
+			return evalIncrementDecrement(n, env)
+		}
 		right := Eval(n.Right, env)
 		if isError(right) {
 			return right
@@ -35,6 +38,27 @@ func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
 		return evalPrefixExpression(n.Opt, right)
 	
 	case *ast.InfixExpression:
+		if n.Opt == "&&" {
+			left := Eval(n.Left, env)
+			if isError(left) {
+				return left
+			}
+			if !isTruthy(left) {
+				return left
+			}
+			return Eval(n.Right, env)
+		}
+		if n.Opt == "||" {
+			left := Eval(n.Left, env)
+			if isError(left) {
+				return left
+			}
+			if isTruthy(left) {
+				return left
+			}
+			return Eval(n.Right, env)
+		}
+
 		left := Eval(n.Left, env)
 		if isError(left) {
 			return left
@@ -73,7 +97,50 @@ func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
 			return val
 		}
 
-		env.Set(n.Name.Value, val)
+		switch n.Token.Literal {
+		case ":=":
+			env.Set(n.Name.Value, val)
+		case "+=":
+			curr := Eval(n.Name, env)
+			if isError(curr) {
+				return curr
+			}
+			result := evalInfixExpression("+", curr, val)
+			if isError(result) {
+				return result
+			}
+			env.Set(n.Name.Value, result)
+		case "-=":
+			curr := Eval(n.Name, env)
+			if isError(curr) {
+				return curr
+			}
+			result := evalInfixExpression("-", curr, val)
+			if isError(result) {
+				return result
+			}
+			env.Set(n.Name.Value, result)
+		case "*=":
+			curr := Eval(n.Name, env)
+			if isError(curr) {
+				return curr
+			}
+			result := evalInfixExpression("*", curr, val)
+			if isError(result) {
+				return result
+			}
+			env.Set(n.Name.Value, result)
+		case "/=":
+			curr := Eval(n.Name, env)
+			if isError(curr) {
+				return curr
+			}
+			result := evalInfixExpression("/", curr, val)
+			if isError(result) {
+				return result
+			}
+			env.Set(n.Name.Value, result)
+		}
 
 	case *ast.Identifier:
 		return evalIdentifier(n, env)
@@ -94,6 +161,15 @@ func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
 		}
 
 		return applyFunction(fn, args)
+
+	case *ast.StringLiteral:
+		return &obj.String{Value: n.Value}
+
+	case *ast.ForExpression:
+		return evalForExpression(n, env)
+
+	case *ast.LoopExpression:
+		return evalLoopExpression(n, env)
 	}
 
 	return nil
@@ -154,7 +230,7 @@ func evalPrefixExpression(operator string, right obj.Object) obj.Object {
 	}
 }
 
-func evalIntegerInfixExpression(operator string, left obj.Object, right obj.Object) obj.Object {
+func evalIntegerInfixExpression(operator string, left, right obj.Object) obj.Object {
 	leftValue := left.(*obj.Integer).Value
 	rightValue := right.(*obj.Integer).Value
 
@@ -175,12 +251,16 @@ func evalIntegerInfixExpression(operator string, left obj.Object, right obj.Obje
 		return nattiveBoolToBooleanObject(leftValue == rightValue)
 	case "!=":
 		return nattiveBoolToBooleanObject(leftValue != rightValue)
+	case "<=":
+		return nattiveBoolToBooleanObject(leftValue <= rightValue)
+	case ">=":
+		return nattiveBoolToBooleanObject(leftValue >= rightValue)
 	default:
 		return newError("unknown infix operator: %s %s %s", left.Type(), operator, right.Type())
 	}
 }
 
-func evalInfixExpression(operator string, left obj.Object, right obj.Object) obj.Object {
+func evalInfixExpression(operator string, left, right obj.Object) obj.Object {
 	switch {
 	case left.Type() == obj.INTEGER_OBJ && right.Type() == obj.INTEGER_OBJ:
 		return evalIntegerInfixExpression(operator, left, right)
@@ -188,6 +268,8 @@ func evalInfixExpression(operator string, left obj.Object, right obj.Object) obj
 		return nattiveBoolToBooleanObject(left == right)
 	case operator == "!=":
 		return nattiveBoolToBooleanObject(left != right)
+	case left.Type() == obj.STRING_OBJ && right.Type() == obj.STRING_OBJ:
+		return evalStringInfixExpression(operator, left, right)
 	default:
 		return newError("unknown infix operator: %s %s %s", left.Type(), operator, right.Type())
 	}
@@ -219,6 +301,88 @@ func evalIfExpression(ie *ast.IfExpression, env *obj.Enviroment) obj.Object {
 	} else {
 		return NULL
 	}
+}
+
+func evalForExpression(fe *ast.ForExpression, env *obj.Enviroment) obj.Object {
+	if fe.Init != nil {
+		result := Eval(fe.Init, env)
+		if isError(result) {
+			return result
+		}
+	}
+
+	for {
+		var condition obj.Object
+		if fe.Condition != nil {
+			condition = Eval(fe.Condition, env)
+		} else {
+			condition = TRUE
+		}
+
+		if isError(condition) {
+			return condition
+		}
+
+		if !isTruthy(condition) {
+			break
+		}
+
+		result := Eval(fe.Body, env)
+		if result != nil {
+			rt := result.Type()
+			if rt == obj.RETURN_VALUE_OBJ || rt == obj.ERROR_OBJ {
+				return result
+			}
+		}
+
+		if fe.Update != nil {
+			result := Eval(fe.Update, env)
+			if isError(result) {
+				return result
+			}
+		}
+	}
+
+	return NULL
+}
+
+func evalLoopExpression(le *ast.LoopExpression, env *obj.Enviroment) obj.Object {
+	for {
+		result := Eval(le.Body, env)
+		if result != nil {
+			rt := result.Type()
+			if rt == obj.RETURN_VALUE_OBJ || rt == obj.ERROR_OBJ {
+				return result
+			}
+		}
+	}
+}
+
+func evalIncrementDecrement(pe *ast.PrefixExpression, env *obj.Enviroment) obj.Object {
+	ident, ok := pe.Right.(*ast.Identifier)
+	if !ok {
+		return newError("prefix %s requires identifier, got %T", pe.Opt, pe.Right)
+	}
+
+	val, ok := env.Get(ident.Value)
+	if !ok {
+		return newError("identifier not found: %s", ident.Value)
+	}
+
+	if val.Type() != obj.INTEGER_OBJ {
+		return newError("prefix %s requires integer, got %s", pe.Opt, val.Type())
+	}
+
+	intVal := val.(*obj.Integer).Value
+	if pe.Opt == "++" {
+		intVal++
+	} else {
+		intVal--
+	}
+
+	newObj := &obj.Integer{Value: intVal}
+	env.Set(ident.Value, newObj)
+	return newObj
 }
 
 func evalProgram(p *ast.Program, env *obj.Enviroment) obj.Object {
@@ -267,11 +431,15 @@ func isError(object obj.Object) bool {
 }
 
 func evalIdentifier(node *ast.Identifier, env *obj.Enviroment) obj.Object {
-	val, ok := env.Get(node.Value)
-	if !ok {
-		return newError("identifier not found: %s", node.Value)
+	if val, ok := env.Get(node.Value); ok {
+		return val
 	}
-	return val
+
+	if builtin, ok := builtins[node.Value]; ok {
+		return builtin
+	}
+
+	return newError("identifier not found: %s", node.Value)
 }
 
 func evalExpressions(exps []ast.Expression, env *obj.Enviroment) []obj.Object {
@@ -307,12 +475,25 @@ func extendFunctonEnv(fn *obj.Function, args []obj.Object) *obj.Enviroment {
 }
 
 func applyFunction(fn obj.Object, args []obj.Object) obj.Object {
-	function, ok := fn.(*obj.Function)
-	if !ok {
-		return newError("not a function: %s", fn.Type())
+	switch function := fn.(type) {
+	case *obj.Function:
+		extendedEnv := extendFunctonEnv(function, args)
+		eval := Eval(function.Body, extendedEnv)
+		return unwrapReturnValue(eval)
+	case *obj.Builtin:
+		return function.Fn(args...)
 	}
 
-	extendedEnv := extendFunctonEnv(function, args)
-	eval := Eval(function.Body, extendedEnv)
-	return unwrapReturnValue(eval)
+	return newError("not a function: %s", fn.Type())
 }
+
+func evalStringInfixExpression(operator string, left, right obj.Object) obj.Object {
+	if operator != "+" {
+		return newError("unknown infix operator: %s %s %s", left.Type(), operator, right.Type())
+	}
+
+	leftValue := left.(*obj.String).Value
+	rightValue := right.(*obj.String).Value
+	return &obj.String{Value: leftValue + rightValue}
+}
+

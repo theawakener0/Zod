@@ -29,6 +29,8 @@ type Parser struct {
 const (
 	_ int = iota
 	LOWEST
+	OR
+	AND
 	EQUALS
 	LESSGREATER
 	SUM
@@ -40,8 +42,12 @@ const (
 var precedences = map[tk.TokenType]int {
 	tk.EQ: 			EQUALS,
 	tk.NOTEQ:  		EQUALS,
+	tk.LAND: 		AND,
+	tk.LOR: 		OR,
 	tk.LT: 			LESSGREATER,
 	tk.GT: 			LESSGREATER,
+	tk.GTEQ: 		LESSGREATER,
+	tk.LTEQ: 		LESSGREATER,
 	tk.PLUS: 		SUM,
 	tk.MINUS: 		SUM,
 	tk.SLASH: 		PRODUCT,
@@ -68,8 +74,12 @@ func New(l *lx.Lexer) *Parser {
 	p.registerInfix(tk.ASTERISK, p.parseInfixExpression)
 	p.registerInfix(tk.EQ, p.parseInfixExpression)
 	p.registerInfix(tk.NOTEQ, p.parseInfixExpression)
+	p.registerInfix(tk.LAND, p.parseInfixExpression)
+	p.registerInfix(tk.LOR, p.parseInfixExpression)
 	p.registerInfix(tk.LT, p.parseInfixExpression)
 	p.registerInfix(tk.GT, p.parseInfixExpression)
+	p.registerInfix(tk.GTEQ, p.parseInfixExpression)
+	p.registerInfix(tk.LTEQ, p.parseInfixExpression)
 	p.registerInfix(tk.LPAREN, p.parseCallExpression)
 
 	p.registerPrefix(tk.TRUE, p.parseBoolean)
@@ -80,6 +90,14 @@ func New(l *lx.Lexer) *Parser {
 	p.registerPrefix(tk.IF, p.parseIfExpression)
 	
 	p.registerPrefix(tk.FUNCTION, p.parseFunctionLiteral)
+
+	p.registerPrefix(tk.STRING, p.parseStringLiteral)
+
+	p.registerPrefix(tk.FOR, p.parseForExpression)
+	p.registerPrefix(tk.LOOP, p.parseLoopExpression)
+
+	p.registerPrefix(tk.INC, p.parsePrefixExpression)
+	p.registerPrefix(tk.DEC, p.parsePrefixExpression)
 	
 	p.nextToken()
 	p.nextToken()
@@ -146,6 +164,9 @@ func (p *Parser) parseStatement() ast.Statement {
 	case tk.IDENT:
 		if p.peekTokenIs(tk.ASSIGNCHAR) { 
 			return p.parseAssignCharStatement()
+		} else if p.peekTokenIs(tk.INCASSIGN) || p.peekTokenIs(tk.DECDASSIGN) ||
+			p.peekTokenIs(tk.MLTASSIGN) || p.peekTokenIs(tk.DIVASSIGN) {
+			return p.parseCompoundAssignStatement()
 		} else {
 			return p.parseExpressionStatement()
 		}
@@ -196,6 +217,24 @@ func (p *Parser) parseAssignCharStatement() *ast.AssignStatement {
 		p.nextToken()
 	}
 	
+	return stmt
+}
+
+func (p *Parser) parseCompoundAssignStatement() *ast.AssignStatement {
+	nameTok := p.curToken
+
+	p.nextToken()
+
+	stmt := &ast.AssignStatement{Token: p.curToken}
+	stmt.Name = &ast.Identifier{Token: nameTok, Value: nameTok.Literal}
+
+	p.nextToken()
+	stmt.Value = p.parseExpression(LOWEST)
+
+	if p.peekTokenIs(tk.SEMICOLON) {
+		p.nextToken()
+	}
+
 	return stmt
 }
 
@@ -358,6 +397,79 @@ func (p *Parser) parseBlockStatement() *ast.BlockStatement {
 	return block
 }
 
+func (p *Parser) parseForExpression() ast.Expression {
+	exp := &ast.ForExpression{Token: p.curToken}
+
+	if !p.expectPeek(tk.LPAREN) {
+		return nil
+	}
+
+	p.nextToken()
+
+	if p.curTokenIs(tk.SEMICOLON) {
+		p.nextToken()
+	} else {
+		exp.Init = p.parseExpression(LOWEST)
+
+		if p.peekTokenIs(tk.SEMICOLON) {
+			p.nextToken()
+			p.nextToken()
+		} else if p.peekTokenIs(tk.RPAREN) {
+			exp.Condition = exp.Init
+			exp.Init = nil
+			p.nextToken()
+			goto bodyBlock
+		} else {
+			p.errors = append(p.errors, "expected ; or ) in for clause")
+			return nil
+		}
+	}
+
+	if !p.curTokenIs(tk.SEMICOLON) && !p.curTokenIs(tk.RPAREN) {
+		exp.Condition = p.parseExpression(LOWEST)
+	}
+
+	if p.peekTokenIs(tk.SEMICOLON) {
+		p.nextToken()
+		p.nextToken()
+	} else if p.peekTokenIs(tk.RPAREN) {
+		p.nextToken()
+		goto bodyBlock
+	} else {
+		p.errors = append(p.errors, "expected ; or ) in for condition")
+		return nil
+	}
+
+	if p.curTokenIs(tk.RPAREN) {
+		// empty update
+	} else {
+		exp.Update = p.parseExpression(LOWEST)
+		if !p.expectPeek(tk.RPAREN) {
+			return nil
+		}
+	}
+
+bodyBlock:
+	if !p.expectPeek(tk.LBRACE) {
+		return nil
+	}
+	exp.Body = p.parseBlockStatement()
+
+	return exp
+}
+
+func (p *Parser) parseLoopExpression() ast.Expression {
+	exp := &ast.LoopExpression{Token: p.curToken}
+
+	if !p.expectPeek(tk.LBRACE) {
+		return nil
+	}
+
+	exp.Body = p.parseBlockStatement()
+
+	return exp
+}
+
 func (p *Parser) parseFunctionLiteral() ast.Expression {
 	fl := &ast.FunctionLiteral{Token: p.curToken}
 
@@ -434,6 +546,10 @@ func (p *Parser) parseCallArguments() []ast.Expression {
 	}
 
 	return arguments
+}
+
+func (p *Parser) parseStringLiteral() ast.Expression {
+	return &ast.StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
 }
 
 func (p *Parser) noPrefixParseFnError(t tk.TokenType) {

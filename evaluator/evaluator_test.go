@@ -182,6 +182,10 @@ func TestErrorHandling(t *testing.T) {
 			"foobar",
 			"identifier not found: foobar",
 		},
+		{
+			`"Hello" - "World"`,
+			"unknown infix operator: STRING - STRING",
+		},
 	}
 
 	for _, tt := range tests {
@@ -289,6 +293,126 @@ func TestClosures(t *testing.T) {
 	addTwo(2);`
 
 	testIntegerObject(t, testEval(input), 4)
+}
+
+func TestStringLiteral(t *testing.T) {
+	input := `"Hello, World!"`
+
+	eval := testEval(input)
+	str, ok := eval.(*obj.String)
+	if !ok {
+		t.Fatalf("object is not String. got=%T (%+v)", eval, eval)
+	}
+
+	if str.Value != "Hello, World!" {
+		t.Errorf("object has wrong value. got=%q, expected=%q", str.Value, "Hello, World!")
+	}
+}
+
+func TestStringConcatenation(t *testing.T) {
+	input := `"Hello" + " " + "World!"`
+
+	eval := testEval(input)
+	str, ok := eval.(*obj.String)
+	if !ok {
+		t.Fatalf("object is not String. got=%T (%+v)", eval, eval)
+	}
+
+	if str.Value != "Hello World!" {
+		t.Errorf("object has wrong value. got=%q, expected=%q", str.Value, "Hello World!")
+	}
+}
+
+func TestBuiltinFunction(t *testing.T) {
+	tests := []struct {
+		input		string
+		expected	any
+	} {
+		{`len("")`, 0},
+		{`len("four")`, 4},
+		{`len("hello world")`, 11},
+		{`len(1)`, "argument to `len` not supported. got=INTEGER"},
+		{`len("one", "two")`, "wrong number of arguments. got=2, want=1"},
+	}
+
+	for _, tt := range tests {
+		eval := testEval(tt.input)
+
+		switch expected := tt.expected.(type) {
+		case int:
+			testIntegerObject(t, eval, int64(expected))
+		case string:
+			errObj, ok := eval.(*obj.Error)
+			if !ok {
+				t.Errorf("object is not Error. got=%T (%+v)", eval, eval)
+				continue
+			}
+			if errObj.Message != expected {
+				t.Errorf("wrong error message. expected=%q, got=%q", expected, errObj.Message)
+			}
+		}
+	}
+}
+
+func TestForExpression(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int64
+	}{
+		{"let x = 5; for (; x < 10; ++x) { }; x;", 10},
+		{"let f = fn() { let i = 0; for (; i < 5; ++i) { if (i == 3) { return i; } } }; f()", 3},
+	}
+
+	for _, tt := range tests {
+		eval := testEval(tt.input)
+		testIntegerObject(t, eval, tt.expected)
+	}
+}
+
+func TestForWhileExpression(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int64
+	}{
+		{"let x = 5; for (x < 10) { ++x; }; x;", 10},
+		{"let f = fn() { let i = 0; for (i < 3) { if (i == 2) { return i; }; ++i; } }; f()", 2},
+	}
+
+	for _, tt := range tests {
+		eval := testEval(tt.input)
+		testIntegerObject(t, eval, tt.expected)
+	}
+}
+
+func TestLoopExpression(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int64
+	}{
+		{"let f = fn() { let i = 0; loop { if (i == 5) { return i; }; ++i; } }; f()", 5},
+	}
+
+	for _, tt := range tests {
+		eval := testEval(tt.input)
+		testIntegerObject(t, eval, tt.expected)
+	}
+}
+
+func TestPrefixIncDec(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int64
+	}{
+		{"let x = 5; ++x; x;", 6},
+		{"let x = 5; --x; x;", 4},
+		{"let x = 5; ++x; ++x; x;", 7},
+		{"let x = 5; --x; --x; x;", 3},
+	}
+
+	for _, tt := range tests {
+		eval := testEval(tt.input)
+		testIntegerObject(t, eval, tt.expected)
+	}
 }
 
 func testEval(input string) obj.Object {

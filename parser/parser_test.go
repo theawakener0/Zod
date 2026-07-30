@@ -146,6 +146,44 @@ func TestParsingPrefixExpressions(t *testing.T) {
 	}
 }
 
+func TestParsingPrefixIncDecExpressions(t *testing.T) {
+	tests := []struct {
+		input    string
+		operator string
+		right    string
+	}{
+		{"++x;", "++", "x"},
+		{"--x;", "--", "x"},
+	}
+
+	for _, tt := range tests {
+		l := lx.New(tt.input)
+		p := New(l)
+		program := p.ParseProgram()
+		checkParseErrors(t, p)
+
+		if len(program.Statements) != 1 {
+			t.Fatalf("program.Statements does not contain %d statements, got %d", 1, len(program.Statements))
+		}
+
+		stmt, ok := program.Statements[0].(*ast.ExpressionStatement)
+		if !ok {
+			t.Fatalf("program.Statements[0] is not ast.ExpressionStatement, got %T", program.Statements[0])
+		}
+
+		exp, ok := stmt.Expression.(*ast.PrefixExpression)
+		if !ok {
+			t.Fatalf("stmt is not ast.PrefixExpression, got %T", stmt.Expression)
+		}
+		if exp.Opt != tt.operator {
+			t.Fatalf("exp.Opt is not '%s', got %s", tt.operator, exp.Opt)
+		}
+		if !testIdentifier(t, exp.Right, tt.right) {
+			return
+		}
+	}
+}
+
 func TestParsingInfixExpressions(t *testing.T) {
 	infixTests := []struct {
 		input      string
@@ -305,6 +343,26 @@ func TestOperatorPrecedenceParsing(t *testing.T) {
 		{
 			"add(a + b + c * d / f + g)",
 			"add((((a + b) + ((c * d) / f)) + g))",
+		},
+		{
+			"for (;;) { 5; }",
+			"for(;;)5",
+		},
+		{
+			"for (x < y) { x; }",
+			"for(;(x < y);)x",
+		},
+		{
+			"for (; x < y; ++x) { x; }",
+			"for(;(x < y);(++x))x",
+		},
+		{
+			"for (; x; ) { y; }",
+			"for(;x;)y",
+		},
+		{
+			"loop { 5; }",
+			"loop5",
 		},
 	}
 
@@ -572,6 +630,25 @@ func TestCallExpressionParsing(t *testing.T) {
 	testLiteralExpression(t, exp.Arguments[0], 1)
 	testInfixExpression(t, exp.Arguments[1], 2, "*", 3)
 	testInfixExpression(t, exp.Arguments[2], 4, "+", 5)
+}
+
+func TestStringLiteralExpression(t *testing.T) {
+	input := `"hello world";`
+
+	l := lx.New(input)
+	p := New(l)
+	program := p.ParseProgram()
+	checkParseErrors(t, p)
+	
+	stmt := program.Statements[0].(*ast.ExpressionStatement)
+	literal, ok := stmt.Expression.(*ast.StringLiteral)
+	if !ok {
+		t.Fatalf("stmt.Expression is not ast.StringLiteral. got=%T", stmt.Expression)
+	}
+
+	if literal.Value != "hello world" {
+		t.Errorf("literal.Value is not 'hello world'. got=%q", literal.Value)
+	}
 }
 
 func testLetStatement(t *testing.T, s ast.Statement, name string) bool {

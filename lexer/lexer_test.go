@@ -27,6 +27,8 @@ func TestNextToken(t *testing.T) {
 
 
 	let result = add(five, ten);
+	"foobar"
+	"foo bar"
 	`
 
 	tests := []tk.Token {
@@ -116,6 +118,8 @@ func TestNextToken(t *testing.T) {
 		{tk.IDENT, "ten"},
 		{tk.RPAREN, ")"},
 		{tk.SEMICOLON, ";"},
+		{tk.STRING, "foobar"},
+		{tk.STRING, "foo bar"},
 		{tk.EOF, ""},
 	}
 
