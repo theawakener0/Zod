@@ -71,7 +71,7 @@ func (ls *LetStatement) String() string {
 
 type AssignStatement struct {
 	Token 	tk.Token
-	Name	*Identifier
+	Left	Expression
 	Value 	Expression
 }
 
@@ -82,9 +82,9 @@ func (as *AssignStatement) TokenLiteral() string {
 func (as *AssignStatement) String() string {
 	var out bytes.Buffer
 
-	out.WriteString(as.Name.String())
+	out.WriteString(as.Left.String())
 	out.WriteString(" " + as.TokenLiteral() + " ")
-	
+
 	if as.Value != nil {
 		out.WriteString(as.Value.String())
 	}
@@ -221,10 +221,11 @@ func (bs *BlockStatement) String() string {
 }
 
 type IfExpression struct {
-	Token 				tk.Token
-	Condition 			Expression
-	Consequence 		*BlockStatement
-	Alternative 		*BlockStatement
+	Token 			tk.Token
+	Condition 		Expression
+	Consequence 	*BlockStatement
+	ElseIf 			*IfExpression
+	Alternative 	*BlockStatement
 }
 
 func (ie *IfExpression) expressionNode() {}
@@ -238,6 +239,11 @@ func (ie *IfExpression) String() string {
 	out.WriteString(ie.Condition.String())
 	out.WriteString(" ")
 	out.WriteString(ie.Consequence.String())
+
+	if ie.ElseIf != nil {
+		out.WriteString("else ")
+		out.WriteString(ie.ElseIf.String())
+	}
 
 	if ie.Alternative != nil {
 		out.WriteString("else ")
@@ -316,9 +322,9 @@ func (sl *StringLiteral) String() string {
 
 type ForExpression struct {
 	Token     tk.Token
-	Init      Expression
+	Init      Statement
 	Condition Expression
-	Update    Expression
+	Update    Statement
 	Body      *BlockStatement
 }
 
@@ -332,7 +338,7 @@ func (fe *ForExpression) String() string {
 	out.WriteString("for")
 	out.WriteString("(")
 	if fe.Init != nil {
-		out.WriteString(fe.Init.String())
+		out.WriteString(strings.TrimSuffix(fe.Init.String(), ";"))
 	}
 	out.WriteString(";")
 	if fe.Condition != nil {
@@ -340,10 +346,31 @@ func (fe *ForExpression) String() string {
 	}
 	out.WriteString(";")
 	if fe.Update != nil {
-		out.WriteString(fe.Update.String())
+		out.WriteString(strings.TrimSuffix(fe.Update.String(), ";"))
 	}
 	out.WriteString(")")
 	out.WriteString(fe.Body.String())
+
+	return out.String()
+}
+
+type PostfixExpression struct {
+	Token tk.Token
+	Opt   string
+	Left  Expression
+}
+
+func (pe *PostfixExpression) expressionNode() {}
+func (pe *PostfixExpression) TokenLiteral() string {
+	return pe.Token.Literal
+}
+func (pe *PostfixExpression) String() string {
+	var out bytes.Buffer
+
+	out.WriteString("(")
+	out.WriteString(pe.Left.String())
+	out.WriteString(pe.Opt)
+	out.WriteString(")")
 
 	return out.String()
 }
@@ -362,6 +389,52 @@ func (le *LoopExpression) String() string {
 
 	out.WriteString("loop")
 	out.WriteString(le.Body.String())
+
+	return out.String()
+}
+
+type ArrayLiteral struct {
+	Token tk.Token
+	Elements []Expression
+}
+
+func (al *ArrayLiteral) expressionNode() {}
+func (al *ArrayLiteral) TokenLiteral() string {
+	return al.Token.Literal
+}
+func (al *ArrayLiteral) String() string {
+	var out bytes.Buffer
+
+	elements := make([]string, 0, len(al.Elements))
+	for _, e := range al.Elements {
+		elements = append(elements, e.String())
+	}
+
+	out.WriteString("[")
+	out.WriteString(strings.Join(elements, ", "))
+	out.WriteString("]")
+
+	return out.String()
+}
+
+type IndexExpression struct {
+	Token 	tk.Token
+	Left	Expression
+	Index 	Expression
+}
+
+func (ie *IndexExpression) expressionNode() {}
+func (ie *IndexExpression) TokenLiteral() string {
+	return ie.Token.Literal
+}
+func (ie *IndexExpression) String() string {
+	var out bytes.Buffer
+
+	out.WriteString("(")
+	out.WriteString(ie.Left.String())
+	out.WriteString("[")
+	out.WriteString(ie.Index.String())
+	out.WriteString("])")
 
 	return out.String()
 }

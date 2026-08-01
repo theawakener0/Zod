@@ -37,20 +37,29 @@ func Start(in io.Reader, out io.Writer) {
 			os.Exit(0)
 		}
 
-		l := lx.New(line)
-		p := ps.New(l)
+		run(line, env, out)
+	}
+}
 
-		program := p.ParseProgram()
-		if len(p.Errors()) != 0 {
-			printParseErrors(out, p.Errors())
-			continue
-		}
+func Execute(source string, out io.Writer) {
+	env := obj.NewEnviroment()
+	run(source, env, out)
+}
 
-		eval := ev.Eval(program, env)
-		if eval != nil && eval.Type() != obj.NULL_OBJ {
-			io.WriteString(out, eval.Inspect())
-			io.WriteString(out, "\n")
-		}	
+func run(source string, env *obj.Enviroment, out io.Writer) {
+	l := lx.New(source)
+	p := ps.New(l)
+
+	program := p.ParseProgram()
+	if len(p.Errors()) != 0 {
+		printParseErrors(out, p.Errors())
+		return
+	}
+
+	eval := ev.Eval(program, env)
+	if eval != nil && eval.Type() != obj.NULL_OBJ {
+		io.WriteString(out, eval.Inspect())
+		io.WriteString(out, "\n")
 	}
 }
 

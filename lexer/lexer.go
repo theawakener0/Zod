@@ -1,6 +1,8 @@
 package lexer
 
 import (
+	"strings"
+
 	tk "github.com/theawakener0/zod/token"
 )
 
@@ -130,6 +132,10 @@ func (l *Lexer) NextToken() tk.Token {
 		tok = newToken(tk.LBRACE, l.ch)
 	case '}':
 		tok = newToken(tk.RBRACE, l.ch)
+	case '[':
+		tok = newToken(tk.LBRACKET, l.ch)
+	case ']':
+		tok = newToken(tk.RBRACKET, l.ch)
 	case ':':
 		if l.peekChar() == '=' {
 			ch := l.ch
@@ -203,15 +209,37 @@ func (l *Lexer) skipWhitespace() {
 }
 
 func (l *Lexer) readString() string {
-	position := l.position + 1
-	for {
-		l.readChar()
-		if l.ch == '"' || l.ch == 0 {
-			break
+	l.readChar()
+
+	var sb strings.Builder
+	for l.ch != '"' && l.ch != 0 {
+		if l.ch == '\\' {
+			l.readChar()
+			switch l.ch {
+			case 'n':
+				sb.WriteByte('\n')
+			case 't':
+				sb.WriteByte('\t')
+			case 'r':
+				sb.WriteByte('\r')
+			case '\\':
+				sb.WriteByte('\\')
+			case '"':
+				sb.WriteByte('"')
+			case 0:
+				sb.WriteByte('\\')
+			default:
+				sb.WriteByte('\\')
+				sb.WriteByte(l.ch)
+			}
+			l.readChar()
+			continue
 		}
+		sb.WriteByte(l.ch)
+		l.readChar()
 	}
 
-	return l.input[position:l.position]
+	return sb.String()
 }
 
 func isLetter(ch byte) bool {

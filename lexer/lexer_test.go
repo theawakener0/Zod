@@ -29,6 +29,7 @@ func TestNextToken(t *testing.T) {
 	let result = add(five, ten);
 	"foobar"
 	"foo bar"
+	[1, 2];
 	`
 
 	tests := []tk.Token {
@@ -120,6 +121,67 @@ func TestNextToken(t *testing.T) {
 		{tk.SEMICOLON, ";"},
 		{tk.STRING, "foobar"},
 		{tk.STRING, "foo bar"},
+		{tk.LBRACKET, "["},
+		{tk.INT, "1"},
+		{tk.COMMA, ","},
+		{tk.INT, "2"},
+		{tk.RBRACKET, "]"},
+		{tk.SEMICOLON, ";"},
+		{tk.EOF, ""},
+	}
+
+	l := New(input)
+
+	for i, tt := range tests {
+		tok := l.NextToken()
+
+		if tok.Type != tt.Type {
+			t.Fatalf("test[%d] - tokentype wrong. expected=%q, got=%q", i, tt.Type, tok.Type)
+		}
+
+		if tok.Literal != tt.Literal {
+			t.Fatalf("test[%d] - literal wrong. expected=%q, got=%q", i, tt.Literal, tok.Literal)
+		}
+	}
+}
+
+func TestStringEscapes(t *testing.T) {
+	input := `"hello\nworld\t\"quoted\"\\done"`
+
+	l := New(input)
+	tok := l.NextToken()
+
+	if tok.Type != tk.STRING {
+		t.Fatalf("expected STRING token, got %q", tok.Type)
+	}
+	if tok.Literal != "hello\nworld\t\"quoted\"\\done" {
+		t.Fatalf("literal wrong. expected=%q, got=%q", "hello\nworld\t\"quoted\"\\done", tok.Literal)
+	}
+}
+
+func TestElseIfKeywords(t *testing.T) {
+	input := "if (x) { } else if (y) { } elseif (z) { }"
+
+	tests := []tk.Token{
+		{tk.IF, "if"},
+		{tk.LPAREN, "("},
+		{tk.IDENT, "x"},
+		{tk.RPAREN, ")"},
+		{tk.LBRACE, "{"},
+		{tk.RBRACE, "}"},
+		{tk.ELSE, "else"},
+		{tk.IF, "if"},
+		{tk.LPAREN, "("},
+		{tk.IDENT, "y"},
+		{tk.RPAREN, ")"},
+		{tk.LBRACE, "{"},
+		{tk.RBRACE, "}"},
+		{tk.ELSEIF, "elseif"},
+		{tk.LPAREN, "("},
+		{tk.IDENT, "z"},
+		{tk.RPAREN, ")"},
+		{tk.LBRACE, "{"},
+		{tk.RBRACE, "}"},
 		{tk.EOF, ""},
 	}
 

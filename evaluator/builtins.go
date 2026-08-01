@@ -20,6 +20,8 @@ var builtins = map[string]*obj.Builtin{
 			switch arg := args[0].(type) {
 			case *obj.String:
 				return &obj.Integer{Value: int64(len(arg.Value))}
+			case *obj.Array:
+				return &obj.Integer{Value: int64(len(arg.Elements))}
 			default:
 				return newError("argument to `len` not supported. got=%s", args[0].Type())
 			}
@@ -115,6 +117,87 @@ var builtins = map[string]*obj.Builtin{
 				return &obj.String{Value: "false"}
 			default:
 				return newError("argument to `string` not supported. got=%s", args[0].Type())
+			}
+		},
+	},
+	"type": {
+		Fn: func(args ...obj.Object) obj.Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			return &obj.String{Value: fmt.Sprintf("%s", args[0].Type())}
+		},
+	},
+	"first": {
+		Fn: func(args ...obj.Object) obj.Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+
+			switch arg := args[0].(type) {
+			case *obj.Array:
+				if len(arg.Elements) > 0 {
+					return arg.Elements[0]
+				}
+				return NULL
+			default:
+				return newError("argument to `first` not supported. got=%s", args[0].Type())
+			}
+		},
+	},
+	"last": {
+		Fn: func(args ...obj.Object) obj.Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+
+			switch arg := args[0].(type) {
+			case *obj.Array:
+				if len(arg.Elements) > 0 {
+					return arg.Elements[len(arg.Elements)-1]
+				}
+				return NULL
+			default:
+				return newError("argument to `last` not supported. got=%s", args[0].Type())
+			}
+		},
+	},
+	"pop": {
+		Fn: func(args ...obj.Object) obj.Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			switch arg := args[0].(type) {
+			case *obj.Array:
+				length := len(arg.Elements)
+				if length > 0 {
+					newElements := make([]obj.Object, length-1)
+					copy(newElements, arg.Elements[:length-1])
+					return &obj.Array{Elements: newElements}
+				}
+				return NULL
+			default:
+				return newError("argument to `pop` not supported. got=%s", args[0].Type())
+			}
+		},
+	},
+	"push": {
+		Fn: func(args ...obj.Object) obj.Object {
+			if len(args) != 2 {
+				return newError("wrong number of arguments. got=%d, want=2", len(args))
+			}
+
+			switch arg := args[0].(type) {
+			case *obj.Array:
+				length := len(arg.Elements)
+
+				newElements := make([]obj.Object, length+1)
+				copy(newElements, arg.Elements)
+				newElements[length] = args[1]
+
+				return &obj.Array{Elements: newElements}
+			default:
+				return newError("argument to `pop` not supported. got=%s", args[0].Type())
 			}
 		},
 	},

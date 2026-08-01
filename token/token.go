@@ -48,12 +48,15 @@ const (
 	RPAREN = ")"
 	LBRACE = "{"
 	RBRACE = "}"
+	LBRACKET = "["
+	RBRACKET = "]"
 
 	FUNCTION = "FUNCTION"
 	LET = "LET"
 	TRUE = "TRUE"
 	FALSE = "FALSE"
 	IF = "IF"
+	ELSEIF = "ELSEIF"
 	ELSE = "ELSE"
 	RETURN = "RETURN"
 	FOR = "FOR"
@@ -66,6 +69,7 @@ var keywords = map[string]TokenType {
 	"true": TRUE,
 	"false": FALSE,
 	"if": IF,
+	"elseif": ELSEIF,
 	"else": ELSE,
 	"return": RETURN,
 	"for": FOR,

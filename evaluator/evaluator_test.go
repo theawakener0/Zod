@@ -98,6 +98,12 @@ func TestIfElseExpression(t *testing.T) {
 		{"if (1 > 2) { 10 }", nil},
 		{"if (1 > 2) { 10 } else { 20 }", 20},
 		{"if (1 < 2) { 10 } else { 20 }", 10},
+		{"if (1 > 2) { 10 } else if (1 < 2) { 20 }", 20},
+		{"if (1 > 2) { 10 } elseif (1 < 2) { 20 }", 20},
+		{"if (1 > 2) { 10 } else if (1 > 2) { 20 } else { 30 }", 30},
+		{"if (1 < 2) { 10 } else if (1 > 2) { 20 } else { 30 }", 10},
+		{"if (1 > 2) { 10 } else if (2 > 3) { 20 } else if (3 > 4) { 30 } else { 40 }", 40},
+		{"if (1 > 2) { 10 } elseif (2 < 3) { 20 } else { 30 }", 20},
 	}
 
 	for _, tt := range tests {
@@ -361,6 +367,10 @@ func TestForExpression(t *testing.T) {
 	}{
 		{"let x = 5; for (; x < 10; ++x) { }; x;", 10},
 		{"let f = fn() { let i = 0; for (; i < 5; ++i) { if (i == 3) { return i; } } }; f()", 3},
+		{"let x = 0; for (let i = 0; i < 5; i++) { x = x + i; }; x;", 10},
+		{"let x = 0; for (i := 0; i < 5; i++) { x = x + 1; }; x;", 5},
+		{"let x = 0; for (x = 0; x < 5; x += 1) { }; x;", 5},
+		{"let x = 0; for (x := 0; x < 3; x++) { }; x;", 3},
 	}
 
 	for _, tt := range tests {
@@ -412,6 +422,143 @@ func TestPrefixIncDec(t *testing.T) {
 	for _, tt := range tests {
 		eval := testEval(tt.input)
 		testIntegerObject(t, eval, tt.expected)
+	}
+}
+
+func TestPostfixIncDec(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int64
+	}{
+		{"let x = 5; x++; x;", 6},
+		{"let x = 5; x--; x;", 4},
+		{"let x = 5; x++; x++; x;", 7},
+	}
+
+	for _, tt := range tests {
+		eval := testEval(tt.input)
+		testIntegerObject(t, eval, tt.expected)
+	}
+}
+
+func TestIndexAssignment(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int64
+	}{
+		{"x := [1, 2, 3]; x[0] = 10; x[0];", 10},
+		{"x := [1, 2, 3]; x[1] = 7; x[1];", 7},
+		{"x := [1, 2, 3]; x[0] = 5; x[2];", 3},
+		{"x := [1, 2, 3]; x[0] += 10; x[0];", 11},
+		{"x := [1, 2, 3]; x[1] -= 1; x[1];", 1},
+		{"x := [2, 2, 2]; x[0] *= 3; x[0];", 6},
+		{"x := [10, 2, 3]; x[0] /= 2; x[0];", 5},
+		{"x := [1, 2, 3]; x[x[0]] = 9; x[1];", 9},
+	}
+
+	for _, tt := range tests {
+		eval := testEval(tt.input)
+		testIntegerObject(t, eval, tt.expected)
+	}
+}
+
+func TestIndexAssignmentErrors(t *testing.T) {
+	tests := []struct {
+		input      string
+		expected   string
+	}{
+		{"x := [1, 2, 3]; x[5] = 10;", "index out of range: 5"},
+		{"x := [1, 2, 3]; x[-1] = 10;", "index out of range: -1"},
+		{"x := 5; x[0] = 10;", "index assignment requires array, got INTEGER"},
+	}
+
+	for _, tt := range tests {
+		eval := testEval(tt.input)
+		errObj, ok := eval.(*obj.Error)
+		if !ok {
+			t.Errorf("eval is not *obj.Error, got %T (%+v)", eval, eval)
+			continue
+		}
+		if errObj.Message != tt.expected {
+			t.Errorf("wrong error message. expected=%q, got=%q", tt.expected, errObj.Message)
+		}
+	}
+}
+
+func TestArrayLiteral(t *testing.T) {
+	input := "[1, 2 * 2, 3 + 3]"
+
+	eval := testEval(input)
+	array, ok := eval.(*obj.Array)
+	if !ok {
+		t.Fatalf("object is not Array. got=%T (%+v)", eval, eval)
+	}
+
+	if len(array.Elements) != 3 {
+		t.Errorf("wrong number of elements. got=%d, expected=%d", len(array.Elements), 3)
+		return
+	}
+
+	testIntegerObject(t, array.Elements[0], 1)
+	testIntegerObject(t, array.Elements[1], 4)
+	testIntegerObject(t, array.Elements[2], 6)
+}
+
+func TestIndexExpression(t *testing.T) {
+	tests := []struct {
+		input		string
+		expected	any
+	} {
+		{
+			"[1, 2, 3][0]",
+			1,
+		},
+		{
+			"[1, 2, 3][1]",
+			2,
+		},
+		{
+			"[1, 2, 3][2]",
+			3,
+		},
+		{
+			"let i = 0; [1][i];",
+			1,
+		},
+		{
+			"[1, 2, 3][1 + 1];",
+			3,
+		},
+		{
+			"let myArray = [1, 2, 3]; myArray[2];",
+			3,
+		},
+		{
+			"let myArray = [1, 2, 3]; myArray[0] + myArray[1] + myArray[2];",
+			6,
+		},
+		{
+			"let myArray = [1, 2, 3]; let i = myArray[0]; myArray[i]",
+			2,
+		},
+		{
+			"[1, 2, 3][3]",
+			nil,
+		},
+		{
+			"[1, 2, 3][-1]",
+			nil,
+		},
+	}
+
+	for _, tt := range tests {
+		eval := testEval(tt.input)
+		integer, ok := tt.expected.(int)
+		if ok {
+			testIntegerObject(t, eval, int64(integer))
+		} else {
+			testNullObject(t, eval)
+		}
 	}
 }
 
