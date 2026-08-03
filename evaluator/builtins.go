@@ -199,7 +199,7 @@ var builtins = map[string]*obj.Builtin{
 
 				return &obj.Array{Elements: newElements}
 			default:
-				return newError("argument to `pop` not supported. got=%s", args[0].Type())
+				return newError("argument to `push` not supported. got=%s", args[0].Type())
 			}
 		},
 	},
