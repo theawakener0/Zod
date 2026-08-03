@@ -91,6 +91,7 @@ func New(l *lx.Lexer) *Parser {
 
 	p.registerPrefix(tk.TRUE, p.parseBoolean)
 	p.registerPrefix(tk.FALSE, p.parseBoolean)
+	p.registerPrefix(tk.NULL, p.parseNullLiteral)
 
 	p.registerPrefix(tk.LPAREN, p.parseGroupedExpression)
 	
@@ -185,6 +186,10 @@ func (p *Parser) parseStatement() ast.Statement {
 		}
 	case tk.RETURN:
 		return p.parseReturnStatement()
+	case tk.BREAK:
+		return p.parseBreakStatement()
+	case tk.CONTINUE:
+		return p.parseContinueStatement()
 	default:
 		return p.parseExpressionStatement()
 	}
@@ -276,6 +281,26 @@ func (p *Parser) parseReturnStatement() *ast.ReturnStatement {
 
 	p.nextToken()
 	stmt.ReturnValue = p.parseExpression(LOWEST)
+
+	if p.peekTokenIs(tk.SEMICOLON) {
+		p.nextToken()
+	}
+
+	return stmt
+}
+
+func (p *Parser) parseBreakStatement() ast.Statement {
+	stmt := &ast.BreakStatement{Token: p.curToken}
+
+	if p.peekTokenIs(tk.SEMICOLON) {
+		p.nextToken()
+	}
+
+	return stmt
+}
+
+func (p *Parser) parseContinueStatement() ast.Statement {
+	stmt := &ast.ContinueStatement{Token: p.curToken}
 
 	if p.peekTokenIs(tk.SEMICOLON) {
 		p.nextToken()
@@ -406,6 +431,10 @@ func (p *Parser) parseInfixExpression(left ast.Expression) ast.Expression {
 
 func (p *Parser) parseBoolean() ast.Expression {
 	return &ast.Boolean{Token: p.curToken, Value: p.curTokenIs(tk.TRUE)}
+}
+
+func (p *Parser) parseNullLiteral() ast.Expression {
+	return &ast.NullLiteral{Token: p.curToken}
 }
 
 func (p *Parser) parseGroupedExpression() ast.Expression {

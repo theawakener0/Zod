@@ -165,8 +165,80 @@ func TestStringEscapes(t *testing.T) {
 	}
 }
 
-func TestElseIfKeywords(t *testing.T) {
-	input := "if (x) { } else if (y) { } elseif (z) { }"
+func TestComments(t *testing.T) {
+	input := `5; // line comment
+	// full line comment
+	let x = 5; /* block */ x;
+	/* multi
+	line */ 7;
+	x = 10 / 2; // trailing
+	/* unterminated
+	`
+
+	tests := []tk.Token{
+		{Type: tk.INT, Literal: "5"},
+		{Type: tk.SEMICOLON, Literal: ";"},
+		{Type: tk.LET, Literal: "let"},
+		{Type: tk.IDENT, Literal: "x"},
+		{Type: tk.ASSIGN, Literal: "="},
+		{Type: tk.INT, Literal: "5"},
+		{Type: tk.SEMICOLON, Literal: ";"},
+		{Type: tk.IDENT, Literal: "x"},
+		{Type: tk.SEMICOLON, Literal: ";"},
+		{Type: tk.INT, Literal: "7"},
+		{Type: tk.SEMICOLON, Literal: ";"},
+		{Type: tk.IDENT, Literal: "x"},
+		{Type: tk.ASSIGN, Literal: "="},
+		{Type: tk.INT, Literal: "10"},
+		{Type: tk.SLASH, Literal: "/"},
+		{Type: tk.INT, Literal: "2"},
+		{Type: tk.SEMICOLON, Literal: ";"},
+		{Type: tk.EOF, Literal: ""},
+	}
+
+	l := New(input)
+
+	for i, tt := range tests {
+		tok := l.NextToken()
+
+		if tok.Type != tt.Type {
+			t.Fatalf("test[%d] - tokentype wrong. expected=%q, got=%q", i, tt.Type, tok.Type)
+		}
+
+		if tok.Literal != tt.Literal {
+			t.Fatalf("test[%d] - literal wrong. expected=%q, got=%q", i, tt.Literal, tok.Literal)
+		}
+	}
+}
+
+func TestNewKeywords(t *testing.T) {
+	input := "break; continue; null"
+
+	tests := []tk.Token{
+		{Type: tk.BREAK, Literal: "break"},
+		{Type: tk.SEMICOLON, Literal: ";"},
+		{Type: tk.CONTINUE, Literal: "continue"},
+		{Type: tk.SEMICOLON, Literal: ";"},
+		{Type: tk.NULL, Literal: "null"},
+		{Type: tk.EOF, Literal: ""},
+	}
+
+	l := New(input)
+
+	for i, tt := range tests {
+		tok := l.NextToken()
+
+		if tok.Type != tt.Type {
+			t.Fatalf("test[%d] - tokentype wrong. expected=%q, got=%q", i, tt.Type, tok.Type)
+		}
+
+		if tok.Literal != tt.Literal {
+			t.Fatalf("test[%d] - literal wrong. expected=%q, got=%q", i, tt.Literal, tok.Literal)
+		}
+	}
+}
+
+func TestElseIfKeywords(t *testing.T) {	input := "if (x) { } else if (y) { } elseif (z) { }"
 
 	tests := []tk.Token{
 		{tk.IF, "if"},

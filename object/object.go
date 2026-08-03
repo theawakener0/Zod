@@ -17,6 +17,8 @@ const (
 	NULL_OBJ = "NULL"
 	RETURN_VALUE_OBJ = "RETURN_VALUE"
 	ERROR_OBJ = "ERROR"
+	BREAK_OBJ = "BREAK"
+	CONTINUE_OBJ = "CONTINUE"
 	FUNCTION_OBJ = "FUNCTION"
 	STRING_OBJ = "STRING"
 	BUILTIN_OBJ = "BUILTIN"
@@ -104,6 +106,24 @@ func (e *Error) Type() ObjectType {
 
 func (e *Error) Inspect() string {
 	return fmt.Sprintf("Error: %s", e.Message)
+}
+
+type Break struct{}
+
+func (b *Break) Type() ObjectType {
+	return BREAK_OBJ
+}
+func (b *Break) Inspect() string {
+	return "break"
+}
+
+type Continue struct{}
+
+func (c *Continue) Type() ObjectType {
+	return CONTINUE_OBJ
+}
+func (c *Continue) Inspect() string {
+	return "continue"
 }
 
 type Function struct {

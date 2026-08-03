@@ -132,6 +132,30 @@ func (es *ExpressionStatement) String() string {
 	return ""
 }
 
+type BreakStatement struct {
+	Token tk.Token
+}
+
+func (bs *BreakStatement) statementNode() {}
+func (bs *BreakStatement) TokenLiteral() string {
+	return bs.Token.Literal
+}
+func (bs *BreakStatement) String() string {
+	return "break;"
+}
+
+type ContinueStatement struct {
+	Token tk.Token
+}
+
+func (cs *ContinueStatement) statementNode() {}
+func (cs *ContinueStatement) TokenLiteral() string {
+	return cs.Token.Literal
+}
+func (cs *ContinueStatement) String() string {
+	return "continue;"
+}
+
 type IntegerLiteral struct {
 	Token tk.Token
 	Value int64
@@ -200,6 +224,18 @@ func (b *Boolean) TokenLiteral() string {
 }
 func (b *Boolean) String() string {
 	return b.TokenLiteral()
+}
+
+type NullLiteral struct {
+	Token tk.Token
+}
+
+func (nl *NullLiteral) expressionNode() {}
+func (nl *NullLiteral) TokenLiteral() string {
+	return nl.Token.Literal
+}
+func (nl *NullLiteral) String() string {
+	return nl.TokenLiteral()
 }
 
 type BlockStatement struct {

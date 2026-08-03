@@ -184,6 +184,69 @@ func TestReturnStatements(t *testing.T) {
 	}
 }
 
+func TestBreakContinueStatements(t *testing.T) {
+	tests := []struct {
+		input        string
+		expectedType ast.Statement
+		expectedLit  string
+	}{
+		{"break;", &ast.BreakStatement{}, "break"},
+		{"break", &ast.BreakStatement{}, "break"},
+		{"continue;", &ast.ContinueStatement{}, "continue"},
+		{"continue", &ast.ContinueStatement{}, "continue"},
+	}
+
+	for _, tt := range tests {
+		l := lx.New(tt.input)
+		p := New(l)
+		program := p.ParseProgram()
+		checkParseErrors(t, p)
+
+		if len(program.Statements) != 1 {
+			t.Fatalf("program.Statements does not contain 1 statements, got %d", len(program.Statements))
+		}
+
+		stmt := program.Statements[0]
+		if _, ok := stmt.(*ast.BreakStatement); ok {
+			if _, want := tt.expectedType.(*ast.BreakStatement); !want {
+				t.Fatalf("stmt not *ast.BreakStatement, got %T", stmt)
+			}
+		} else if _, ok := stmt.(*ast.ContinueStatement); ok {
+			if _, want := tt.expectedType.(*ast.ContinueStatement); !want {
+				t.Fatalf("stmt not *ast.ContinueStatement, got %T", stmt)
+			}
+		} else {
+			t.Fatalf("stmt is neither break nor continue, got %T", stmt)
+		}
+
+		if stmt.TokenLiteral() != tt.expectedLit {
+			t.Fatalf("stmt.TokenLiteral not %q, got %q", tt.expectedLit, stmt.TokenLiteral())
+		}
+	}
+}
+
+func TestParsingNullLiteral(t *testing.T) {
+	input := "null"
+
+	l := lx.New(input)
+	p := New(l)
+	program := p.ParseProgram()
+	checkParseErrors(t, p)
+
+	if len(program.Statements) != 1 {
+		t.Fatalf("program.Statements does not contain 1 statements, got %d", len(program.Statements))
+	}
+
+	stmt, ok := program.Statements[0].(*ast.ExpressionStatement)
+	if !ok {
+		t.Fatalf("program.Statements[0] is not ast.ExpressionStatement, got %T", program.Statements[0])
+	}
+
+	if _, ok := stmt.Expression.(*ast.NullLiteral); !ok {
+		t.Fatalf("exp not *ast.NullLiteral, got %T", stmt.Expression)
+	}
+}
+
 func TestParsingPrefixExpressions(t *testing.T) {
 	prefixTests := []struct {
 		input    string

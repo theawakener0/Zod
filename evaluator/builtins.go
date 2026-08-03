@@ -58,7 +58,7 @@ var builtins = map[string]*obj.Builtin{
 
 			return NULL
 		},
-	}, 
+	},
 	"input": {
 		Fn: func(args ...obj.Object) obj.Object {
 			if len(args) > 1 {
@@ -74,7 +74,7 @@ var builtins = map[string]*obj.Builtin{
 			text = strings.TrimSpace(text)
 
 			return &obj.String{Value: text}
-		},	
+		},
 	},
 	"int": {
 		Fn: func(args ...obj.Object) obj.Object {
@@ -236,7 +236,7 @@ var builtins = map[string]*obj.Builtin{
 
 			hash, ok := args[0].(*obj.Hash)
 			if !ok {
-				return newError("argument to `delete` not supported. got=%s", args[0].Type())
+				return newError("argument to `remove` not supported. got=%s", args[0].Type())
 			}
 
 			key, ok := args[1].(obj.Hashable)

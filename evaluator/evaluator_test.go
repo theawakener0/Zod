@@ -445,6 +445,141 @@ func TestPostfixIncDec(t *testing.T) {
 	}
 }
 
+func TestPostfixIncDecValue(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int64
+	}{
+		{"let x = 5; let y = x++; y;", 5},
+		{"let x = 5; let y = x--; y;", 5},
+		{"let x = 5; let y = x++; y; x;", 6},
+		{"let x = 5; let y = x--; y; x;", 4},
+		{"let x = 5; let y = ++x; y;", 6},
+		{"let x = 5; let y = --x; y;", 4},
+	}
+
+	for _, tt := range tests {
+		eval := testEval(tt.input)
+		testIntegerObject(t, eval, tt.expected)
+	}
+}
+
+func TestWrongArgCount(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"fn(x) { x; }()", "wrong number of arguments. got=0, want=1"},
+		{"fn(x, y) { x; }(1)", "wrong number of arguments. got=1, want=2"},
+		{"fn(x, y) { x; }(1, 2, 3)", "wrong number of arguments. got=3, want=2"},
+		{"let f = fn(x, y) { x + y; }; f(1);", "wrong number of arguments. got=1, want=2"},
+	}
+
+	for _, tt := range tests {
+		eval := testEval(tt.input)
+
+		err, ok := eval.(*obj.Error)
+		if !ok {
+			t.Errorf("eval is not *obj.Error, got %T (%+v)", eval, eval)
+			continue
+		}
+
+		if err.Message != tt.expected {
+			t.Errorf("wrong error message. got=%q, expected=%q", err.Message, tt.expected)
+		}
+	}
+}
+
+func TestBreakContinue(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int64
+	}{
+		{"let x = 0; for (i := 0; i < 10; i++) { if (i == 5) { break; } x = x + 1; }; x;", 5},
+		{"let x = 0; for (i := 0; i < 5; i++) { if (i == 2) { continue; } x = x + 1; }; x;", 4},
+		{"let x = 0; for (i := 0; i < 10; i++) { if (i == 3) { continue; } if (i == 6) { break; } x = x + 1; }; x;", 5},
+		{"let i = 0; loop { if (i == 3) { break; } i++; }; i;", 3},
+		{"let x = 0; let i = 0; loop { i++; if (i == 2) { continue; } if (i == 4) { break; } x = x + 1; }; x;", 2},
+		{"let f = fn() { let i = 0; loop { if (i == 3) { break; } i++; } i; }; f();", 3},
+	}
+
+	for _, tt := range tests {
+		eval := testEval(tt.input)
+		testIntegerObject(t, eval, tt.expected)
+	}
+}
+
+func TestBreakContinueOutsideLoop(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"break;", "break used outside of loop"},
+		{"continue;", "continue used outside of loop"},
+		{"let f = fn() { break; }; f();", "break used outside of loop"},
+	}
+
+	for _, tt := range tests {
+		eval := testEval(tt.input)
+
+		err, ok := eval.(*obj.Error)
+		if !ok {
+			t.Errorf("eval is not *obj.Error, got %T (%+v)", eval, eval)
+			continue
+		}
+
+		if err.Message != tt.expected {
+			t.Errorf("wrong error message. got=%q, expected=%q", err.Message, tt.expected)
+		}
+	}
+}
+
+func TestNullLiteral(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected any
+	}{
+		{"null", nil},
+		{"if (null) { 1 } else { 2 }", 2},
+		{"if (!null) { 1 } else { 2 }", 1},
+		{"null == null", true},
+		{"null != 5", true},
+		{"let x = null; x;", nil},
+	}
+
+	for _, tt := range tests {
+		eval := testEval(tt.input)
+
+		switch expected := tt.expected.(type) {
+		case nil:
+			testNullObject(t, eval)
+		case int:
+			testIntegerObject(t, eval, int64(expected))
+		case bool:
+			testBooleanObject(t, eval, expected)
+		}
+	}
+}
+
+func TestComments(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int64
+	}{
+		{"// hello\n5;", 5},
+		{"5; // trailing comment", 5},
+		{"/* block */ 5;", 5},
+		{"/* multi\nline\ncomment */ 5;", 5},
+		{"let x = /* inline */ 5; x;", 5},
+		{"let x = 5; // comment\n x;", 5},
+	}
+
+	for _, tt := range tests {
+		eval := testEval(tt.input)
+		testIntegerObject(t, eval, tt.expected)
+	}
+}
+
 func TestIndexAssignment(t *testing.T) {
 	tests := []struct {
 		input    string
@@ -663,9 +798,9 @@ func TestHashBuiltins(t *testing.T) {
 		{`len(insert({"a": 1}, "b", 2))`, 2},
 		{`insert({"a": 1}, "a", 9)["a"]`, 9},
 		{`let h = {"a": 1}; insert(h, "b", 2); len(h)`, 1},
-		{`len(delete({"a": 1, "b": 2}, "a"))`, 1},
-		{`delete({"a": 1, "b": 2}, "a")["b"]`, 2},
-		{`delete({"a": 1, "b": 2}, "c")["a"]`, 1},
+		{`len(remove({"a": 1, "b": 2}, "a"))`, 1},
+		{`remove({"a": 1, "b": 2}, "a")["b"]`, 2},
+		{`remove({"a": 1, "b": 2}, "c")["a"]`, 1},
 		{`len(remove({"a": 1, "b": 2}, "a"))`, 1},
 		{`contains({"a": 1}, "a")`, true},
 		{`contains({"a": 1}, "b")`, false},
@@ -704,8 +839,8 @@ func TestHashBuiltinErrors(t *testing.T) {
 		{`insert({"a": 1})`, "wrong number of arguments. got=1, want=3"},
 		{`insert([1, 2], "a", 1)`, "argument to `insert` not supported. got=ARRAY"},
 		{`insert({}, fn(x) { x }, 1)`, "unusable as hash key: FUNCTION"},
-		{`delete({"a": 1})`, "wrong number of arguments. got=1, want=2"},
-		{`delete(5, "a")`, "argument to `delete` not supported. got=INTEGER"},
+		{`remove({"a": 1})`, "wrong number of arguments. got=1, want=2"},
+		{`remove(5, "a")`, "argument to `remove` not supported. got=INTEGER"},
 		{`keys(1)`, "argument to `keys` not supported. got=INTEGER"},
 		{`values("str")`, "argument to `values` not supported. got=STRING"},
 		{`contains(1, 1)`, "argument to `contains` not supported. got=INTEGER"},
@@ -792,6 +927,7 @@ func testIntegerObject(t *testing.T, object obj.Object, expected int64) bool {
 	result, ok := object.(*obj.Integer)
 	if !ok {
 		t.Errorf("object is not Integer. got=%T (%+v)", object, object)
+		return false
 	}
 
 	if result.Value != expected {
@@ -806,6 +942,7 @@ func testBooleanObject(t *testing.T, object obj.Object, expected bool) bool {
 	result, ok := object.(*obj.Boolean)
 	if !ok {
 		t.Errorf("object is not Boolean. got=%T (%+v)", object, object)
+		return false
 	}
 
 	if result.Value != expected {

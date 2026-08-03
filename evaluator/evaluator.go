@@ -26,10 +26,13 @@ func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
 	
 	case *ast.Boolean:
 		return nattiveBoolToBooleanObject(n.Value)
+
+	case *ast.NullLiteral:
+		return NULL
 	
 	case *ast.PrefixExpression:
 		if n.Opt == "++" || n.Opt == "--" {
-			return evalIncrementDecrement(n.Opt, n.Right, env)
+			return evalIncrementDecrement(n.Opt, n.Right, env, false)
 		}
 		right := Eval(n.Right, env)
 		if isError(right) {
@@ -39,7 +42,7 @@ func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
 
 	case *ast.PostfixExpression:
 		if n.Opt == "++" || n.Opt == "--" {
-			return evalIncrementDecrement(n.Opt, n.Left, env)
+			return evalIncrementDecrement(n.Opt, n.Left, env, true)
 		}
 		left := Eval(n.Left, env)
 		if isError(left) {
@@ -93,6 +96,12 @@ func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
 			return val
 		}
 		return &obj.ReturnValue{Value: val}
+
+	case *ast.BreakStatement:
+		return &obj.Break{}
+
+	case *ast.ContinueStatement:
+		return &obj.Continue{}
 
 	case *ast.LetStatement:
 		val := Eval(n.Value, env)
@@ -379,9 +388,12 @@ func evalForExpression(fe *ast.ForExpression, env *obj.Enviroment) obj.Object {
 
 		result := Eval(fe.Body, env)
 		if result != nil {
-			rt := result.Type()
-			if rt == obj.RETURN_VALUE_OBJ || rt == obj.ERROR_OBJ {
+			switch result.Type() {
+			case obj.RETURN_VALUE_OBJ, obj.ERROR_OBJ:
 				return result
+			case obj.BREAK_OBJ:
+				return NULL
+			case obj.CONTINUE_OBJ:
 			}
 		}
 
@@ -400,15 +412,19 @@ func evalLoopExpression(le *ast.LoopExpression, env *obj.Enviroment) obj.Object 
 	for {
 		result := Eval(le.Body, env)
 		if result != nil {
-			rt := result.Type()
-			if rt == obj.RETURN_VALUE_OBJ || rt == obj.ERROR_OBJ {
+			switch result.Type() {
+			case obj.RETURN_VALUE_OBJ, obj.ERROR_OBJ:
 				return result
+			case obj.BREAK_OBJ:
+				return NULL
+			case obj.CONTINUE_OBJ:
+				continue
 			}
 		}
 	}
 }
 
-func evalIncrementDecrement(opt string, right ast.Expression, env *obj.Enviroment) obj.Object {
+func evalIncrementDecrement(opt string, right ast.Expression, env *obj.Enviroment, isPostfix bool) obj.Object {
 	ident, ok := right.(*ast.Identifier)
 	if !ok {
 		return newError("%s requires identifier, got %T", opt, right)
@@ -424,6 +440,7 @@ func evalIncrementDecrement(opt string, right ast.Expression, env *obj.Enviromen
 	}
 
 	intVal := val.(*obj.Integer).Value
+	oldObj := &obj.Integer{Value: intVal}
 	if opt == "++" {
 		intVal++
 	} else {
@@ -432,6 +449,10 @@ func evalIncrementDecrement(opt string, right ast.Expression, env *obj.Enviromen
 
 	newObj := &obj.Integer{Value: intVal}
 	env.Set(ident.Value, newObj)
+
+	if isPostfix {
+		return oldObj
+	}
 	return newObj
 }
 
@@ -446,6 +467,10 @@ func evalProgram(p *ast.Program, env *obj.Enviroment) obj.Object {
 			return result.Value
 		case *obj.Error:
 			return result
+		case *obj.Break:
+			return newError("break used outside of loop")
+		case *obj.Continue:
+			return newError("continue used outside of loop")
 		}
 	}
 
@@ -460,7 +485,8 @@ func evalBlockStatement(b *ast.BlockStatement, env *obj.Enviroment) obj.Object {
 
 		if result != nil {
 			rt := result.Type()
-			if rt == obj.RETURN_VALUE_OBJ || rt == obj.ERROR_OBJ {
+			if rt == obj.RETURN_VALUE_OBJ || rt == obj.ERROR_OBJ ||
+				rt == obj.BREAK_OBJ || rt == obj.CONTINUE_OBJ {
 				return result
 			}
 		}
@@ -527,6 +553,9 @@ func extendFunctonEnv(fn *obj.Function, args []obj.Object) *obj.Enviroment {
 func applyFunction(fn obj.Object, args []obj.Object) obj.Object {
 	switch function := fn.(type) {
 	case *obj.Function:
+		if len(args) != len(function.Parameters) {
+			return newError("wrong number of arguments. got=%d, want=%d", len(args), len(function.Parameters))
+		}
 		extendedEnv := extendFunctonEnv(function, args)
 		eval := Eval(function.Body, extendedEnv)
 		return unwrapReturnValue(eval)

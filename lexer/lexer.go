@@ -47,6 +47,25 @@ func (l *Lexer) NextToken() tk.Token {
 
 	l.skipWhitespace()
 
+	for l.ch == '/' && (l.peekChar() == '/' || l.peekChar() == '*') {
+		if l.peekChar() == '/' {
+			for l.ch != '\n' && l.ch != 0 {
+				l.readChar()
+			}
+		} else {
+			l.readChar()
+			l.readChar()
+			for l.ch != 0 && !(l.ch == '*' && l.peekChar() == '/') {
+				l.readChar()
+			}
+			if l.ch == '*' {
+				l.readChar()
+				l.readChar()
+			}
+		}
+		l.skipWhitespace()
+	}
+
 	switch l.ch {
 	case '=':
 		if l.peekChar() == '=' {
