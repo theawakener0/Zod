@@ -1,0 +1,33 @@
+// Loops
+
+// C-style for loop
+for (i := 0; i < 5; i++) {
+    println(i)
+
+/*
+    0
+    1
+    2 
+    3 
+    4
+*/
+
+}
+
+// While-style for loop
+let x = 0
+for (x < 3) {
+    x++
+}
+println(x)  // 3
+
+// Infinite loop with break / continue
+let i = 0
+let sum = 0
+loop {
+    i++
+    if (i == 3) { continue }
+    if (i == 6) { break }
+    sum = sum + i
+}
+println(sum)    // 12

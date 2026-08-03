@@ -1,0 +1,26 @@
+// Control flow with if / elseif | else if  / else
+let grade = fn(score) {
+    if (score >= 90) {
+        "A"
+    } elseif (score >= 80) {
+        "B"
+    } else if (score >= 70) {
+        "C"
+    } else {
+        "F"
+    }
+}
+
+println(grade(95))     // A
+println(grade(85))    // B
+println(grade(72))   // C
+println(grade(40))  // F
+
+let age = 20
+if (age >= 18 && age < 65) {
+    println("Adult")    // Adult
+} elseif (age >= 65) {
+    println("Senior")
+} else {
+    println("Minor")
+}

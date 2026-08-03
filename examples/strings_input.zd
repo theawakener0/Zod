@@ -1,0 +1,10 @@
+// Strings and input
+let greeting = "Hello " + "World!"
+println(greeting)        // Hello World!
+println(len(greeting))  // 12
+
+let name = input("What's your name? ")
+println("Nice to meet you, " + name + "!")
+
+let age = int(input("How old are you? "))
+printf("Next year you will be %d years old", age + 1)

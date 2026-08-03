@@ -1,0 +1,17 @@
+// Guess the number game (interactive)
+let secret = 42
+println("I'm thinking of a number between 1 and 100.")
+println("Can you guess it?")
+
+loop {
+    let guess = int(input("Your guess: "))
+
+    if (guess == secret) {
+        println("You got it!")
+        break
+    } elseif (guess < secret) {
+        println("Too low!")
+    } else {
+        println("Too high!")
+    }
+}

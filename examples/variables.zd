@@ -1,0 +1,14 @@
+// Variables and data types
+name := "Zod"
+let version = 1
+isAwesome := true
+let scores = [10, 20, 30]
+let config = {"lang": "Zod", "year": 2026}
+nothing := null
+
+println(name)
+println(version)
+println(isAwesome)
+println(scores)
+println(config)
+println(nothing)

@@ -1,0 +1,16 @@
+// Arrays
+let nums = [3, 1, 4, 1, 5]
+
+println(len(nums))     // 5
+println(first(nums))  // 3
+println(last(nums))  // 5
+                    //
+nums[0] = 100      //
+println(nums[0])  // 100
+
+let withoutLast = pop(nums)  // returns a new array
+println(withoutLast)        // [100, 1, 4, 1]
+
+let bigger = push(nums, 9)
+println(bigger)        // [100, 1, 4, 1, 5, 9]
+println(len(bigger))  // 6

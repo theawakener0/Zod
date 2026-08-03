@@ -1,0 +1,19 @@
+// Hashes
+let user = {"name": "Zod", "age": 1}
+
+println(user["name"])  // Zod
+println(user["age"])  // 1
+
+user["age"] = 2
+println(user["age"])  // 2
+
+println(contains(user, "name"))  // true
+println(keys(user))             // [name, age]
+println(values(user))          // [Zod, 2]
+
+let updated = insert(user, "lang", "Zod")
+println(updated["lang"]) // Zod
+println(len(updated))   // 3
+
+let withoutAge = remove(updated, "age")
+println(keys(withoutAge))  // [name, lang]
