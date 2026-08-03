@@ -30,6 +30,7 @@ func TestNextToken(t *testing.T) {
 	"foobar"
 	"foo bar"
 	[1, 2];
+	{"foo": "bar"}
 	`
 
 	tests := []tk.Token {
@@ -127,6 +128,11 @@ func TestNextToken(t *testing.T) {
 		{tk.INT, "2"},
 		{tk.RBRACKET, "]"},
 		{tk.SEMICOLON, ";"},
+		{tk.LBRACE, "{"},
+		{tk.STRING, "foo"},
+		{tk.COLOMN, ":"},
+		{tk.STRING, "bar"},
+		{tk.RBRACE, "}"},
 		{tk.EOF, ""},
 	}
 

@@ -192,6 +192,10 @@ func TestErrorHandling(t *testing.T) {
 			`"Hello" - "World"`,
 			"unknown infix operator: STRING - STRING",
 		},
+		{
+			`{"name": "Monkey"}[fn(x) { x }];`,
+			"unusable as hash key: FUNCTION",
+		},
 	}
 
 	for _, tt := range tests {
@@ -469,7 +473,7 @@ func TestIndexAssignmentErrors(t *testing.T) {
 	}{
 		{"x := [1, 2, 3]; x[5] = 10;", "index out of range: 5"},
 		{"x := [1, 2, 3]; x[-1] = 10;", "index out of range: -1"},
-		{"x := 5; x[0] = 10;", "index assignment requires array, got INTEGER"},
+		{"x := 5; x[0] = 10;", "index assignment requires array or hash, got INTEGER"},
 	}
 
 	for _, tt := range tests {
@@ -558,6 +562,219 @@ func TestIndexExpression(t *testing.T) {
 			testIntegerObject(t, eval, int64(integer))
 		} else {
 			testNullObject(t, eval)
+		}
+	}
+}
+
+func TestHashLiterals(t *testing.T) {
+	input := `let two = "two";
+	{
+		"one": 10 - 9,
+		two: 1 + 1,
+		"thr" + "ee": 6 / 2,
+		4: 4,
+		true: 5,
+		false: 6
+	}`
+	
+	eval := testEval(input)
+	result, ok := eval.(*obj.Hash)
+	if !ok {
+		t.Fatalf("Eval didn't return Hash. got=%T (%+v)", eval, eval)
+	}
+
+	expected := map[obj.HashKey]int64 {
+		(&obj.String{Value: "one"}).HashKey(): 1,
+		(&obj.String{Value: "two"}).HashKey(): 2,
+		(&obj.String{Value: "three"}).HashKey(): 3,
+		(&obj.Integer{Value: 4}).HashKey(): 4,
+		TRUE.HashKey(): 5,
+		FALSE.HashKey(): 6,
+	}
+
+	if len(result.Pairs) != len(expected) {
+		t.Fatalf("Hash has wrong num of pairs. got=%d", len(result.Pairs))
+	}
+
+	for expectedKey, expectedValue := range expected {
+		pair, ok := result.Pairs[expectedKey]
+		if !ok {
+			t.Errorf("no pair for given key in Pairs")
+		}
+
+		testIntegerObject(t, pair.Value, expectedValue)
+	}
+}
+
+func TestHashIndexExpression(t *testing.T) {
+	tests := []struct {
+		input		string
+		expected	any
+	} {
+		{
+			`{"foo": 5}["foo"]`,
+			5,
+		},
+		{
+			`{"foo": 5}["bar"]`,
+			nil,
+		},
+		{
+			`let key = "foo"; {"foo": 5}[key]`,
+			5,
+		},
+		{
+			`{}["foo"]`,
+			nil,
+		},
+		{
+			`{5: 5}[5]`,
+			5,
+		},
+		{
+			`{true: 5}[true]`,
+			5,
+		},
+		{
+			`{false: 5}[false]`,
+			5,
+		},
+	}
+
+	for _, tt := range tests {
+		eval := testEval(tt.input)
+		integer, ok := tt.expected.(int)
+		if ok {
+			testIntegerObject(t, eval, int64(integer))
+		} else {
+			testNullObject(t, eval)
+		}
+	}
+}
+
+func TestHashBuiltins(t *testing.T) {
+	tests := []struct {
+		input		string
+		expected	any
+	} {
+		{`len({"a": 1, "b": 2})`, 2},
+		{`len({})`, 0},
+		{`insert({"a": 1}, "b", 2)["b"]`, 2},
+		{`len(insert({"a": 1}, "b", 2))`, 2},
+		{`insert({"a": 1}, "a", 9)["a"]`, 9},
+		{`let h = {"a": 1}; insert(h, "b", 2); len(h)`, 1},
+		{`len(delete({"a": 1, "b": 2}, "a"))`, 1},
+		{`delete({"a": 1, "b": 2}, "a")["b"]`, 2},
+		{`delete({"a": 1, "b": 2}, "c")["a"]`, 1},
+		{`len(remove({"a": 1, "b": 2}, "a"))`, 1},
+		{`contains({"a": 1}, "a")`, true},
+		{`contains({"a": 1}, "b")`, false},
+		{`contains({}, "a")`, false},
+		{`contains(insert({}, "a", 1), "a")`, true},
+		{`len(keys({"a": 1, "b": 2}))`, 2},
+		{`len(values({"a": 1, "b": 2}))`, 2},
+		{`{"a": 1, "b": 2}["a"]`, 1},
+		{`{"a": 1, "b": 2}["c"]`, nil},
+		{`let h = {"a": 1}; h["b"] = 2; len(h)`, 2},
+		{`let h = {"a": 1}; h["b"] = 2; h["b"]`, 2},
+		{`let h = {"a": 1}; h["a"] = 9; h["a"]`, 9},
+		{`let h = {"a": 1}; h["a"] += 5; h["a"]`, 6},
+		{`let h = {5: 1}; h[5] = 2; h[5]`, 2},
+	}
+
+	for _, tt := range tests {
+		eval := testEval(tt.input)
+
+		switch expected := tt.expected.(type) {
+		case int:
+			testIntegerObject(t, eval, int64(expected))
+		case bool:
+			testBooleanObject(t, eval, expected)
+		case nil:
+			testNullObject(t, eval)
+		}
+	}
+}
+
+func TestHashBuiltinErrors(t *testing.T) {
+	tests := []struct {
+		input      string
+		expected   string
+	}{
+		{`insert({"a": 1})`, "wrong number of arguments. got=1, want=3"},
+		{`insert([1, 2], "a", 1)`, "argument to `insert` not supported. got=ARRAY"},
+		{`insert({}, fn(x) { x }, 1)`, "unusable as hash key: FUNCTION"},
+		{`delete({"a": 1})`, "wrong number of arguments. got=1, want=2"},
+		{`delete(5, "a")`, "argument to `delete` not supported. got=INTEGER"},
+		{`keys(1)`, "argument to `keys` not supported. got=INTEGER"},
+		{`values("str")`, "argument to `values` not supported. got=STRING"},
+		{`contains(1, 1)`, "argument to `contains` not supported. got=INTEGER"},
+		{`let h = {}; h["a"] += 1`, "key not found: a"},
+	}
+
+	for _, tt := range tests {
+		eval := testEval(tt.input)
+		errObj, ok := eval.(*obj.Error)
+		if !ok {
+			t.Errorf("eval is not *obj.Error, got %T (%+v)", eval, eval)
+			continue
+		}
+		if errObj.Message != tt.expected {
+			t.Errorf("wrong error message. expected=%q, got=%q", tt.expected, errObj.Message)
+		}
+	}
+}
+
+func TestHashKeysValues(t *testing.T) {
+	input := `{"one": 1, "two": 2, "three": 3}`
+
+	eval := testEval(`keys(` + input + `)`)
+	keys, ok := eval.(*obj.Array)
+	if !ok {
+		t.Fatalf("keys() did not return Array. got=%T (%+v)", eval, eval)
+	}
+
+	if len(keys.Elements) != 3 {
+		t.Fatalf("keys() has wrong number of elements. got=%d", len(keys.Elements))
+	}
+
+	seen := map[string]bool{}
+	for _, el := range keys.Elements {
+		str, ok := el.(*obj.String)
+		if !ok {
+			t.Fatalf("key is not String. got=%T (%+v)", el, el)
+		}
+		seen[str.Value] = true
+	}
+
+	for _, k := range []string{"one", "two", "three"} {
+		if !seen[k] {
+			t.Errorf("keys() missing key %q", k)
+		}
+	}
+
+	eval = testEval(`values(` + input + `)`)
+	values, ok := eval.(*obj.Array)
+	if !ok {
+		t.Fatalf("values() did not return Array. got=%T (%+v)", eval, eval)
+	}
+
+	if len(values.Elements) != 3 {
+		t.Fatalf("values() has wrong number of elements. got=%d", len(values.Elements))
+	}
+
+	seenVals := map[int64]bool{}
+	for _, el := range values.Elements {
+		integer, ok := el.(*obj.Integer)
+		if !ok {
+			t.Fatalf("value is not Integer. got=%T (%+v)", el, el)
+		}
+		seenVals[integer.Value] = true
+	}
+
+	for _, v := range []int64{1, 2, 3} {
+		if !seenVals[v] {
+			t.Errorf("values() missing value %d", v)
 		}
 	}
 }

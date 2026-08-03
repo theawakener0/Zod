@@ -107,6 +107,8 @@ func New(l *lx.Lexer) *Parser {
 	p.registerPrefix(tk.DEC, p.parsePrefixExpression)
 
 	p.registerPrefix(tk.LBRACKET, p.parseArrayLiteral)
+
+	p.registerPrefix(tk.LBRACE, p.parseHashLiteral)
 	
 	p.nextToken()
 	p.nextToken()
@@ -686,6 +688,36 @@ func (p *Parser) parseIndexExpression(left ast.Expression) ast.Expression {
 	}
 
 	return exp
+}
+
+func (p *Parser) parseHashLiteral() ast.Expression {
+	hash := &ast.HashLiteral{Token: p.curToken}
+	hash.Pairs = make(map[ast.Expression]ast.Expression)
+
+	for !p.peekTokenIs(tk.RBRACE) {
+		p.nextToken()
+		key := p.parseExpression(LOWEST)
+
+		if !p.expectPeek(tk.COLOMN) {
+			return nil
+		}
+
+		p.nextToken()
+		value := p.parseExpression(LOWEST)
+
+		hash.Pairs[key] = value
+
+		if !p.peekTokenIs(tk.RBRACE) && !p.expectPeek(tk.COMMA) {
+			return nil
+		}
+
+	}
+
+	if !p.expectPeek(tk.RBRACE) {
+		return nil
+	}
+	
+	return hash
 }
 
 func (p *Parser) noPrefixParseFnError(t tk.TokenType) {

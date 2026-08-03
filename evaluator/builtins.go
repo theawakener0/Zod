@@ -22,6 +22,8 @@ var builtins = map[string]*obj.Builtin{
 				return &obj.Integer{Value: int64(len(arg.Value))}
 			case *obj.Array:
 				return &obj.Integer{Value: int64(len(arg.Elements))}
+			case *obj.Hash:
+				return &obj.Integer{Value: int64(len(arg.Pairs))}
 			default:
 				return newError("argument to `len` not supported. got=%s", args[0].Type())
 			}
@@ -201,8 +203,117 @@ var builtins = map[string]*obj.Builtin{
 			}
 		},
 	},
-}
+	"insert": {
+		Fn: func(args ...obj.Object) obj.Object {
+			if len(args) != 3 {
+				return newError("wrong number of arguments. got=%d, want=3", len(args))
+			}
 
+			hash, ok := args[0].(*obj.Hash)
+			if !ok {
+				return newError("argument to `insert` not supported. got=%s", args[0].Type())
+			}
+
+			key, ok := args[1].(obj.Hashable)
+			if !ok {
+				return newError("unusable as hash key: %s", args[1].Type())
+			}
+
+			newPairs := make(map[obj.HashKey]obj.HashPair, len(hash.Pairs)+1)
+			for k, v := range hash.Pairs {
+				newPairs[k] = v
+			}
+			newPairs[key.HashKey()] = obj.HashPair{Key: args[1], Value: args[2]}
+
+			return &obj.Hash{Pairs: newPairs}
+		},
+	},
+	"remove": {
+		Fn: func(args ...obj.Object) obj.Object {
+			if len(args) != 2 {
+				return newError("wrong number of arguments. got=%d, want=2", len(args))
+			}
+
+			hash, ok := args[0].(*obj.Hash)
+			if !ok {
+				return newError("argument to `delete` not supported. got=%s", args[0].Type())
+			}
+
+			key, ok := args[1].(obj.Hashable)
+			if !ok {
+				return newError("unusable as hash key: %s", args[1].Type())
+			}
+
+			newPairs := make(map[obj.HashKey]obj.HashPair, len(hash.Pairs))
+			for k, v := range hash.Pairs {
+				newPairs[k] = v
+			}
+			delete(newPairs, key.HashKey())
+
+			return &obj.Hash{Pairs: newPairs}
+		},
+	},
+	"keys": {
+		Fn: func(args ...obj.Object) obj.Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+
+			hash, ok := args[0].(*obj.Hash)
+			if !ok {
+				return newError("argument to `keys` not supported. got=%s", args[0].Type())
+			}
+
+			keys := make([]obj.Object, 0, len(hash.Pairs))
+			for _, pair := range hash.Pairs {
+				keys = append(keys, pair.Key)
+			}
+
+			return &obj.Array{Elements: keys}
+		},
+	},
+	"values": {
+		Fn: func(args ...obj.Object) obj.Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+
+			hash, ok := args[0].(*obj.Hash)
+			if !ok {
+				return newError("argument to `values` not supported. got=%s", args[0].Type())
+			}
+
+			values := make([]obj.Object, 0, len(hash.Pairs))
+			for _, pair := range hash.Pairs {
+				values = append(values, pair.Value)
+			}
+
+			return &obj.Array{Elements: values}
+		},
+	},
+	"contains": {
+		Fn: func(args ...obj.Object) obj.Object {
+			if len(args) != 2 {
+				return newError("wrong number of arguments. got=%d, want=2", len(args))
+			}
+
+			hash, ok := args[0].(*obj.Hash)
+			if !ok {
+				return newError("argument to `contains` not supported. got=%s", args[0].Type())
+			}
+
+			key, ok := args[1].(obj.Hashable)
+			if !ok {
+				return newError("unusable as hash key: %s", args[1].Type())
+			}
+
+			if _, ok := hash.Pairs[key.HashKey()]; ok {
+				return TRUE
+			}
+			return FALSE
+		},
+	},
+}
 
 func objectToValue(object obj.Object) any {
 	switch val := object.(type) {
