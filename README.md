@@ -17,13 +17,11 @@ Zod is a small, interpreted, dynamically typed with a first-class functions, clo
 
 Prebuilt binaries for Linux, macOS, and Windows are attached to every [GitHub Release](https://github.com/theawakener0/Zod/releases).
 
-### Option 1: Download script (recommended)
+### Option 1: Download script
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/theawakener0/Zod/main/install.sh | sh
 ```
-
-Installs the latest `zod` binary to `/usr/local/bin`, or `~/.local/bin` if that is not writable. The download is verified against its SHA-256 checksum.
 
 ### Option 2: go install
 
@@ -57,6 +55,7 @@ Grab the tarball for your OS/architecture from the [Releases page](https://githu
 
 ```sh
 go build -o zod .
+# if you installed using the script or go install you can just run zod
 ```
 
 ### Run the REPL
