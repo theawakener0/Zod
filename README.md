@@ -13,6 +13,30 @@
 
 Zod is a small, interpreted, dynamically typed with a first-class functions, closures, arrays, hashes, and more.
 
+## Install
+
+Prebuilt binaries for Linux, macOS, and Windows are attached to every [GitHub Release](https://github.com/theawakener0/Zod/releases).
+
+### Option 1: Download script (recommended)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/theawakener0/Zod/main/install.sh | sh
+```
+
+Installs the latest `zod` binary to `/usr/local/bin`, or `~/.local/bin` if that is not writable. The download is verified against its SHA-256 checksum.
+
+### Option 2: go install
+
+```sh
+go install github.com/theawakener0/Zod@latest
+```
+
+Requires [Go](https://go.dev/dl/) 1.22 or newer and installs the `Zod` executable into your Go bin directory.
+
+### Option 3: Manual download
+
+Grab the tarball for your OS/architecture from the [Releases page](https://github.com/theawakener0/Zod/releases), extract it, and put the `zod` binary on your `PATH`.
+
 ## Features
 
 - First-class functions and closures
@@ -187,6 +211,25 @@ Index assignment works on arrays and hashes too: `nums[0] = 10`, `user["age"] +=
 | `values(hash)`        | Array of values in a hash                      |
 | `contains(hash, k)`   | Whether a hash contains key `k`                |
 
+
+## Development
+
+Run the test suite:
+
+```sh
+go test ./...
+```
+
+## Releasing
+
+Releases are built automatically by the [release workflow](.github/workflows/release.yml). To publish a new version:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The workflow runs the tests, cross-compiles binaries for Linux, macOS, and Windows (amd64/arm64), attaches them to a GitHub Release, and generates release notes. Check the [Releases page](https://github.com/theawakener0/Zod/releases) to download them.
 
 ## Acknowledgments
 

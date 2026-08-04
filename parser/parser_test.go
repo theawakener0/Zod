@@ -3,8 +3,8 @@ package parser
 import (
 	"testing"
 	"fmt"
-	"github.com/theawakener0/zod/ast"
-	lx "github.com/theawakener0/zod/lexer"
+	"github.com/theawakener0/Zod/ast"
+	lx "github.com/theawakener0/Zod/lexer"
 )
 
 func TestLetStatement(t *testing.T) {

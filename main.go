@@ -20,7 +20,14 @@ const Banner = `
                                             ▀▀▀  
 `
 
+var version = "dev"
+
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "-version" || os.Args[1] == "--version") {
+		fmt.Printf("zod %s\n", version)
+		return
+	}
+
 	if len(os.Args) > 1 {
 		source, err := os.ReadFile(os.Args[1])
 		if err != nil {
