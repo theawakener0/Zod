@@ -6,10 +6,10 @@ import (
 	"io"
 	"os"
 
-	ev "github.com/theawakener0/zod/evaluator"
-	lx "github.com/theawakener0/zod/lexer"
-	obj "github.com/theawakener0/zod/object"
-	ps "github.com/theawakener0/zod/parser"
+	ev "github.com/theawakener0/Zod/evaluator"
+	lx "github.com/theawakener0/Zod/lexer"
+	obj "github.com/theawakener0/Zod/object"
+	ps "github.com/theawakener0/Zod/parser"
 )
 
 const PROMPT = "\x1b[0;32m>>\x1b[0m "

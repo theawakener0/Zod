@@ -1,3 +1,3 @@
-module github.com/theawakener0/zod
+module github.com/theawakener0/Zod
 
 go 1.22.2

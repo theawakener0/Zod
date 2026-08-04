@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	obj "github.com/theawakener0/zod/object"
+	obj "github.com/theawakener0/Zod/object"
 )
 
 var builtins = map[string]*obj.Builtin{

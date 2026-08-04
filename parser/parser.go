@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/theawakener0/zod/ast"
-	lx "github.com/theawakener0/zod/lexer"
-	tk "github.com/theawakener0/zod/token"
+	"github.com/theawakener0/Zod/ast"
+	lx "github.com/theawakener0/Zod/lexer"
+	tk "github.com/theawakener0/Zod/token"
 )
 
 type (

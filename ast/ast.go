@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	tk "github.com/theawakener0/zod/token"
+	tk "github.com/theawakener0/Zod/token"
 )
 
 type Node interface {

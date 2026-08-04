@@ -5,7 +5,7 @@ import (
 	"os"
 	"os/user"
 
-	"github.com/theawakener0/zod/repl"
+	"github.com/theawakener0/Zod/repl"
 )
 
 

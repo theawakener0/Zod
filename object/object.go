@@ -6,7 +6,7 @@ import (
 	"strings"
 	"hash/fnv"
 
-	"github.com/theawakener0/zod/ast"
+	"github.com/theawakener0/Zod/ast"
 )
 
 type ObjectType string

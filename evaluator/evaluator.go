@@ -3,8 +3,8 @@ package evaluator
 import (
 	"fmt"
 
-	"github.com/theawakener0/zod/ast"
-	obj "github.com/theawakener0/zod/object"
+	"github.com/theawakener0/Zod/ast"
+	obj "github.com/theawakener0/Zod/object"
 )
 
 var (

@@ -1,9 +1,9 @@
 package evaluator
 
 import (
-	lx "github.com/theawakener0/zod/lexer"
-	obj "github.com/theawakener0/zod/object"
-	ps "github.com/theawakener0/zod/parser"
+	lx "github.com/theawakener0/Zod/lexer"
+	obj "github.com/theawakener0/Zod/object"
+	ps "github.com/theawakener0/Zod/parser"
 	"testing"
 )
 
