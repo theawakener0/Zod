@@ -1,15 +1,8 @@
 # Zod Programming Language
 
-```
-                                        
-▄▄▄▄▄▄▄▄▄          ▄▄ ▄▄▄                        
-▀▀▀▀▀████          ██ ███                        
-   ▄███▀  ▄███▄ ▄████ ███       ▀▀█▄ ████▄ ▄████ 
- ▄███▀    ██ ██ ██ ██ ███      ▄█▀██ ██ ██ ██ ██ 
-█████████ ▀███▀ ▀████ ████████ ▀█▄██ ██ ██ ▀████ 
-                                              ██ 
-                                            ▀▀▀  
-```
+<p align="center">
+    <img src="media/Zod.png" alt="Zod Banner">
+</p>
 
 Zod is a small, interpreted, dynamically typed with a first-class functions, closures, arrays, hashes, and more.
 
