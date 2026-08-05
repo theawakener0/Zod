@@ -164,6 +164,9 @@ More runnable examples live in [`examples/`](examples/).
 | Hash      | `{"name": "Zod"}`, `{}`         |
 | Null      | `null`                          |
 
+> [!NOTE]
+> The Hash type is implemented as a Go map, so it's not a true Hashmap and does not preserve order.
+
 ### Operators
 
 | Category      | Operators                                |
@@ -200,28 +203,9 @@ Index assignment works on arrays and hashes too: `nums[0] = 10`, `user["age"] +=
 | `insert(hash, k, v)`  | New hash with `k: v` added                     |
 | `remove(hash, k)`     | New hash without key `k`                       |
 | `keys(hash)`          | Array of keys in a hash                        |
-| `values(hash)`        | Array of values in a hash                      |
+| `vals(hash)`          | Array of values in a hash                      |
 | `contains(hash, k)`   | Whether a hash contains key `k`                |
-
-
-## Development
-
-Run the test suite:
-
-```sh
-go test ./...
-```
-
-## Releasing
-
-Releases are built automatically by the [release workflow](.github/workflows/release.yml). To publish a new version:
-
-```sh
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-The workflow runs the tests, cross-compiles binaries for Linux, macOS, and Windows (amd64/arm64), attaches them to a GitHub Release, and generates release notes. Check the [Releases page](https://github.com/theawakener0/Zod/releases) to download them.
+| `random(x)`           | Random integer between 0 and `x`               |
 
 ## Acknowledgments
 

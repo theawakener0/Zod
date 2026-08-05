@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"math/rand"
 
 	obj "github.com/theawakener0/Zod/object"
 )
@@ -272,7 +273,7 @@ var builtins = map[string]*obj.Builtin{
 			return &obj.Array{Elements: keys}
 		},
 	},
-	"values": {
+	"vals": {
 		Fn: func(args ...obj.Object) obj.Object {
 			if len(args) != 1 {
 				return newError("wrong number of arguments. got=%d, want=1", len(args))
@@ -280,7 +281,7 @@ var builtins = map[string]*obj.Builtin{
 
 			hash, ok := args[0].(*obj.Hash)
 			if !ok {
-				return newError("argument to `values` not supported. got=%s", args[0].Type())
+				return newError("argument to `vals` not supported. got=%s", args[0].Type())
 			}
 
 			values := make([]obj.Object, 0, len(hash.Pairs))
@@ -312,6 +313,20 @@ var builtins = map[string]*obj.Builtin{
 			}
 			return FALSE
 		},
+	},
+	"random": {
+		Fn: func(args ...obj.Object) obj.Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+
+			switch arg := args[0].(type) {
+			case *obj.Integer:
+				return &obj.Integer{Value: rand.Int63n(arg.Value)}
+			default:
+				return newError("argument to `random` not supported. got=%s", args[0].Type())
+			}
+		}, 
 	},
 }
 

@@ -807,7 +807,7 @@ func TestHashBuiltins(t *testing.T) {
 		{`contains({}, "a")`, false},
 		{`contains(insert({}, "a", 1), "a")`, true},
 		{`len(keys({"a": 1, "b": 2}))`, 2},
-		{`len(values({"a": 1, "b": 2}))`, 2},
+		{`len(vals({"a": 1, "b": 2}))`, 2},
 		{`{"a": 1, "b": 2}["a"]`, 1},
 		{`{"a": 1, "b": 2}["c"]`, nil},
 		{`let h = {"a": 1}; h["b"] = 2; len(h)`, 2},
@@ -842,7 +842,7 @@ func TestHashBuiltinErrors(t *testing.T) {
 		{`remove({"a": 1})`, "wrong number of arguments. got=1, want=2"},
 		{`remove(5, "a")`, "argument to `remove` not supported. got=INTEGER"},
 		{`keys(1)`, "argument to `keys` not supported. got=INTEGER"},
-		{`values("str")`, "argument to `values` not supported. got=STRING"},
+		{`vals("str")`, "argument to `vals` not supported. got=STRING"},
 		{`contains(1, 1)`, "argument to `contains` not supported. got=INTEGER"},
 		{`let h = {}; h["a"] += 1`, "key not found: a"},
 	}
@@ -888,14 +888,14 @@ func TestHashKeysValues(t *testing.T) {
 		}
 	}
 
-	eval = testEval(`values(` + input + `)`)
+	eval = testEval(`vals(` + input + `)`)
 	values, ok := eval.(*obj.Array)
 	if !ok {
-		t.Fatalf("values() did not return Array. got=%T (%+v)", eval, eval)
+		t.Fatalf("vals() did not return Array. got=%T (%+v)", eval, eval)
 	}
 
 	if len(values.Elements) != 3 {
-		t.Fatalf("values() has wrong number of elements. got=%d", len(values.Elements))
+		t.Fatalf("vals() has wrong number of elements. got=%d", len(values.Elements))
 	}
 
 	seenVals := map[int64]bool{}
@@ -909,7 +909,7 @@ func TestHashKeysValues(t *testing.T) {
 
 	for _, v := range []int64{1, 2, 3} {
 		if !seenVals[v] {
-			t.Errorf("values() missing value %d", v)
+			t.Errorf("vals() missing value %d", v)
 		}
 	}
 }

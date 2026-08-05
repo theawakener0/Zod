@@ -9,7 +9,7 @@ println(user["age"])  // 2
 
 println(contains(user, "name"))  // true
 println(keys(user))             // [name, age]
-println(values(user))          // [Zod, 2]
+println(vals(user))          // [Zod, 2]
 
 let updated = insert(user, "lang", "Zod")
 println(updated["lang"]) // Zod
