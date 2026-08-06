@@ -185,14 +185,25 @@ func (l *Lexer) NextToken() tk.Token {
 	case 0:
 		tok.Literal = ""
 		tok.Type = tk.EOF
+	case '.':
+		if isDigit(l.peekChar()) {
+			tok.Type = tk.FLOAT
+			tok.Literal = l.readDotNumber()
+			return tok
+		}
+		tok = newToken(tk.DOT, l.ch)
 	default:
 		if isLetter(l.ch) {
 			tok.Literal = l.readIdentifier()
 			tok.Type = tk.LookupIdent(tok.Literal)
 			return tok
 		} else if isDigit(l.ch) {
-			tok.Type = tk.INT
 			tok.Literal = l.readNumber()
+			if strings.Contains(tok.Literal, ".") {
+				tok.Type = tk.FLOAT
+			} else {
+				tok.Type = tk.INT
+			}
 			return tok
 		} else {
 			tok = newToken(tk.ILLEGAL, l.ch)
@@ -218,6 +229,26 @@ func (l *Lexer) readNumber() string {
 	for isDigit(l.ch) {
 		l.readChar()
 	}
+
+	if l.ch == '.' {
+		l.readChar()
+		for isDigit(l.ch) {
+			l.readChar()
+		}
+	}
+
+	return l.input[position:l.position]
+}
+
+func (l *Lexer) readDotNumber() string {
+	position := l.position
+
+	l.readChar()
+
+	for isDigit(l.ch) {
+		l.readChar()
+	}
+
 	return l.input[position:l.position]
 }
 

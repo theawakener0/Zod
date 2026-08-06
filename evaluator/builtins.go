@@ -92,6 +92,8 @@ var builtins = map[string]*obj.Builtin{
 				return &obj.Integer{Value: val}
 			case *obj.Integer:
 				return arg
+			case *obj.Float:
+				return &obj.Integer{Value: int64(arg.Value)}
 			case *obj.Boolean:
 				if arg.Value {
 					return &obj.Integer{Value: 1}
@@ -99,6 +101,33 @@ var builtins = map[string]*obj.Builtin{
 				return &obj.Integer{Value: 0}
 			default:
 				return newError("argument to `int` not supported. got=%s", args[0].Type())
+			}
+		},
+	},
+	"float": {
+		Fn: func(args ...obj.Object) obj.Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+
+			switch arg := args[0].(type) {
+			case *obj.String:
+				val, err := strconv.ParseFloat(arg.Value, 64)
+				if err != nil {
+					return newError("could not parse %q as float", arg.Value)
+				}
+				return &obj.Float{Value: val}
+			case *obj.Float:
+				return arg
+			case *obj.Integer:
+				return &obj.Float{Value: float64(arg.Value)}
+			case *obj.Boolean:
+				if arg.Value {
+					return &obj.Float{Value: 1.0}
+				}
+				return &obj.Float{Value: 0.0}
+			default:
+				return newError("argument to `float` not supported. got=%s", args[0].Type())
 			}
 		},
 	},
@@ -113,6 +142,8 @@ var builtins = map[string]*obj.Builtin{
 				return arg
 			case *obj.Integer:
 				return &obj.String{Value: fmt.Sprintf("%s", arg.Inspect())}
+			case *obj.Float:
+				return &obj.String{Value: arg.Inspect()}
 			case *obj.Boolean:
 				if arg.Value {
 					return &obj.String{Value: "true"}
@@ -317,7 +348,7 @@ var builtins = map[string]*obj.Builtin{
 	"random": {
 		Fn: func(args ...obj.Object) obj.Object {
 			if len(args) != 1 {
-				return newError("wrong number of arguments. got=%d, want=1", len(args))
+				return &obj.Float{Value: rand.Float64()}
 			}
 
 			switch arg := args[0].(type) {
@@ -328,11 +359,94 @@ var builtins = map[string]*obj.Builtin{
 			}
 		}, 
 	},
+	"matrix": {
+		Fn: func(args ...obj.Object) obj.Object {
+			if len(args) != 3 {
+				return newError("wrong number of arguments. got=%d, want=3", len(args))
+			}
+		
+			if args[0].Type() != "INTEGER" && args[1].Type() != "INTEGER" {
+				
+				rows, ok := args[0].(*obj.Float)
+				if !ok {
+					return newError("first argument to `matrix` not an integer or float. got=%s", args[0].Type())
+				}
+
+				cols, ok := args[1].(*obj.Float)
+				if !ok {
+					return newError("second argument to `matrix` not an integer or float. got=%s", args[1].Type())
+				}
+
+				val, ok := args[2].(*obj.Array)
+				if !ok {
+					return newError("third argument to `matrix` not an array. got=%s", args[2].Type())
+				}
+
+				r, c := int(rows.Value), int(cols.Value)
+				if rows.Value < 1 || cols.Value < 1 {
+					return newError("matrix dimensions must be positive. got=%f, %f", rows.Value, cols.Value)
+				}
+
+				if len(val.Elements) != r*c {
+					return newError("array length does not match matrix dimensions. got=%d, want=%d", len(val.Elements), r*c)
+				}
+
+				matrix := make([]obj.Object, int(rows.Value))
+				for i := range r {
+					row := make([]obj.Object, c)
+					for j := range c {
+						row[j] = val.Elements[i*c+j]
+					}
+					matrix[i] = &obj.Array{Elements: row}
+				}
+				
+				return &obj.Array{Elements: matrix}
+			}
+
+			rows, ok := args[0].(*obj.Integer)
+			if !ok {
+				return newError("first argument to `matrix` not an integer. got=%s", args[0].Type())
+			}
+
+			cols, ok := args[1].(*obj.Integer)
+			if !ok {
+				return newError("second argument to `matrix` not an integer. got=%s", args[1].Type())
+			}
+
+			val, ok := args[2].(*obj.Array)
+			if !ok {
+				return newError("third argument to `matrix` not an array. got=%s", args[2].Type())
+			}
+
+			r, c := int(rows.Value), int(cols.Value)
+			if rows.Value < 1 || cols.Value < 1 {
+				return newError("matrix dimensions must be positive. got=%d, %d", rows.Value, cols.Value)
+			}
+
+			if len(val.Elements) != r*c {
+				return newError("array length does not match matrix dimensions. got=%d, want=%d", len(val.Elements), r*c)
+			}
+
+			matrix := make([]obj.Object, rows.Value)
+			for i := range r {
+				row := make([]obj.Object, c)
+				for j := range c {
+					row[j] = val.Elements[i*c+j]
+				}
+				matrix[i] = &obj.Array{Elements: row}
+			}
+			
+			return &obj.Array{Elements: matrix}
+
+		},
+	},
 }
 
 func objectToValue(object obj.Object) any {
 	switch val := object.(type) {
 	case *obj.Integer:
+		return val.Value
+	case *obj.Float:
 		return val.Value
 	case *obj.String:
 		return val.Value

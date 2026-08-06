@@ -23,6 +23,9 @@ func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
 
 	case *ast.IntegerLiteral:
 		return &obj.Integer{Value: n.Value}
+
+	case *ast.FloatLiteral:
+		return &obj.Float{Value: n.Value}
 	
 	case *ast.Boolean:
 		return nattiveBoolToBooleanObject(n.Value)
@@ -261,12 +264,16 @@ func evalBangOperatorExpression(right obj.Object) obj.Object {
 }
 
 func evalMinusPrefixOperatorExpression(right obj.Object) obj.Object {
-	if right.Type() != obj.INTEGER_OBJ {
+	switch right.Type() {
+	case obj.INTEGER_OBJ:
+		value := right.(*obj.Integer).Value
+		return &obj.Integer{Value: -value}
+	case obj.FLOAT_OBJ:
+		value := right.(*obj.Float).Value
+		return &obj.Float{Value: -value}
+	default:
 		return newError("unknown prefix operator: -%s", right.Type())
 	}
-
-	value := right.(*obj.Integer).Value
-	return &obj.Integer{Value: -value}
 }
 
 func evalPrefixExpression(operator string, right obj.Object) obj.Object {
@@ -317,12 +324,60 @@ func evalInfixExpression(operator string, left, right obj.Object) obj.Object {
 	switch {
 	case left.Type() == obj.INTEGER_OBJ && right.Type() == obj.INTEGER_OBJ:
 		return evalIntegerInfixExpression(operator, left, right)
+	case left.Type() == obj.FLOAT_OBJ || right.Type() == obj.FLOAT_OBJ:
+		return evalFloatInfixExpression(operator, left, right)
 	case left.Type() == obj.STRING_OBJ && right.Type() == obj.STRING_OBJ:
 		return evalStringInfixExpression(operator, left, right)
 	case operator == "==":
 		return nattiveBoolToBooleanObject(left == right)
 	case operator == "!=":
 		return nattiveBoolToBooleanObject(left != right)
+	default:
+		return newError("unknown infix operator: %s %s %s", left.Type(), operator, right.Type())
+	}
+}
+
+func evalFloatInfixExpression(operator string, left, right obj.Object) obj.Object {
+	var leftValue, rightValue float64
+
+	switch l := left.(type) {
+	case *obj.Float:
+		leftValue = l.Value
+	case *obj.Integer:
+		leftValue = float64(l.Value)
+	}
+
+	switch r := right.(type) {
+	case *obj.Float:
+		rightValue = r.Value
+	case *obj.Integer:
+		rightValue = float64(r.Value)
+	}
+
+	switch operator {
+	case "+":
+		return &obj.Float{Value: leftValue + rightValue}
+	case "-":
+		return &obj.Float{Value: leftValue - rightValue}
+	case "*":
+		return &obj.Float{Value: leftValue * rightValue}
+	case "/":
+		if rightValue == 0 {
+			return newError("division by zero")
+		}
+		return &obj.Float{Value: leftValue / rightValue}
+	case "<":
+		return nattiveBoolToBooleanObject(leftValue < rightValue)
+	case ">":
+		return nattiveBoolToBooleanObject(leftValue > rightValue)
+	case "==":
+		return nattiveBoolToBooleanObject(leftValue == rightValue)
+	case "!=":
+		return nattiveBoolToBooleanObject(leftValue != rightValue)
+	case "<=":
+		return nattiveBoolToBooleanObject(leftValue <= rightValue)
+	case ">=":
+		return nattiveBoolToBooleanObject(leftValue >= rightValue)
 	default:
 		return newError("unknown infix operator: %s %s %s", left.Type(), operator, right.Type())
 	}
@@ -435,25 +490,42 @@ func evalIncrementDecrement(opt string, right ast.Expression, env *obj.Enviromen
 		return newError("identifier not found: %s", ident.Value)
 	}
 
-	if val.Type() != obj.INTEGER_OBJ {
-		return newError("%s requires integer, got %s", opt, val.Type())
-	}
+	switch val.Type() {
+	case obj.INTEGER_OBJ:
+		intVal := val.(*obj.Integer).Value
+		oldObj := &obj.Integer{Value: intVal}
+		if opt == "++" {
+			intVal++
+		} else {
+			intVal--
+		}
 
-	intVal := val.(*obj.Integer).Value
-	oldObj := &obj.Integer{Value: intVal}
-	if opt == "++" {
-		intVal++
-	} else {
-		intVal--
-	}
+		newObj := &obj.Integer{Value: intVal}
+		env.Set(ident.Value, newObj)
 
-	newObj := &obj.Integer{Value: intVal}
-	env.Set(ident.Value, newObj)
+		if isPostfix {
+			return oldObj
+		}
+		return newObj
+	case obj.FLOAT_OBJ:
+		floatVal := val.(*obj.Float).Value
+		oldObj := &obj.Float{Value: floatVal}
+		if opt == "++" {
+			floatVal++
+		} else {
+			floatVal--
+		}
 
-	if isPostfix {
-		return oldObj
+		newObj := &obj.Float{Value: floatVal}
+		env.Set(ident.Value, newObj)
+
+		if isPostfix {
+			return oldObj
+		}
+		return newObj
+	default:
+		return newError("%s requires integer or float, got %s", opt, val.Type())
 	}
-	return newObj
 }
 
 func evalProgram(p *ast.Program, env *obj.Enviroment) obj.Object {

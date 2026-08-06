@@ -992,6 +992,30 @@ func TestStringLiteralExpression(t *testing.T) {
 	}
 }
 
+func TestFloatLiteralExpression(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected float64
+	}{
+		{"20.0;", 20.0},
+		{"3.14;", 3.14},
+		{"20.;", 20.0},
+		{".5;", 0.5},
+	}
+
+	for _, tt := range tests {
+		l := lx.New(tt.input)
+		p := New(l)
+		program := p.ParseProgram()
+		checkParseErrors(t, p)
+
+		stmt := program.Statements[0].(*ast.ExpressionStatement)
+		if !testFloatLiteral(t, stmt.Expression, tt.expected) {
+			return
+		}
+	}
+}
+
 func TestParsingArrayLiterals(t *testing.T) {
 	input := "[1, 2 * 2, 3 + 3];"
 
@@ -1212,6 +1236,19 @@ func testIntegerLiteral(t *testing.T, il ast.Expression, value int64) bool {
 	return true
 }
 
+func testFloatLiteral(t *testing.T, fl ast.Expression, value float64) bool {
+	flt, ok := fl.(*ast.FloatLiteral)
+	if !ok {
+		t.Errorf("fl is not *ast.FloatLiteral. got=%T", fl)
+		return false
+	}
+	if flt.Value != value {
+		t.Errorf("flt.Value is not %v. got=%v", value, flt.Value)
+		return false
+	}
+	return true
+}
+
 func testIdentifier(t *testing.T, exp ast.Expression, value string) bool {
 	ident, ok := exp.(*ast.Identifier)
 	if !ok {
@@ -1242,6 +1279,8 @@ func testLiteralExpression(
 		return testIntegerLiteral(t, exp, int64(v))
 	case int64:
 		return testIntegerLiteral(t, exp, v)
+	case float64:
+		return testFloatLiteral(t, exp, v)
 	case string:
 		return testIdentifier(t, exp, v)
 	case bool:

@@ -3,6 +3,8 @@ package object
 import (
 	"bytes"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"hash/fnv"
 
@@ -13,6 +15,7 @@ type ObjectType string
 
 const (
 	INTEGER_OBJ = "INTEGER"
+	FLOAT_OBJ = "FLOAT"
 	BOOLEAN_OBJ = "BOOLEAN"
 	NULL_OBJ = "NULL"
 	RETURN_VALUE_OBJ = "RETURN_VALUE"
@@ -52,6 +55,24 @@ func (i *Integer) Inspect() string {
 }
 func (i *Integer) HashKey() HashKey {
 	return HashKey{Type: i.Type(), Value: uint64(i.Value)}
+}
+
+type Float struct {
+	Value float64
+}
+
+func (f *Float) Type() ObjectType {
+	return FLOAT_OBJ
+}
+func (f *Float) Inspect() string {
+	s := strconv.FormatFloat(f.Value, 'f', -1, 64)
+	if !strings.Contains(s, ".") {
+		s += ".0"
+	}
+	return s
+}
+func (f *Float) HashKey() HashKey {
+	return HashKey{Type: f.Type(), Value: math.Float64bits(f.Value)}
 }
 
 type Boolean struct {

@@ -14,6 +14,7 @@ const (
 
 	IDENT = "IDENT"
 	INT = "INT"
+	FLOAT = "FLOAT"
 	STRING = "STRING"
 
 	ASSIGN = "="
@@ -43,6 +44,7 @@ const (
 	COMMA = ","
 	COLOMN = ":"
 	SEMICOLON = ";"
+	DOT = "."
 
 	LPAREN = "("
 	RPAREN = ")"

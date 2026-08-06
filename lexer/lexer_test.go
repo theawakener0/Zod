@@ -31,6 +31,7 @@ func TestNextToken(t *testing.T) {
 	"foo bar"
 	[1, 2];
 	{"foo": "bar"}
+	20.0
 	`
 
 	tests := []tk.Token {
@@ -133,6 +134,39 @@ func TestNextToken(t *testing.T) {
 		{tk.COLOMN, ":"},
 		{tk.STRING, "bar"},
 		{tk.RBRACE, "}"},
+		{tk.FLOAT, "20.0"},
+		{tk.EOF, ""},
+	}
+
+	l := New(input)
+
+	for i, tt := range tests {
+		tok := l.NextToken()
+
+		if tok.Type != tt.Type {
+			t.Fatalf("test[%d] - tokentype wrong. expected=%q, got=%q", i, tt.Type, tok.Type)
+		}
+
+		if tok.Literal != tt.Literal {
+			t.Fatalf("test[%d] - literal wrong. expected=%q, got=%q", i, tt.Literal, tok.Literal)
+		}
+	}
+}
+
+func TestFloatTokens(t *testing.T) {
+	input := "20.0; 3.14; 20.; .5; 5;"
+
+	tests := []tk.Token{
+		{tk.FLOAT, "20.0"},
+		{tk.SEMICOLON, ";"},
+		{tk.FLOAT, "3.14"},
+		{tk.SEMICOLON, ";"},
+		{tk.FLOAT, "20."},
+		{tk.SEMICOLON, ";"},
+		{tk.FLOAT, ".5"},
+		{tk.SEMICOLON, ";"},
+		{tk.INT, "5"},
+		{tk.SEMICOLON, ";"},
 		{tk.EOF, ""},
 	}
 
