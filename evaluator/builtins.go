@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"math"
 	"math/rand"
 
 	obj "github.com/theawakener0/Zod/object"
@@ -438,6 +439,60 @@ var builtins = map[string]*obj.Builtin{
 			
 			return &obj.Array{Elements: matrix}
 
+		},
+	},
+	"make" : {
+		Fn: func(args ...obj.Object) obj.Object {
+			if len(args) < 1 || len(args) > 2 {
+				return newError("wrong number of arguments. got=%d, want=1 or 2", len(args))
+			}
+
+			var size int64
+			switch args[0].(type) {
+			case *obj.Integer:
+				size = args[0].(*obj.Integer).Value
+			case *obj.Float:
+				size = int64(args[0].(*obj.Float).Value)
+			default:
+				return newError("first argument to `make` not an integer or float. got=%s", args[0].Type())
+			}
+
+			if size < 0 {
+				return newError("size to `make` must be non-negative. got=%d", size)
+			}
+			
+			fill := obj.Object(NULL)
+			if len(args) == 2 {
+				fill = args[1]
+			}
+			
+			elements := make([]obj.Object, size)
+			for i := range elements {
+				elements[i] = fill
+			}
+			
+			return &obj.Array{Elements: elements}
+		},
+	},
+	"exp": {
+		Fn: func(args ...obj.Object) obj.Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+
+			switch arg := args[0].(type) {
+			case *obj.Integer:
+				return &obj.Float{Value: math.Exp(float64(arg.Value))}
+			case *obj.Float:
+				return &obj.Float{Value: math.Exp(arg.Value)}
+			default:
+				return newError("argument to `exp` not supported. got=%s", args[0].Type())
+			}
+		},
+	},
+	"pi" : {
+		Fn: func(args ...obj.Object) obj.Object {
+			return &obj.Float{Value: math.Pi}
 		},
 	},
 }

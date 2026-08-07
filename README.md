@@ -207,6 +207,9 @@ Index assignment works on arrays and hashes too: `nums[0] = 10`, `user["age"] +=
 | `contains(hash, k)`   | Whether a hash contains key `k`                |
 | `random(x)`           | Random integer between 0 and `x`               |
 | `matrix(r, c, data)`  | Create a 2D array with `r` rows and `c` cols   |
+| `make(size) / make(size, value)` | Create a new array with `size` elements, and value |
+| `exp(x)`              | e^x |
+| `pi()`                | π |
 
 > [!NOTE]
 > The `matrix` function is still under development so don't expect to use it in real appliction. 
