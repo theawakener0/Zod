@@ -199,6 +199,32 @@ func TestStringEscapes(t *testing.T) {
 	}
 }
 
+func TestHexEscapes(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"ansi", `"\x1b[0;34m%s\x1b[0m"`, "\x1b[0;34m%s\x1b[0m"},
+		{"uppercase", `"\x41\x42"`, "AB"},
+		{"invalid", `"\xZZ"`, `\xZZ`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := New(tt.input)
+			tok := l.NextToken()
+
+			if tok.Type != tk.STRING {
+				t.Fatalf("expected STRING token, got %q", tok.Type)
+			}
+			if tok.Literal != tt.want {
+				t.Fatalf("literal wrong. expected=%q, got=%q", tt.want, tok.Literal)
+			}
+		})
+	}
+}
+
 func TestComments(t *testing.T) {
 	input := `5; // line comment
 	// full line comment

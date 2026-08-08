@@ -276,6 +276,24 @@ func (l *Lexer) readString() string {
 				sb.WriteByte('\\')
 			case '"':
 				sb.WriteByte('"')
+			case 'x':
+				l.readChar()
+				c1 := l.ch
+				l.readChar()
+				c2 := l.ch
+				hi, hiOK := hexVal(c1)
+				lo, loOK := hexVal(c2)
+				if hiOK && loOK {
+					sb.WriteByte(hi*16 + lo)
+				} else {
+					sb.WriteString(`\x`)
+					if c1 != 0 {
+						sb.WriteByte(c1)
+					}
+					if c2 != 0 {
+						sb.WriteByte(c2)
+					}
+				}
 			case 0:
 				sb.WriteByte('\\')
 			default:
@@ -294,6 +312,18 @@ func (l *Lexer) readString() string {
 
 func isLetter(ch byte) bool {
 	return 'a' <= ch && ch <= 'z' || 'A' <= ch && ch <= 'Z'
+}
+
+func hexVal(ch byte) (byte, bool) {
+	switch {
+	case '0' <= ch && ch <= '9':
+		return ch - '0', true
+	case 'a' <= ch && ch <= 'f':
+		return ch - 'a' + 10, true
+	case 'A' <= ch && ch <= 'F':
+		return ch - 'A' + 10, true
+	}
+	return 0, false
 }
 
 func isDigit(ch byte) bool {

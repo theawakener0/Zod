@@ -474,6 +474,35 @@ var builtins = map[string]*obj.Builtin{
 			return &obj.Array{Elements: elements}
 		},
 	},
+	"color": {
+		Fn: func(args ...obj.Object) obj.Object {
+			if len(args) != 2 {
+				return newError("wrong number of arguments. got=%d, want=2", len(args))
+			}
+
+			switch arg := args[0].(type) {
+			case *obj.String:
+				switch arg.Value {
+				case "RED":
+					return &obj.String{Value: fmt.Sprintf("\033[31m%s\033[0m", args[1].Inspect())}
+				case "GREEN":
+					return &obj.String{Value: fmt.Sprintf("\033[32m%s\033[0m", args[1].Inspect())}
+				case "YELLOW":
+					return &obj.String{Value: fmt.Sprintf("\033[33m%s\033[0m", args[1].Inspect())}
+				case "BLUE":
+					return &obj.String{Value: fmt.Sprintf("\033[34m%s\033[0m", args[1].Inspect())}
+				case "MAGENTA":
+					return &obj.String{Value: fmt.Sprintf("\033[35m%s\033[0m", args[1].Inspect())}
+				case "CYAN":
+					return &obj.String{Value: fmt.Sprintf("\033[36m%s\033[0m", args[1].Inspect())}
+				default:
+					return newError("color not supported. got=%s", args[0].Type())
+				}
+			}
+
+			return newError("first argument to `color` not supported. got=%s", args[0].Type())
+		},
+	},
 	"exp": {
 		Fn: func(args ...obj.Object) obj.Object {
 			if len(args) != 1 {
