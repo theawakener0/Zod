@@ -2,6 +2,7 @@ package evaluator
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/theawakener0/Zod/ast"
 	obj "github.com/theawakener0/Zod/object"
@@ -129,10 +130,9 @@ func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
 		case ":=":
 			env.Set(ident.Value, val)
 		case "=":
-			if _, ok := env.Get(ident.Value); !ok {
+			if !env.Assign(ident.Value, val) {
 				return newError("identifier not found: %s", ident.Value)
 			}
-			env.Set(ident.Value, val)
 		case "+=":
 			curr := Eval(ident, env)
 			if isError(curr) {
@@ -142,7 +142,9 @@ func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
 			if isError(result) {
 				return result
 			}
-			env.Set(ident.Value, result)
+			if !env.Assign(ident.Value, result) {
+				return newError("identifier not found: %s", ident.Value)
+			}
 		case "-=":
 			curr := Eval(ident, env)
 			if isError(curr) {
@@ -152,7 +154,9 @@ func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
 			if isError(result) {
 				return result
 			}
-			env.Set(ident.Value, result)
+			if !env.Assign(ident.Value, result) {
+				return newError("identifier not found: %s", ident.Value)
+			}
 		case "*=":
 			curr := Eval(ident, env)
 			if isError(curr) {
@@ -162,7 +166,9 @@ func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
 			if isError(result) {
 				return result
 			}
-			env.Set(ident.Value, result)
+			if !env.Assign(ident.Value, result) {
+				return newError("identifier not found: %s", ident.Value)
+			}
 		case "/=":
 			curr := Eval(ident, env)
 			if isError(curr) {
@@ -172,7 +178,9 @@ func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
 			if isError(result) {
 				return result
 			}
-			env.Set(ident.Value, result)
+			if !env.Assign(ident.Value, result) {
+				return newError("identifier not found: %s", ident.Value)
+			}
 		}
 
 	case *ast.Identifier:
@@ -184,6 +192,9 @@ func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
 		return &obj.Function{Parameters: params, Env: env, Body: body}
 
 	case *ast.CallExpression:
+		if ident, ok := n.Function.(*ast.Identifier); ok && ident.Value == "try" {
+			return evalTryExpression(n, env)
+		}
 		fn := Eval(n.Function, env)
 		if isError(fn) {
 			return fn
@@ -326,6 +337,8 @@ func evalInfixExpression(operator string, left, right obj.Object) obj.Object {
 		return evalIntegerInfixExpression(operator, left, right)
 	case left.Type() == obj.FLOAT_OBJ || right.Type() == obj.FLOAT_OBJ:
 		return evalFloatInfixExpression(operator, left, right)
+	case left.Type() == obj.MATRIX_OBJ || right.Type() == obj.MATRIX_OBJ:
+		return evalMatrixInfixExpression(operator, left, right)
 	case left.Type() == obj.STRING_OBJ && right.Type() == obj.STRING_OBJ:
 		return evalStringInfixExpression(operator, left, right)
 	case operator == "==":
@@ -335,6 +348,170 @@ func evalInfixExpression(operator string, left, right obj.Object) obj.Object {
 	default:
 		return newError("unknown infix operator: %s %s %s", left.Type(), operator, right.Type())
 	}
+}
+
+func evalMatrixInfixExpression(operator string, left, right obj.Object) obj.Object {
+	leftM, leftIsM := left.(*obj.Matrix)
+	rightM, rightIsM := right.(*obj.Matrix)
+
+	switch operator {
+	case "+", "-", "*", "/":
+		if leftIsM && rightIsM {
+			return evalMatrixMatrixInfix(operator, leftM, rightM)
+		}
+		if leftIsM {
+			return evalMatrixScalarInfix(operator, leftM, right)
+		}
+		return evalScalarMatrixInfix(operator, left, rightM)
+	default:
+		return newError("unknown infix operator: %s %s %s", left.Type(), operator, right.Type())
+	}
+}
+
+func evalMatrixMatrixInfix(operator string, a, b *obj.Matrix) obj.Object {
+	switch operator {
+	case "+", "-":
+		if a.Rows != b.Rows || a.Cols != b.Cols {
+			return newError("matrix dimension mismatch for %s: %dx%d vs %dx%d", operator, a.Rows, a.Cols, b.Rows, b.Cols)
+		}
+		allInt := matrixIsAllInteger(a) && matrixIsAllInteger(b)
+		data := make([][]obj.Object, a.Rows)
+		for i := 0; i < a.Rows; i++ {
+			row := make([]obj.Object, a.Cols)
+			for j := 0; j < a.Cols; j++ {
+				av, _ := numericValue(a.Data[i][j])
+				bv, _ := numericValue(b.Data[i][j])
+				var v float64
+				if operator == "+" {
+					v = av + bv
+				} else {
+					v = av - bv
+				}
+				row[j] = resultValue(v, allInt)
+			}
+			data[i] = row
+		}
+		return &obj.Matrix{Rows: a.Rows, Cols: a.Cols, Data: data}
+	case "*":
+		if a.Cols != b.Rows {
+			return newError("matrix dimension mismatch for multiplication: %dx%d vs %dx%d", a.Rows, a.Cols, b.Rows, b.Cols)
+		}
+		allInt := matrixIsAllInteger(a) && matrixIsAllInteger(b)
+		data := make([][]obj.Object, a.Rows)
+		for i := 0; i < a.Rows; i++ {
+			row := make([]obj.Object, b.Cols)
+			for j := 0; j < b.Cols; j++ {
+				var sum float64
+				for k := 0; k < a.Cols; k++ {
+					av, _ := numericValue(a.Data[i][k])
+					bv, _ := numericValue(b.Data[k][j])
+					sum += av * bv
+				}
+				row[j] = resultValue(sum, allInt)
+			}
+			data[i] = row
+		}
+		return &obj.Matrix{Rows: a.Rows, Cols: b.Cols, Data: data}
+	default:
+		return newError("unknown infix operator: %s %s %s", a.Type(), operator, b.Type())
+	}
+}
+
+func evalMatrixScalarInfix(operator string, m *obj.Matrix, scalar obj.Object) obj.Object {
+	if _, ok := numericValue(scalar); !ok {
+		return newError("matrix arithmetic requires numeric operand, got %s", scalar.Type())
+	}
+	allInt := matrixIsAllInteger(m) && scalarIsInteger(scalar)
+	data := make([][]obj.Object, m.Rows)
+	for i := 0; i < m.Rows; i++ {
+		row := make([]obj.Object, m.Cols)
+		for j := 0; j < m.Cols; j++ {
+			mv, _ := numericValue(m.Data[i][j])
+			sv, _ := numericValue(scalar)
+			var v float64
+			switch operator {
+			case "+":
+				v = mv + sv
+			case "-":
+				v = mv - sv
+			case "*":
+				v = mv * sv
+			case "/":
+				if sv == 0 {
+					return newError("division by zero")
+				}
+				v = mv / sv
+			}
+			row[j] = resultValue(v, allInt)
+		}
+		data[i] = row
+	}
+	return &obj.Matrix{Rows: m.Rows, Cols: m.Cols, Data: data}
+}
+
+func evalScalarMatrixInfix(operator string, scalar obj.Object, m *obj.Matrix) obj.Object {
+	if _, ok := numericValue(scalar); !ok {
+		return newError("matrix arithmetic requires numeric operand, got %s", scalar.Type())
+	}
+	allInt := scalarIsInteger(scalar) && matrixIsAllInteger(m)
+	data := make([][]obj.Object, m.Rows)
+	for i := 0; i < m.Rows; i++ {
+		row := make([]obj.Object, m.Cols)
+		for j := 0; j < m.Cols; j++ {
+			mv, _ := numericValue(m.Data[i][j])
+			sv, _ := numericValue(scalar)
+			var v float64
+			switch operator {
+			case "+":
+				v = sv + mv
+			case "-":
+				v = sv - mv
+			case "*":
+				v = sv * mv
+			case "/":
+				if mv == 0 {
+					return newError("division by zero")
+				}
+				v = sv / mv
+			}
+			row[j] = resultValue(v, allInt)
+		}
+		data[i] = row
+	}
+	return &obj.Matrix{Rows: m.Rows, Cols: m.Cols, Data: data}
+}
+
+func numericValue(o obj.Object) (float64, bool) {
+	switch v := o.(type) {
+	case *obj.Integer:
+		return float64(v.Value), true
+	case *obj.Float:
+		return v.Value, true
+	}
+	return 0, false
+}
+
+func resultValue(v float64, isInt bool) obj.Object {
+	if isInt && v == math.Trunc(v) {
+		return &obj.Integer{Value: int64(v)}
+	}
+	return &obj.Float{Value: v}
+}
+
+func matrixIsAllInteger(m *obj.Matrix) bool {
+	for i := 0; i < m.Rows; i++ {
+		for j := 0; j < m.Cols; j++ {
+			if _, ok := m.Data[i][j].(*obj.Integer); !ok {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func scalarIsInteger(o obj.Object) bool {
+	_, ok := o.(*obj.Integer)
+	return ok
 }
 
 func evalFloatInfixExpression(operator string, left, right obj.Object) obj.Object {
@@ -418,8 +595,10 @@ func evalIfExpression(ie *ast.IfExpression, env *obj.Enviroment) obj.Object {
 }
 
 func evalForExpression(fe *ast.ForExpression, env *obj.Enviroment) obj.Object {
+	loopEnv := obj.NewEnclosedEnviroment(env)
+
 	if fe.Init != nil {
-		result := Eval(fe.Init, env)
+		result := Eval(fe.Init, loopEnv)
 		if isError(result) {
 			return result
 		}
@@ -428,7 +607,7 @@ func evalForExpression(fe *ast.ForExpression, env *obj.Enviroment) obj.Object {
 	for {
 		var condition obj.Object
 		if fe.Condition != nil {
-			condition = Eval(fe.Condition, env)
+			condition = Eval(fe.Condition, loopEnv)
 		} else {
 			condition = TRUE
 		}
@@ -441,7 +620,8 @@ func evalForExpression(fe *ast.ForExpression, env *obj.Enviroment) obj.Object {
 			break
 		}
 
-		result := Eval(fe.Body, env)
+		bodyEnv := obj.NewEnclosedEnviroment(loopEnv)
+		result := Eval(fe.Body, bodyEnv)
 		if result != nil {
 			switch result.Type() {
 			case obj.RETURN_VALUE_OBJ, obj.ERROR_OBJ:
@@ -453,7 +633,7 @@ func evalForExpression(fe *ast.ForExpression, env *obj.Enviroment) obj.Object {
 		}
 
 		if fe.Update != nil {
-			result := Eval(fe.Update, env)
+			result := Eval(fe.Update, loopEnv)
 			if isError(result) {
 				return result
 			}
@@ -465,7 +645,8 @@ func evalForExpression(fe *ast.ForExpression, env *obj.Enviroment) obj.Object {
 
 func evalLoopExpression(le *ast.LoopExpression, env *obj.Enviroment) obj.Object {
 	for {
-		result := Eval(le.Body, env)
+		bodyEnv := obj.NewEnclosedEnviroment(env)
+		result := Eval(le.Body, bodyEnv)
 		if result != nil {
 			switch result.Type() {
 			case obj.RETURN_VALUE_OBJ, obj.ERROR_OBJ:
@@ -490,7 +671,7 @@ func evalIncrementDecrement(opt string, right ast.Expression, env *obj.Enviromen
 		return newError("identifier not found: %s", ident.Value)
 	}
 
-	switch val.Type() {
+		switch val.Type() {
 	case obj.INTEGER_OBJ:
 		intVal := val.(*obj.Integer).Value
 		oldObj := &obj.Integer{Value: intVal}
@@ -501,7 +682,7 @@ func evalIncrementDecrement(opt string, right ast.Expression, env *obj.Enviromen
 		}
 
 		newObj := &obj.Integer{Value: intVal}
-		env.Set(ident.Value, newObj)
+		env.Assign(ident.Value, newObj)
 
 		if isPostfix {
 			return oldObj
@@ -517,7 +698,7 @@ func evalIncrementDecrement(opt string, right ast.Expression, env *obj.Enviromen
 		}
 
 		newObj := &obj.Float{Value: floatVal}
-		env.Set(ident.Value, newObj)
+		env.Assign(ident.Value, newObj)
 
 		if isPostfix {
 			return oldObj
@@ -551,9 +732,10 @@ func evalProgram(p *ast.Program, env *obj.Enviroment) obj.Object {
 
 func evalBlockStatement(b *ast.BlockStatement, env *obj.Enviroment) obj.Object {
 	var result obj.Object
+	blockEnv := obj.NewEnclosedEnviroment(env)
 
 	for _, stmt := range b.Statements {
-		result = Eval(stmt, env)
+		result = Eval(stmt, blockEnv)
 
 		if result != nil {
 			rt := result.Type()
@@ -602,6 +784,22 @@ func evalExpressions(exps []ast.Expression, env *obj.Enviroment) []obj.Object {
 	}
 
 	return result
+}
+
+func evalTryExpression(ce *ast.CallExpression, env *obj.Enviroment) obj.Object {
+	if len(ce.Arguments) != 1 {
+		return newError("wrong number of arguments. got=%d, want=1", len(ce.Arguments))
+	}
+
+	result := Eval(ce.Arguments[0], env)
+	if isError(result) {
+		msg := result.Inspect()
+		if err, ok := result.(*obj.Error); ok {
+			msg = err.Message
+		}
+		return &obj.Array{Elements: []obj.Object{FALSE, &obj.String{Value: msg}}}
+	}
+	return &obj.Array{Elements: []obj.Object{TRUE, result}}
 }
 
 func unwrapReturnValue(object obj.Object) obj.Object {
@@ -658,11 +856,24 @@ func evalIndexExpression(left, index obj.Object) obj.Object {
 	switch {
 	case left.Type() == obj.ARRAY_OBJ && index.Type() == obj.INTEGER_OBJ:
 		return evalArrayIndexExpression(left, index)
+	case left.Type() == obj.MATRIX_OBJ && index.Type() == obj.INTEGER_OBJ:
+		return evalMatrixIndexExpression(left, index)
 	case left.Type() == obj.HASH_OBJ:
 		return evalHashIndexExpression(left, index)
 	default:
 		return newError("index operator not supported: %s", left.Type())
 	}
+}
+
+func evalMatrixIndexExpression(matrix, index obj.Object) obj.Object {
+	matrixObj := matrix.(*obj.Matrix)
+	idx := index.(*obj.Integer).Value
+
+	if idx < 0 || idx >= int64(matrixObj.Rows) {
+		return NULL
+	}
+
+	return &obj.Array{Elements: matrixObj.Data[idx]}
 }
 
 func evalArrayIndexExpression(array, index obj.Object) obj.Object {
@@ -694,11 +905,16 @@ func evalIndexAssignment(idx *ast.IndexExpression, opt string, val obj.Object, e
 			return newError("unusable as hash key: %s", index.Type())
 		}
 
+		hashKey := key.HashKey()
+
 		switch opt {
 		case "=":
-			hash.Pairs[key.HashKey()] = obj.HashPair{Key: index, Value: val}
+			if _, exists := hash.Pairs[hashKey]; !exists {
+				hash.Order = append(hash.Order, hashKey)
+			}
+			hash.Pairs[hashKey] = obj.HashPair{Key: index, Value: val}
 		case "+=", "-=", "*=", "/=":
-			pair, ok := hash.Pairs[key.HashKey()]
+			pair, ok := hash.Pairs[hashKey]
 			if !ok {
 				return newError("key not found: %s", index.Inspect())
 			}
@@ -706,7 +922,7 @@ func evalIndexAssignment(idx *ast.IndexExpression, opt string, val obj.Object, e
 			if isError(result) {
 				return result
 			}
-			hash.Pairs[key.HashKey()] = obj.HashPair{Key: index, Value: result}
+			hash.Pairs[hashKey] = obj.HashPair{Key: index, Value: result}
 			return nil
 		default:
 			return newError("unknown assignment operator: %s", opt)
@@ -749,9 +965,10 @@ func evalIndexAssignment(idx *ast.IndexExpression, opt string, val obj.Object, e
 
 func evalHashLiteral(h *ast.HashLiteral, env *obj.Enviroment) obj.Object {
 	pairs := make(map[obj.HashKey]obj.HashPair)
+	order := make([]obj.HashKey, 0, len(h.Pairs))
 
-	for k, v := range h.Pairs {
-		key := Eval(k, env)
+	for _, p := range h.Pairs {
+		key := Eval(p.Key, env)
 		if isError(key) {
 			return key
 		}
@@ -761,17 +978,20 @@ func evalHashLiteral(h *ast.HashLiteral, env *obj.Enviroment) obj.Object {
 			return newError("hash key must be string, got %s", key.Type())
 		}
 
-		val := Eval(v, env)
+		val := Eval(p.Value, env)
 		if isError(val) {
 			return val
 		}
 
 		hashed := hashKey.HashKey()
 
+		if _, exists := pairs[hashed]; !exists {
+			order = append(order, hashed)
+		}
 		pairs[hashed] = obj.HashPair{Key: key, Value: val}
 	}
 	
-	return &obj.Hash{Pairs: pairs}
+	return &obj.Hash{Pairs: pairs, Order: order}
 }
 
 func evalHashIndexExpression(hash, index obj.Object) obj.Object {

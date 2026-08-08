@@ -31,12 +31,13 @@ Grab the tarball for your OS/architecture from the [Releases page](https://githu
 ## Features
 
 - First-class functions and closures
-- Data types: integers, booleans, strings, arrays, hashes, and `null`
-- `if` / `else if` / `else` control flow
+- Data types: integers, floats, booleans, strings, arrays, hashes, matrices, and `null`
+- `if` / `elseif` / `else` control flow
 - C-style `for` loops, and infinite `loop`
 - `break` and `continue`
+- `try(expr)` for recoverable errors
 - Built-in functions for I/O (`println()`, `printf()`, `input()`, etc.), arrays, and hashes
-- An interactive REPL 
+- An interactive REPL
 
 ## Getting Started
 
@@ -86,7 +87,7 @@ println("Hello, World!")
 let name = "Zod"
 version := 1
 let isAwesome = true
- scores := [10, 20, 30]
+scores := [10, 20, 30]
 let config = {"lang": "Zod", "year": 2026}
 nothing := null
 ```
@@ -158,14 +159,17 @@ More runnable examples live in [`examples/`](examples/).
 | Type      | Example                         |
 | --------- | ------------------------------- |
 | Integer   | `42`, `-7`, `0`                 |
+| Float     | `3.14`, `-0.5`, `20.0`          |
 | Boolean   | `true`, `false`                 |
 | String    | `"Hello, World!"`               |
 | Array     | `[1, 2, 3]`, `[]`               |
 | Hash      | `{"name": "Zod"}`, `{}`         |
+| Matrix    | `matrix(2, 2, [1, 2, 3, 4])`    |
 | Null      | `null`                          |
 
 > [!NOTE]
-> The Hash type is implemented as a Go map, so it's not a true Hashmap and does not preserve order.
+> Hashes preserve insertion order: iterating with `keys()` / `vals()` and printing
+> a hash always follow the order the keys were added.
 
 ### Operators
 
@@ -189,11 +193,12 @@ Index assignment works on arrays and hashes too: `nums[0] = 10`, `user["age"] +=
 
 | Function              | Description                                    |
 | --------------------- | ---------------------------------------------- |
-| `len(x)`              | Length of a string, array, or hash             |
+| `len(x)`              | Length of a string, array, hash, or matrix     |
 | `println(...)`        | Print each argument on its own line            |
 | `printf(fmt, ...)`    | Formatted output (Go-style verbs)              |
 | `input(prompt)`       | Read a line of input from the user             |
 | `int(x)`              | Convert a string/bool to an integer            |
+| `float(x)`            | Convert a string/int to a float                |
 | `string(x)`           | Convert an int/bool to a string                |
 | `type(x)`             | Return the type name of `x`                    |
 | `first(arr)`          | First element of an array                      |
@@ -202,18 +207,66 @@ Index assignment works on arrays and hashes too: `nums[0] = 10`, `user["age"] +=
 | `pop(arr)`            | New array without its last element             |
 | `insert(hash, k, v)`  | New hash with `k: v` added                     |
 | `remove(hash, k)`     | New hash without key `k`                       |
-| `keys(hash)`          | Array of keys in a hash                        |
-| `vals(hash)`          | Array of values in a hash                      |
+| `keys(hash)`          | Array of keys in a hash (insertion order)      |
+| `vals(hash)`          | Array of values in a hash (insertion order)    |
 | `contains(hash, k)`   | Whether a hash contains key `k`                |
-| `random(x)`           | Random integer between 0 and `x`               |
-| `matrix(r, c, data)`  | Create a 2D array with `r` rows and `c` cols   |
+| `random()`            | Random float in `[0, 1)`                       |
+| `random(x)`           | Random integer in `[0, x)`                     |
+| `matrix(r, c, data)`  | Matrix with `r` rows and `c` cols from `data`  |
 | `make(size) / make(size, value)` | Create a new array with `size` elements, and value |
 | `color(color, text)`  | Change the color of `text` to `color`          |
+| `sleep(ms)`           | Pause execution for `ms` milliseconds          |
 | `exp(x)`              | e^x |
 | `pi()`                | π |
 
+### Matrices
+
+`matrix(r, c, data)` builds a `MATRIX` value (a row-major grid of integers or
+floats) from a flat `data` array whose length must equal `r * c`.
+
+```zod
+let a = matrix(2, 3, [1, 2, 3, 4, 5, 6])
+a[0]        // [1, 2, 3]  (first row)
+a[0][1]     // 2
+len(a)      // 2          (number of rows)
+```
+
+Matrices support element-wise `+` and `-` (same dimensions), scalar
+`+ - * /`, and matrix multiplication with `*` (columns of the left must match
+rows of the right). Mismatched dimensions raise an error.
+
+```zod
+let a = matrix(2, 3, [1, 2, 3, 4, 5, 6])
+let b = matrix(2, 3, [1, 1, 1, 1, 1, 1])
+println(a + b)             // [[2, 3, 4], [5, 6, 7]]
+println(a * 2)             // [[2, 4, 6], [8, 10, 12]]
+
+let c = matrix(3, 2, [7, 8, 9, 10, 11, 12])
+println(a * c)             // [[58, 64], [139, 154]]
+```
+
+### Error handling with `try()`
+
+`try(expr)` evaluates `expr` and always returns a two-element array
+`[ok, value]` instead of aborting the program:
+
+- On success it returns `[true, result]`.
+- On failure it returns `[false, "error message"]`.
+
+```zod
+let r = try(int("42"))
+println(r[0])              // true
+println(r[1])              // 42
+
+let r = try(int("abc"))
+if (r[0]) {
+    println("parsed:", r[1])
+} else {
+    println("failed:", r[1])   // failed: could not parse "abc" as integer
+}
+```
+
 > [!NOTE]
-> The `matrix` function is still under development so don't expect to use it in real appliction.
 > The `color` function is still under development so it doesn't have many colors.
 
 ## Acknowledgments

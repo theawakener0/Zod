@@ -27,6 +27,7 @@ const (
 	BUILTIN_OBJ = "BUILTIN"
 	ARRAY_OBJ = "ARRAY"
 	HASH_OBJ = "HASH"
+	MATRIX_OBJ = "MATRIX"
 )
 
 type Object interface {
@@ -226,6 +227,34 @@ func (a *Array) Inspect() string {
 	return out.String()
 }
 
+type Matrix struct {
+	Rows int
+	Cols int
+	Data [][]Object
+}
+
+func (m *Matrix) Type() ObjectType {
+	return MATRIX_OBJ
+}
+func (m *Matrix) Inspect() string {
+	var out bytes.Buffer
+
+	rows := make([]string, 0, m.Rows)
+	for _, row := range m.Data {
+		elements := make([]string, 0, m.Cols)
+		for _, element := range row {
+			elements = append(elements, element.Inspect())
+		}
+		rows = append(rows, "["+strings.Join(elements, ", ")+"]")
+	}
+
+	out.WriteString("[")
+	out.WriteString(strings.Join(rows, ", "))
+	out.WriteString("]")
+
+	return out.String()
+}
+
 type HashPair struct {
 	Key		Object
 	Value	Object
@@ -233,6 +262,7 @@ type HashPair struct {
 
 type Hash struct {
 	Pairs	map[HashKey]HashPair
+	Order	[]HashKey
 }
 
 func (h *Hash) Type() ObjectType {
@@ -242,7 +272,8 @@ func (h *Hash) Inspect() string {
 	var out bytes.Buffer
 
 	pairs := make([]string, 0, len(h.Pairs))
-	for _, pair := range h.Pairs {
+	for _, key := range h.Order {
+		pair := h.Pairs[key]
 		pairs = append(pairs, fmt.Sprintf("%s: %s", pair.Key.Inspect(), pair.Value.Inspect()))
 	}
 

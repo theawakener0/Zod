@@ -171,6 +171,10 @@ func (p *Parser) registerInfix(tokenType tk.TokenType, fn infixParseFn) {
 }
 
 func (p *Parser) parseStatement() ast.Statement {
+	if p.curTokenIs(tk.SEMICOLON) {
+		return nil
+	}
+
 	switch p.curToken.Type {
 	case tk.LET:
 		return p.parseLetStatement()
@@ -351,6 +355,15 @@ func isAssignOp(tok tk.TokenType) bool {
 	}
 }
 
+// skipPeekSemicolons advances over semicolons that were auto-inserted at a
+// line break (their Literal is "\n"). Explicit ";" tokens are never skipped,
+// so statement boundaries in user code are preserved.
+func (p *Parser) skipPeekSemicolons() {
+	for p.peekTokenIs(tk.SEMICOLON) && p.peekToken.Literal == "\n" {
+		p.nextToken()
+	}
+}
+
 func (p *Parser) parseExpression(precedence int) ast.Expression {
 	prefix := p.prefixParseFn[p.curToken.Type]
 	if prefix == nil {
@@ -476,16 +489,19 @@ func (p *Parser) parseIfExpression() ast.Expression {
 	p.nextToken()
 	exp.Condition = p.parseExpression(LOWEST)
 
+	p.skipPeekSemicolons()
 	if !p.expectPeek(tk.RPAREN) {
 		return nil
 	}
 
+	p.skipPeekSemicolons()
 	if !p.expectPeek(tk.LBRACE) {
 		return nil
 	}
 
 	exp.Consequence = p.parseBlockStatement()
 
+	p.skipPeekSemicolons()
 	if p.peekTokenIs(tk.ELSEIF) {
 		p.nextToken()
 
@@ -502,6 +518,7 @@ func (p *Parser) parseIfExpression() ast.Expression {
 				exp.ElseIf = nested
 			}
 		} else {
+			p.skipPeekSemicolons()
 			if !p.expectPeek(tk.LBRACE) {
 				return nil
 			}
@@ -588,6 +605,7 @@ func (p *Parser) parseForExpression() ast.Expression {
 	}
 
 bodyBlock:
+	p.skipPeekSemicolons()
 	if !p.expectPeek(tk.LBRACE) {
 		return nil
 	}
@@ -599,6 +617,7 @@ bodyBlock:
 func (p *Parser) parseLoopExpression() ast.Expression {
 	exp := &ast.LoopExpression{Token: p.curToken}
 
+	p.skipPeekSemicolons()
 	if !p.expectPeek(tk.LBRACE) {
 		return nil
 	}
@@ -617,6 +636,7 @@ func (p *Parser) parseFunctionLiteral() ast.Expression {
 
 	fl.Parameters = p.parseFunctionParameters()
 
+	p.skipPeekSemicolons()
 	if !p.expectPeek(tk.LBRACE) {
 		return nil
 	}
@@ -647,6 +667,7 @@ func (p *Parser) parseFunctionParameters() []*ast.Identifier {
 		identifiers = append(identifiers, nextIdent)
 	}
 
+	p.skipPeekSemicolons()
 	if !p.expectPeek(tk.RPAREN) {
 		return nil
 	}
@@ -679,6 +700,7 @@ func (p *Parser) parseCallArguments() []ast.Expression {
 		arguments = append(arguments, nextArg)
 	}
 
+	p.skipPeekSemicolons()
 	if !p.expectPeek(tk.RPAREN) {
 		return nil
 	}
@@ -716,6 +738,7 @@ func (p *Parser) parseExpressionList(endTok tk.TokenType) []ast.Expression {
 		elements = append(elements, nextArg)
 	}
 
+	p.skipPeekSemicolons()
 	if !p.expectPeek(endTok) {
 		return nil
 	}
@@ -729,6 +752,7 @@ func (p *Parser) parseIndexExpression(left ast.Expression) ast.Expression {
 	p.nextToken()
 	exp.Index = p.parseExpression(LOWEST)
 
+	p.skipPeekSemicolons()
 	if !p.expectPeek(tk.RBRACKET) {
 		return nil
 	}
@@ -738,8 +762,9 @@ func (p *Parser) parseIndexExpression(left ast.Expression) ast.Expression {
 
 func (p *Parser) parseHashLiteral() ast.Expression {
 	hash := &ast.HashLiteral{Token: p.curToken}
-	hash.Pairs = make(map[ast.Expression]ast.Expression)
+	hash.Pairs = []ast.HashLiteralPair{}
 
+	p.skipPeekSemicolons()
 	for !p.peekTokenIs(tk.RBRACE) {
 		p.nextToken()
 		key := p.parseExpression(LOWEST)
@@ -751,8 +776,9 @@ func (p *Parser) parseHashLiteral() ast.Expression {
 		p.nextToken()
 		value := p.parseExpression(LOWEST)
 
-		hash.Pairs[key] = value
+		hash.Pairs = append(hash.Pairs, ast.HashLiteralPair{Key: key, Value: value})
 
+		p.skipPeekSemicolons()
 		if !p.peekTokenIs(tk.RBRACE) && !p.expectPeek(tk.COMMA) {
 			return nil
 		}

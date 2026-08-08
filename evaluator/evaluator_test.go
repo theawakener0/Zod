@@ -428,6 +428,85 @@ func TestClosures(t *testing.T) {
 	testIntegerObject(t, testEval(input), 4)
 }
 
+func TestClosureMutation(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int64
+	}{
+		{"let counter = 0; let bump = fn() { counter = counter + 1 }; bump(); bump(); counter;", 2},
+		{"let counter = 0; let bump = fn() { counter += 2 }; bump(); bump(); counter;", 4},
+		{"let counter = 0; let bump = fn() { counter++ }; bump(); bump(); counter;", 2},
+		{"let counter = 0; let bump = fn() { ++counter }; bump(); bump(); bump(); counter;", 3},
+		{"let total = 0; let add = fn(n) { total = total + n }; add(3); add(4); total;", 7},
+		{"let x = 1; let f = fn() { x = x * 10 }; f(); f(); x;", 100},
+	}
+
+	for _, tt := range tests {
+		eval := testEval(tt.input)
+		testIntegerObject(t, eval, tt.expected)
+	}
+}
+
+func TestNestedLoopVariableIsolation(t *testing.T) {
+	input := `
+	let seen = ""
+	for (i := 0; i < 3; i++) {
+		for (i := 0; i < 3; i++) {
+			seen = seen + "i"
+		}
+	}
+	seen`
+	eval := testEval(input)
+	str, ok := eval.(*obj.String)
+	if !ok {
+		t.Fatalf("object is not String. got=%T (%+v)", eval, eval)
+	}
+	if str.Value != "iiiiiiiii" {
+		t.Errorf("inner loop should run 3x per outer iteration. got=%q", str.Value)
+	}
+}
+
+func TestLoopVariableDoesNotLeak(t *testing.T) {
+	input := `
+	let x = 0
+	for (i := 0; i < 3; i++) { x = x + 1 }
+	if (i == 3) { x = 100 }
+	x`
+	eval := testEval(input)
+	err, ok := eval.(*obj.Error)
+	if !ok {
+		t.Fatalf("expected error for leaked loop var access, got %T (%+v)", eval, eval)
+	}
+	if err.Message != "identifier not found: i" {
+		t.Errorf("wrong error message. got=%q", err.Message)
+	}
+}
+
+func TestBlockScoping(t *testing.T) {
+	input := `
+	let x = 1
+	if (true) {
+		let x = 99
+		x = x + 1
+	}
+	x`
+	testIntegerObject(t, testEval(input), 1)
+
+	input = `
+	if (true) {
+		let hidden = 42
+	}
+	hidden`
+	eval := testEval(input)
+	err, ok := eval.(*obj.Error)
+	if !ok {
+		t.Fatalf("expected error for block-scoped let, got %T (%+v)", eval, eval)
+	}
+	if err.Message != "identifier not found: hidden" {
+		t.Errorf("wrong error message. got=%q", err.Message)
+	}
+}
+
 func TestStringLiteral(t *testing.T) {
 	input := `"Hello, World!"`
 
@@ -497,7 +576,7 @@ func TestForExpression(t *testing.T) {
 		{"let x = 0; for (let i = 0; i < 5; i++) { x = x + i; }; x;", 10},
 		{"let x = 0; for (i := 0; i < 5; i++) { x = x + 1; }; x;", 5},
 		{"let x = 0; for (x = 0; x < 5; x += 1) { }; x;", 5},
-		{"let x = 0; for (x := 0; x < 3; x++) { }; x;", 3},
+		{"let x = 0; for (x := 0; x < 3; x++) { }; x;", 0},
 	}
 
 	for _, tt := range tests {
@@ -1034,6 +1113,258 @@ func TestHashKeysValues(t *testing.T) {
 		if !seenVals[v] {
 			t.Errorf("vals() missing value %d", v)
 		}
+	}
+}
+
+func TestTryExpression(t *testing.T) {
+	tests := []struct {
+		input        string
+		expectedOk   bool
+		expectedType obj.ObjectType
+		expectedVal  interface{}
+	}{
+		{"try(1 + 2)", true, obj.INTEGER_OBJ, int64(3)},
+		{"try([1, 2, 3])", true, obj.ARRAY_OBJ, nil},
+		{"try(\"hi\")", true, obj.STRING_OBJ, "hi"},
+		{"try(int(\"abc\"))", false, obj.STRING_OBJ, "could not parse \"abc\" as integer"},
+		{"try(10 / 0)", false, obj.STRING_OBJ, "division by zero"},
+		{"try(len(5))", false, obj.STRING_OBJ, "argument to `len` not supported. got=INTEGER"},
+	}
+
+	for _, tt := range tests {
+		eval := testEval(tt.input)
+		arr, ok := eval.(*obj.Array)
+		if !ok {
+			t.Fatalf("try did not return Array. input=%q got=%T (%+v)", tt.input, eval, eval)
+		}
+		if len(arr.Elements) != 2 {
+			t.Fatalf("try array has wrong length. input=%q got=%d", tt.input, len(arr.Elements))
+		}
+
+		okFlag, ok := arr.Elements[0].(*obj.Boolean)
+		if !ok {
+			t.Fatalf("try ok flag not Boolean. input=%q got=%T", tt.input, arr.Elements[0])
+		}
+		if okFlag.Value != tt.expectedOk {
+			t.Errorf("try ok flag wrong. input=%q expected=%v got=%v", tt.input, tt.expectedOk, okFlag.Value)
+		}
+
+		val := arr.Elements[1]
+		if val.Type() != tt.expectedType {
+			t.Errorf("try result type wrong. input=%q expected=%s got=%s", tt.input, tt.expectedType, val.Type())
+		}
+		switch tt.expectedType {
+		case obj.INTEGER_OBJ:
+			if val.(*obj.Integer).Value != tt.expectedVal {
+				t.Errorf("try result value wrong. input=%q got=%d", tt.input, val.(*obj.Integer).Value)
+			}
+		case obj.STRING_OBJ:
+			if val.(*obj.String).Value != tt.expectedVal {
+				t.Errorf("try result value wrong. input=%q got=%q", tt.input, val.(*obj.String).Value)
+			}
+		}
+	}
+}
+
+func TestTryProgramDoesNotAbort(t *testing.T) {
+	input := `
+	let out = ""
+	let r = try(int("abc"))
+	if (r[0]) {
+		out = "parsed"
+	} else {
+		out = "failed: " + r[1]
+	}
+	out`
+	eval := testEval(input)
+	str, ok := eval.(*obj.String)
+	if !ok {
+		t.Fatalf("object is not String. got=%T (%+v)", eval, eval)
+	}
+	if str.Value != `failed: could not parse "abc" as integer` {
+		t.Errorf("wrong result. got=%q", str.Value)
+	}
+}
+
+func TestTryWrongArgCount(t *testing.T) {
+	eval := testEval(`try()`)
+	err, ok := eval.(*obj.Error)
+	if !ok {
+		t.Fatalf("expected Error for try(), got %T (%+v)", eval, eval)
+	}
+	if err.Message != "wrong number of arguments. got=0, want=1" {
+		t.Errorf("wrong error message. got=%q", err.Message)
+	}
+}
+
+func TestMatrixCreation(t *testing.T) {
+	eval := testEval(`matrix(2, 3, [1, 2, 3, 4, 5, 6])`)
+	m, ok := eval.(*obj.Matrix)
+	if !ok {
+		t.Fatalf("matrix did not return Matrix. got=%T (%+v)", eval, eval)
+	}
+	if m.Rows != 2 || m.Cols != 3 {
+		t.Fatalf("matrix dimensions wrong. got=%dx%d", m.Rows, m.Cols)
+	}
+	if m.Inspect() != "[[1, 2, 3], [4, 5, 6]]" {
+		t.Errorf("matrix Inspect wrong. got=%s", m.Inspect())
+	}
+}
+
+func TestMatrixFloatDimensions(t *testing.T) {
+	eval := testEval(`matrix(2.0, 2.0, [1, 2, 3, 4])`)
+	m, ok := eval.(*obj.Matrix)
+	if !ok {
+		t.Fatalf("matrix did not return Matrix. got=%T (%+v)", eval, eval)
+	}
+	if m.Rows != 2 || m.Cols != 2 {
+		t.Fatalf("matrix dimensions wrong. got=%dx%d", m.Rows, m.Cols)
+	}
+}
+
+func TestMatrixErrors(t *testing.T) {
+	tests := []struct {
+		input   string
+		message string
+	}{
+		{`matrix(2, 3, [1, 2, 3])`, "array length does not match matrix dimensions. got=3, want=6"},
+		{`matrix(0, 3, [])`, "matrix dimensions must be positive. got=0, 3"},
+		{`matrix(2, 2, ["a", "b", "c", "d"])`, "matrix elements must be integers or floats. got=STRING"},
+		{`matrix(2, 2, [1, 2, 3, 4]) + matrix(3, 3, [1, 1, 1, 1, 1, 1, 1, 1, 1])`, "matrix dimension mismatch for +: 2x2 vs 3x3"},
+		{`matrix(2, 2, [1, 2, 3, 4]) * matrix(3, 3, [1, 1, 1, 1, 1, 1, 1, 1, 1])`, "matrix dimension mismatch for multiplication: 2x2 vs 3x3"},
+	}
+
+	for _, tt := range tests {
+		eval := testEval(tt.input)
+		err, ok := eval.(*obj.Error)
+		if !ok {
+			t.Fatalf("expected Error for %q, got %T (%+v)", tt.input, eval, eval)
+		}
+		if err.Message != tt.message {
+			t.Errorf("wrong error message for %q. expected=%q got=%q", tt.input, tt.message, err.Message)
+		}
+	}
+}
+
+func TestMatrixArithmetic(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{`matrix(2, 2, [1, 2, 3, 4]) + matrix(2, 2, [1, 1, 1, 1])`, "[[2, 3], [4, 5]]"},
+		{`matrix(2, 2, [1, 2, 3, 4]) - matrix(2, 2, [1, 1, 1, 1])`, "[[0, 1], [2, 3]]"},
+		{`matrix(2, 2, [1, 2, 3, 4]) * 2`, "[[2, 4], [6, 8]]"},
+		{`10 - matrix(2, 2, [1, 2, 3, 4])`, "[[9, 8], [7, 6]]"},
+		{`matrix(2, 3, [1, 2, 3, 4, 5, 6]) * matrix(3, 2, [7, 8, 9, 10, 11, 12])`, "[[58, 64], [139, 154]]"},
+		{`matrix(2, 2, [1.5, 2, 3, 4]) + 1`, "[[2.5, 3.0], [4.0, 5.0]]"},
+	}
+
+	for _, tt := range tests {
+		eval := testEval(tt.input)
+		m, ok := eval.(*obj.Matrix)
+		if !ok {
+			t.Fatalf("expected Matrix for %q, got %T (%+v)", tt.input, eval, eval)
+		}
+		if m.Inspect() != tt.expected {
+			t.Errorf("wrong matrix result for %q. expected=%s got=%s", tt.input, tt.expected, m.Inspect())
+		}
+	}
+}
+
+func TestMatrixIndexAndLen(t *testing.T) {
+	eval := testEval(`let m = matrix(2, 3, [1, 2, 3, 4, 5, 6]); m[0][1]`)
+	testIntegerObject(t, eval, 2)
+
+	eval = testEval(`len(matrix(2, 3, [1, 2, 3, 4, 5, 6]))`)
+	testIntegerObject(t, eval, 2)
+
+	eval = testEval(`type(matrix(2, 2, [1, 2, 3, 4]))`)
+	str, ok := eval.(*obj.String)
+	if !ok {
+		t.Fatalf("type(matrix) not String. got=%T (%+v)", eval, eval)
+	}
+	if str.Value != "MATRIX" {
+		t.Errorf("type(matrix) wrong. got=%q", str.Value)
+	}
+
+	eval = testEval(`let m = matrix(2, 2, [1, 2, 3, 4]); m[5]`)
+	testNullObject(t, eval)
+}
+
+func TestHashPreservesOrder(t *testing.T) {
+	eval := testEval(`{"b": 2, "a": 1, "c": 3}`)
+	h, ok := eval.(*obj.Hash)
+	if !ok {
+		t.Fatalf("object is not Hash. got=%T (%+v)", eval, eval)
+	}
+	if h.Inspect() != "{b: 2, a: 1, c: 3}" {
+		t.Errorf("hash order wrong. got=%s", h.Inspect())
+	}
+
+	keysEval := testEval(`keys({"b": 2, "a": 1, "c": 3})`)
+	keys, ok := keysEval.(*obj.Array)
+	if !ok {
+		t.Fatalf("keys() not Array. got=%T (%+v)", keysEval, keysEval)
+	}
+	got := []string{}
+	for _, el := range keys.Elements {
+		got = append(got, el.(*obj.String).Value)
+	}
+	expected := []string{"b", "a", "c"}
+	for i := range expected {
+		if got[i] != expected[i] {
+			t.Fatalf("keys order wrong. got=%v", got)
+		}
+	}
+
+	valsEval := testEval(`vals({"b": 2, "a": 1, "c": 3})`)
+	vals, ok := valsEval.(*obj.Array)
+	if !ok {
+		t.Fatalf("vals() not Array. got=%T (%+v)", valsEval, valsEval)
+	}
+	gotVals := []int64{}
+	for _, el := range vals.Elements {
+		gotVals = append(gotVals, el.(*obj.Integer).Value)
+	}
+	for i, v := range []int64{2, 1, 3} {
+		if gotVals[i] != v {
+			t.Fatalf("vals order wrong. got=%v", gotVals)
+		}
+	}
+}
+
+func TestHashInsertRemovePreserveOrder(t *testing.T) {
+	eval := testEval(`insert({"b": 2, "a": 1}, "c", 3)`)
+	h, ok := eval.(*obj.Hash)
+	if !ok {
+		t.Fatalf("insert() not Hash. got=%T (%+v)", eval, eval)
+	}
+	if h.Inspect() != "{b: 2, a: 1, c: 3}" {
+		t.Errorf("insert order wrong. got=%s", h.Inspect())
+	}
+
+	eval = testEval(`remove({"b": 2, "a": 1, "c": 3}, "a")`)
+	h, ok = eval.(*obj.Hash)
+	if !ok {
+		t.Fatalf("remove() not Hash. got=%T (%+v)", eval, eval)
+	}
+	if h.Inspect() != "{b: 2, c: 3}" {
+		t.Errorf("remove order wrong. got=%s", h.Inspect())
+	}
+}
+
+func TestHashIndexAssignmentPreservesOrder(t *testing.T) {
+	eval := testEval(`
+	let h = {"x": 1}
+	h["y"] = 2
+	h["z"] = 3
+	h`)
+	h, ok := eval.(*obj.Hash)
+	if !ok {
+		t.Fatalf("object is not Hash. got=%T (%+v)", eval, eval)
+	}
+	if h.Inspect() != "{x: 1, y: 2, z: 3}" {
+		t.Errorf("index assignment order wrong. got=%s", h.Inspect())
 	}
 }
 

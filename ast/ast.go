@@ -489,9 +489,14 @@ func (ie *IndexExpression) String() string {
 	return out.String()
 }
 
+type HashLiteralPair struct {
+	Key		Expression
+	Value	Expression
+}
+
 type HashLiteral struct {
 	Token	tk.Token
-	Pairs	map[Expression]Expression
+	Pairs	[]HashLiteralPair
 }
 
 func (hl *HashLiteral) expressionNode() {}
@@ -502,8 +507,8 @@ func (hl *HashLiteral) String() string {
 	var out bytes.Buffer
 
 	pairs := make([]string, 0, len(hl.Pairs))
-	for k, v := range hl.Pairs {
-		pairs = append(pairs, fmt.Sprintf("%s : %s", k, v))
+	for _, p := range hl.Pairs {
+		pairs = append(pairs, fmt.Sprintf("%s : %s", p.Key, p.Value))
 	}
 
 	out.WriteString("{")

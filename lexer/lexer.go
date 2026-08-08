@@ -11,6 +11,7 @@ type Lexer struct {
 	position		int
 	readPosition	int
 	ch 				byte
+	lastToken		tk.TokenType
 }
 
 func New(input string) *Lexer {
@@ -43,27 +44,16 @@ func newToken(tokenType tk.TokenType, ch byte) tk.Token {
 }
 
 func (l *Lexer) NextToken() tk.Token {
+	tok := l.nextToken()
+	l.lastToken = tok.Type
+	return tok
+}
+
+func (l *Lexer) nextToken() tk.Token {
 	var tok tk.Token
 
-	l.skipWhitespace()
-
-	for l.ch == '/' && (l.peekChar() == '/' || l.peekChar() == '*') {
-		if l.peekChar() == '/' {
-			for l.ch != '\n' && l.ch != 0 {
-				l.readChar()
-			}
-		} else {
-			l.readChar()
-			l.readChar()
-			for l.ch != 0 && !(l.ch == '*' && l.peekChar() == '/') {
-				l.readChar()
-			}
-			if l.ch == '*' {
-				l.readChar()
-				l.readChar()
-			}
-		}
-		l.skipWhitespace()
+	if l.skipWhitespaceAndComments() && lastTokenCanEndStatement(l.lastToken) {
+		return tk.Token{Type: tk.SEMICOLON, Literal: "\n"}
 	}
 
 	switch l.ch {
@@ -252,9 +242,59 @@ func (l *Lexer) readDotNumber() string {
 	return l.input[position:l.position]
 }
 
-func (l *Lexer) skipWhitespace() {
+func (l *Lexer) skipWhitespace() bool {
+	crossedNewline := false
 	for l.ch == ' ' || l.ch == '\t' || l.ch == '\n' || l.ch == '\r' {
+		if l.ch == '\n' {
+			crossedNewline = true
+		}
 		l.readChar()
+	}
+	return crossedNewline
+}
+
+func (l *Lexer) skipWhitespaceAndComments() bool {
+	crossedNewline := false
+
+	for {
+		if l.skipWhitespace() {
+			crossedNewline = true
+		}
+
+		if !(l.ch == '/' && (l.peekChar() == '/' || l.peekChar() == '*')) {
+			break
+		}
+
+		if l.peekChar() == '/' {
+			for l.ch != '\n' && l.ch != 0 {
+				l.readChar()
+			}
+		} else {
+			l.readChar()
+			l.readChar()
+			for l.ch != 0 && !(l.ch == '*' && l.peekChar() == '/') {
+				l.readChar()
+			}
+			if l.ch == '*' {
+				l.readChar()
+				l.readChar()
+			}
+		}
+	}
+
+	return crossedNewline
+}
+
+func lastTokenCanEndStatement(t tk.TokenType) bool {
+	switch t {
+	case tk.IDENT, tk.INT, tk.FLOAT, tk.STRING,
+		tk.TRUE, tk.FALSE, tk.NULL,
+		tk.RPAREN, tk.RBRACKET, tk.RBRACE,
+		tk.INC, tk.DEC,
+		tk.RETURN, tk.BREAK, tk.CONTINUE:
+		return true
+	default:
+		return false
 	}
 }
 

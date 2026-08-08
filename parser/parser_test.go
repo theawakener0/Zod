@@ -1080,21 +1080,26 @@ func TestParsingHashLiteralsStringKeys(t *testing.T) {
 		t.Fatalf("hash.Pairs don't contain %d pairs. got=%d\n", 3, len(hash.Pairs))
 	}
 
-	expected := map[string]int64{
-		"one":   1,
-		"two":   2,
-		"three": 3,
+	expected := []struct {
+		key   string
+		value int64
+	}{
+		{"one", 1},
+		{"two", 2},
+		{"three", 3},
 	}
-	
-	for k, v := range hash.Pairs {
-		literal, ok := k.(*ast.StringLiteral)
+
+	for i, pair := range hash.Pairs {
+		literal, ok := pair.Key.(*ast.StringLiteral)
 		if !ok {
-			t.Fatalf("k is not ast.StringLiteral. got=%T", k)
+			t.Fatalf("pair.Key is not ast.StringLiteral. got=%T", pair.Key)
 		}
 
-		expectedValue := expected[literal.Value]
+		if literal.Value != expected[i].key {
+			t.Errorf("hash key order wrong at %d. expected=%q, got=%q", i, expected[i].key, literal.Value)
+		}
 
-		testIntegerLiteral(t, v, expectedValue)
+		testIntegerLiteral(t, pair.Value, expected[i].value)
 	}
 }
 
@@ -1135,31 +1140,33 @@ func TestParsingHashLiteralsWithExpressionKeys(t *testing.T) {
 		t.Errorf("hash.Pairs don't contain %d pairs. got=%d\n", 3, len(hash.Pairs))
 	}
 
-	tests := map[string]func(ast.Expression) {
-		"one": func(e ast.Expression) {
+	tests := []struct {
+		key  string
+		test func(ast.Expression)
+	}{
+		{"one", func(e ast.Expression) {
 			testInfixExpression(t, e, 0, "+", 1)
-		},
-		"two": func(e ast.Expression) {
+		}},
+		{"two", func(e ast.Expression) {
 			testInfixExpression(t, e, 10, "-", 8)
-		},
-		"three": func(e ast.Expression) {
+		}},
+		{"three", func(e ast.Expression) {
 			testInfixExpression(t, e, 15, "/", 5)
-		},
+		}},
 	}
-	
-	for k, v := range hash.Pairs {
-		literal, ok := k.(*ast.StringLiteral)
+
+	for i, pair := range hash.Pairs {
+		literal, ok := pair.Key.(*ast.StringLiteral)
 		if !ok {
-			t.Fatalf("k is not ast.StringLiteral. got=%T", k)
+			t.Fatalf("pair.Key is not ast.StringLiteral. got=%T", pair.Key)
 		}
 
-		testFunc, ok := tests[literal.String()]
-		if !ok {
-			t.Errorf("no test for key %q", literal.Value)
+		if literal.Value != tests[i].key {
+			t.Errorf("hash key order wrong at %d. expected=%q, got=%q", i, tests[i].key, literal.Value)
 			continue
 		}
-		
-		testFunc(v)
+
+		tests[i].test(pair.Value)
 	}
 }
 

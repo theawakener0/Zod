@@ -76,6 +76,7 @@ func TestNextToken(t *testing.T) {
 		{tk.INT, "1"},
 		{tk.SEMICOLON, ";"},
 		{tk.RBRACE, "}"},
+		{tk.SEMICOLON, "\n"},
 		{tk.IF, "if"},
 		{tk.LPAREN, "("},
 		{tk.IDENT, "five"},
@@ -96,6 +97,7 @@ func TestNextToken(t *testing.T) {
 		{tk.INT, "1"},
 		{tk.SEMICOLON, ";"},
 		{tk.RBRACE, "}"},
+		{tk.SEMICOLON, "\n"},
 		{tk.RBRACE, "}"},
 		{tk.ELSE, "else"},
 		{tk.LBRACE, "{"},
@@ -111,6 +113,7 @@ func TestNextToken(t *testing.T) {
 		{tk.INT, "2"},
 		{tk.SEMICOLON, ";"},
 		{tk.RBRACE, "}"},
+		{tk.SEMICOLON, "\n"},
 		{tk.LET, "let"},
 		{tk.IDENT, "result"},
 		{tk.ASSIGN, "="},
@@ -122,7 +125,9 @@ func TestNextToken(t *testing.T) {
 		{tk.RPAREN, ")"},
 		{tk.SEMICOLON, ";"},
 		{tk.STRING, "foobar"},
+		{tk.SEMICOLON, "\n"},
 		{tk.STRING, "foo bar"},
+		{tk.SEMICOLON, "\n"},
 		{tk.LBRACKET, "["},
 		{tk.INT, "1"},
 		{tk.COMMA, ","},
@@ -134,7 +139,9 @@ func TestNextToken(t *testing.T) {
 		{tk.COLOMN, ":"},
 		{tk.STRING, "bar"},
 		{tk.RBRACE, "}"},
+		{tk.SEMICOLON, "\n"},
 		{tk.FLOAT, "20.0"},
+		{tk.SEMICOLON, "\n"},
 		{tk.EOF, ""},
 	}
 
@@ -298,7 +305,160 @@ func TestNewKeywords(t *testing.T) {
 	}
 }
 
-func TestElseIfKeywords(t *testing.T) {	input := "if (x) { } else if (y) { } elseif (z) { }"
+func TestNewlineSemicolonInsertion(t *testing.T) {
+	input := `let a = 5
+let b = 6
+println(a)
+x := 1 +
+	2
+y := [1,
+	2]
+if (a > 5)
+{
+	z := "s" + "t"
+}
+`
+
+	tests := []tk.Token{
+		{tk.LET, "let"},
+		{tk.IDENT, "a"},
+		{tk.ASSIGN, "="},
+		{tk.INT, "5"},
+		{tk.SEMICOLON, "\n"},
+		{tk.LET, "let"},
+		{tk.IDENT, "b"},
+		{tk.ASSIGN, "="},
+		{tk.INT, "6"},
+		{tk.SEMICOLON, "\n"},
+		{tk.IDENT, "println"},
+		{tk.LPAREN, "("},
+		{tk.IDENT, "a"},
+		{tk.RPAREN, ")"},
+		{tk.SEMICOLON, "\n"},
+		{tk.IDENT, "x"},
+		{tk.ASSIGNCHAR, ":="},
+		{tk.INT, "1"},
+		{tk.PLUS, "+"},
+		{tk.INT, "2"},
+		{tk.SEMICOLON, "\n"},
+		{tk.IDENT, "y"},
+		{tk.ASSIGNCHAR, ":="},
+		{tk.LBRACKET, "["},
+		{tk.INT, "1"},
+		{tk.COMMA, ","},
+		{tk.INT, "2"},
+		{tk.RBRACKET, "]"},
+		{tk.SEMICOLON, "\n"},
+		{tk.IF, "if"},
+		{tk.LPAREN, "("},
+		{tk.IDENT, "a"},
+		{tk.GT, ">"},
+		{tk.INT, "5"},
+		{tk.RPAREN, ")"},
+		{tk.SEMICOLON, "\n"},
+		{tk.LBRACE, "{"},
+		{tk.IDENT, "z"},
+		{tk.ASSIGNCHAR, ":="},
+		{tk.STRING, "s"},
+		{tk.PLUS, "+"},
+		{tk.STRING, "t"},
+		{tk.SEMICOLON, "\n"},
+		{tk.RBRACE, "}"},
+		{tk.SEMICOLON, "\n"},
+		{tk.EOF, ""},
+	}
+
+	l := New(input)
+
+	for i, tt := range tests {
+		tok := l.NextToken()
+
+		if tok.Type != tt.Type {
+			t.Fatalf("test[%d] - tokentype wrong. expected=%q, got=%q", i, tt.Type, tok.Type)
+		}
+
+		if tok.Literal != tt.Literal {
+			t.Fatalf("test[%d] - literal wrong. expected=%q, got=%q", i, tt.Literal, tok.Literal)
+		}
+	}
+}
+
+func TestNoSemicolonAfterOperator(t *testing.T) {
+	input := `x := 1 +
+2
+y := 3
+a :=
+4
+`
+
+	tests := []tk.Token{
+		{tk.IDENT, "x"},
+		{tk.ASSIGNCHAR, ":="},
+		{tk.INT, "1"},
+		{tk.PLUS, "+"},
+		{tk.INT, "2"},
+		{tk.SEMICOLON, "\n"},
+		{tk.IDENT, "y"},
+		{tk.ASSIGNCHAR, ":="},
+		{tk.INT, "3"},
+		{tk.SEMICOLON, "\n"},
+		{tk.IDENT, "a"},
+		{tk.ASSIGNCHAR, ":="},
+		{tk.INT, "4"},
+		{tk.SEMICOLON, "\n"},
+		{tk.EOF, ""},
+	}
+
+	l := New(input)
+
+	for i, tt := range tests {
+		tok := l.NextToken()
+
+		if tok.Type != tt.Type {
+			t.Fatalf("test[%d] - tokentype wrong. expected=%q, got=%q", i, tt.Type, tok.Type)
+		}
+
+		if tok.Literal != tt.Literal {
+			t.Fatalf("test[%d] - literal wrong. expected=%q, got=%q", i, tt.Literal, tok.Literal)
+		}
+	}
+}
+
+func TestNoDoubleSemicolonOnBlankLines(t *testing.T) {
+	input := `x := 1
+
+y := 2
+`
+
+	tests := []tk.Token{
+		{tk.IDENT, "x"},
+		{tk.ASSIGNCHAR, ":="},
+		{tk.INT, "1"},
+		{tk.SEMICOLON, "\n"},
+		{tk.IDENT, "y"},
+		{tk.ASSIGNCHAR, ":="},
+		{tk.INT, "2"},
+		{tk.SEMICOLON, "\n"},
+		{tk.EOF, ""},
+	}
+
+	l := New(input)
+
+	for i, tt := range tests {
+		tok := l.NextToken()
+
+		if tok.Type != tt.Type {
+			t.Fatalf("test[%d] - tokentype wrong. expected=%q, got=%q", i, tt.Type, tok.Type)
+		}
+
+		if tok.Literal != tt.Literal {
+			t.Fatalf("test[%d] - literal wrong. expected=%q, got=%q", i, tt.Literal, tok.Literal)
+		}
+	}
+}
+
+func TestElseIfKeywords(t *testing.T) {
+	input := "if (x) { } else if (y) { } elseif (z) { }"
 
 	tests := []tk.Token{
 		{tk.IF, "if"},

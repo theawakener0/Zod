@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 	"math"
 	"math/rand"
 
@@ -24,6 +25,8 @@ var builtins = map[string]*obj.Builtin{
 				return &obj.Integer{Value: int64(len(arg.Value))}
 			case *obj.Array:
 				return &obj.Integer{Value: int64(len(arg.Elements))}
+			case *obj.Matrix:
+				return &obj.Integer{Value: int64(arg.Rows)}
 			case *obj.Hash:
 				return &obj.Integer{Value: int64(len(arg.Pairs))}
 			default:
@@ -71,7 +74,7 @@ var builtins = map[string]*obj.Builtin{
 				fmt.Print(args[0].Inspect())
 			}
 
-			reader := bufio.NewReader(os.Stdin)
+			reader := getStdinReader()
 			text, _ := reader.ReadString('\n')
 			text = strings.TrimSpace(text)
 
@@ -253,12 +256,19 @@ var builtins = map[string]*obj.Builtin{
 			}
 
 			newPairs := make(map[obj.HashKey]obj.HashPair, len(hash.Pairs)+1)
+			newOrder := make([]obj.HashKey, 0, len(hash.Order)+1)
 			for k, v := range hash.Pairs {
 				newPairs[k] = v
 			}
-			newPairs[key.HashKey()] = obj.HashPair{Key: args[1], Value: args[2]}
+			newOrder = append(newOrder, hash.Order...)
 
-			return &obj.Hash{Pairs: newPairs}
+			hashKey := key.HashKey()
+			if _, exists := newPairs[hashKey]; !exists {
+				newOrder = append(newOrder, hashKey)
+			}
+			newPairs[hashKey] = obj.HashPair{Key: args[1], Value: args[2]}
+
+			return &obj.Hash{Pairs: newPairs, Order: newOrder}
 		},
 	},
 	"remove": {
@@ -278,12 +288,20 @@ var builtins = map[string]*obj.Builtin{
 			}
 
 			newPairs := make(map[obj.HashKey]obj.HashPair, len(hash.Pairs))
+			newOrder := make([]obj.HashKey, 0, len(hash.Order))
 			for k, v := range hash.Pairs {
 				newPairs[k] = v
 			}
-			delete(newPairs, key.HashKey())
 
-			return &obj.Hash{Pairs: newPairs}
+			hashKey := key.HashKey()
+			delete(newPairs, hashKey)
+			for _, k := range hash.Order {
+				if k != hashKey {
+					newOrder = append(newOrder, k)
+				}
+			}
+
+			return &obj.Hash{Pairs: newPairs, Order: newOrder}
 		},
 	},
 	"keys": {
@@ -298,7 +316,8 @@ var builtins = map[string]*obj.Builtin{
 			}
 
 			keys := make([]obj.Object, 0, len(hash.Pairs))
-			for _, pair := range hash.Pairs {
+			for _, k := range hash.Order {
+				pair := hash.Pairs[k]
 				keys = append(keys, pair.Key)
 			}
 
@@ -317,7 +336,8 @@ var builtins = map[string]*obj.Builtin{
 			}
 
 			values := make([]obj.Object, 0, len(hash.Pairs))
-			for _, pair := range hash.Pairs {
+			for _, k := range hash.Order {
+				pair := hash.Pairs[k]
 				values = append(values, pair.Value)
 			}
 
@@ -348,13 +368,24 @@ var builtins = map[string]*obj.Builtin{
 	},
 	"random": {
 		Fn: func(args ...obj.Object) obj.Object {
-			if len(args) != 1 {
+			if len(args) == 0 {
 				return &obj.Float{Value: rand.Float64()}
+			}
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=0 or 1", len(args))
 			}
 
 			switch arg := args[0].(type) {
 			case *obj.Integer:
+				if arg.Value <= 0 {
+					return newError("argument to `random` must be positive. got=%d", arg.Value)
+				}
 				return &obj.Integer{Value: rand.Int63n(arg.Value)}
+			case *obj.Float:
+				if arg.Value <= 0 {
+					return newError("argument to `random` must be positive. got=%f", arg.Value)
+				}
+				return &obj.Float{Value: rand.Float64() * arg.Value}
 			default:
 				return newError("argument to `random` not supported. got=%s", args[0].Type())
 			}
@@ -365,53 +396,15 @@ var builtins = map[string]*obj.Builtin{
 			if len(args) != 3 {
 				return newError("wrong number of arguments. got=%d, want=3", len(args))
 			}
-		
-			if args[0].Type() != "INTEGER" && args[1].Type() != "INTEGER" {
-				
-				rows, ok := args[0].(*obj.Float)
-				if !ok {
-					return newError("first argument to `matrix` not an integer or float. got=%s", args[0].Type())
-				}
 
-				cols, ok := args[1].(*obj.Float)
-				if !ok {
-					return newError("second argument to `matrix` not an integer or float. got=%s", args[1].Type())
-				}
-
-				val, ok := args[2].(*obj.Array)
-				if !ok {
-					return newError("third argument to `matrix` not an array. got=%s", args[2].Type())
-				}
-
-				r, c := int(rows.Value), int(cols.Value)
-				if rows.Value < 1 || cols.Value < 1 {
-					return newError("matrix dimensions must be positive. got=%f, %f", rows.Value, cols.Value)
-				}
-
-				if len(val.Elements) != r*c {
-					return newError("array length does not match matrix dimensions. got=%d, want=%d", len(val.Elements), r*c)
-				}
-
-				matrix := make([]obj.Object, int(rows.Value))
-				for i := range r {
-					row := make([]obj.Object, c)
-					for j := range c {
-						row[j] = val.Elements[i*c+j]
-					}
-					matrix[i] = &obj.Array{Elements: row}
-				}
-				
-				return &obj.Array{Elements: matrix}
+			rows, ok := toInt(args[0])
+			if !ok {
+				return newError("first argument to `matrix` not an integer or float. got=%s", args[0].Type())
 			}
 
-			rows, ok := args[0].(*obj.Integer)
+			cols, ok := toInt(args[1])
 			if !ok {
-				return newError("first argument to `matrix` not an integer. got=%s", args[0].Type())
-			}
-
-			cols, ok := args[1].(*obj.Integer)
-			if !ok {
-				return newError("second argument to `matrix` not an integer. got=%s", args[1].Type())
+				return newError("second argument to `matrix` not an integer or float. got=%s", args[1].Type())
 			}
 
 			val, ok := args[2].(*obj.Array)
@@ -419,26 +412,30 @@ var builtins = map[string]*obj.Builtin{
 				return newError("third argument to `matrix` not an array. got=%s", args[2].Type())
 			}
 
-			r, c := int(rows.Value), int(cols.Value)
-			if rows.Value < 1 || cols.Value < 1 {
-				return newError("matrix dimensions must be positive. got=%d, %d", rows.Value, cols.Value)
+			if rows < 1 || cols < 1 {
+				return newError("matrix dimensions must be positive. got=%d, %d", rows, cols)
 			}
 
-			if len(val.Elements) != r*c {
-				return newError("array length does not match matrix dimensions. got=%d, want=%d", len(val.Elements), r*c)
+			if len(val.Elements) != rows*cols {
+				return newError("array length does not match matrix dimensions. got=%d, want=%d", len(val.Elements), rows*cols)
 			}
 
-			matrix := make([]obj.Object, rows.Value)
-			for i := range r {
-				row := make([]obj.Object, c)
-				for j := range c {
-					row[j] = val.Elements[i*c+j]
+			data := make([][]obj.Object, rows)
+			for i := 0; i < rows; i++ {
+				row := make([]obj.Object, cols)
+				for j := 0; j < cols; j++ {
+					e := val.Elements[i*cols+j]
+					switch e.(type) {
+					case *obj.Integer, *obj.Float:
+					default:
+						return newError("matrix elements must be integers or floats. got=%s", e.Type())
+					}
+					row[j] = e
 				}
-				matrix[i] = &obj.Array{Elements: row}
+				data[i] = row
 			}
-			
-			return &obj.Array{Elements: matrix}
 
+			return &obj.Matrix{Rows: rows, Cols: cols, Data: data}
 		},
 	},
 	"make" : {
@@ -503,6 +500,21 @@ var builtins = map[string]*obj.Builtin{
 			return newError("first argument to `color` not supported. got=%s", args[0].Type())
 		},
 	},
+	"sleep": {
+		Fn: func(args ...obj.Object) obj.Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+
+			switch arg := args[0].(type) {
+			case *obj.Integer:
+				time.Sleep(time.Duration(arg.Value) * time.Millisecond)
+				return NULL
+			default:
+				return newError("argument to `sleep` not supported. got=%s", args[0].Type())
+			}
+		},
+	},
 	"exp": {
 		Fn: func(args ...obj.Object) obj.Object {
 			if len(args) != 1 {
@@ -524,6 +536,25 @@ var builtins = map[string]*obj.Builtin{
 			return &obj.Float{Value: math.Pi}
 		},
 	},
+}
+
+var stdinReader *bufio.Reader
+
+func getStdinReader() *bufio.Reader {
+	if stdinReader == nil {
+		stdinReader = bufio.NewReader(os.Stdin)
+	}
+	return stdinReader
+}
+
+func toInt(o obj.Object) (int, bool) {
+	switch v := o.(type) {
+	case *obj.Integer:
+		return int(v.Value), true
+	case *obj.Float:
+		return int(v.Value), true
+	}
+	return 0, false
 }
 
 func objectToValue(object obj.Object) any {
