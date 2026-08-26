@@ -1,0 +1,231 @@
+// ZOD PRESENTATION DECK
+// =====================
+// This entire presentation is a Zod script. Every title card, every
+// typewriter effect, every coloured pixel is produced by the language
+// it is about. Advance each scene with Enter.
+
+let CLR = "\x1b[2J"
+let HOME = "\x1b[H"
+let HIDE = "\x1b[?25l"
+let SHOW = "\x1b[?25h"
+let BOLD = "\x1b[1m"
+let DIM = "\x1b[2m"
+let RST = "\x1b[0m"
+let CYAN = "\x1b[1;36m"
+let YEL = "\x1b[1;33m"
+let GRN = "\x1b[1;32m"
+let RED = "\x1b[1;31m"
+let MAG = "\x1b[1;35m"
+let BLU = "\x1b[1;34m"
+let WHITE = "\x1b[1;37m"
+
+// code palette
+let KW = "\x1b[1;36m"
+let STR = "\x1b[38;2;152;255;152m"
+let NUM = "\x1b[38;2;255;200;120m"
+let TXT = "\x1b[38;2;205;205;220m"
+let FN = "\x1b[38;2;140;180;255m"
+let PROMPT = "\x1b[38;2;80;220;255m"
+
+let kw = fn(s) { KW + s + RST }
+let str = fn(s) { STR + s + RST }
+let num = fn(s) { NUM + s + RST }
+let tx = fn(s) { TXT + s + RST }
+let fnc = fn(s) { FN + s + RST }
+let pr = fn(s) { PROMPT + s + RST }
+
+printf("%s%s%s", CLR, HOME, HIDE)
+
+// --- scene helpers ---------------------------------------------------
+let hbar = fn(n) {
+	let s = ""
+	for (i := 0; i < n; i++) { s = s + "─" }
+	s
+}
+
+let card = fn(plain, colored) {
+	printf("%s%s", CLR, HOME)
+	println("")
+	let w = len(plain) + 4
+	println("  " + CYAN + BOLD + "╭" + hbar(w) + "╮" + RST)
+	println("  " + CYAN + BOLD + "│ " + colored + CYAN + BOLD + "   │" + RST)
+	println("  " + CYAN + BOLD + "╰" + hbar(w) + "╯" + RST)
+	println("")
+}
+
+let wait = fn() {
+	println("")
+	println("  " + DIM + "[ Enter ]  " + RST)
+	input("")
+}
+
+let typeLine = fn(words, ms) {
+	for (i := 0; i < len(words); i++) {
+		printf("%s ", words[i])
+		sleep(ms)
+	}
+	println("")
+}
+
+let codeLine = fn(n, text) {
+	let g = string(n)
+	if (len(g) == 1) { g = " " + g }
+	println("   " + DIM + g + "  " + RST + text)
+}
+
+// --- scene 1 : title ---------------------------------------------------
+let scene1 = fn() {
+	card("I Built a Game", CYAN + BOLD + "I Built a Game" + RST)
+	wait()
+}
+
+// --- scene 2 : the game ------------------------------------------------
+let scene2 = fn() {
+	card("The Game", GRN + BOLD + "The Game" + RST)
+	typeLine(["Conway's", "Game", "of", "Life."], 45)
+	println("")
+	typeLine(["Newborn", "cells", "glow", "blue."], 45)
+	typeLine(["Ancient", "cells", "burn", "magenta."], 45)
+	wait()
+}
+
+// --- scene 3 : the code ------------------------------------------------
+let scene3 = fn() {
+	card("The Code", YEL + BOLD + "The Code" + RST)
+	println("   " + DIM + "Idea #1 - the grid is a first-class value." + RST)
+	println("")
+	let a1 = kw("let ") + fnc("buildGrid") + tx(" = ") + kw("fn") + tx("(rows, cols, val) {")
+	let a2 = tx("    ") + fnc("matrix") + tx("(rows, cols, ") + kw("make") + tx("(rows * cols, val))")
+	let a3 = tx("}")
+	codeLine(51, a1)
+	codeLine(52, a2)
+	codeLine(53, a3)
+	println("")
+	println("   " + DIM + "Idea #2 - the rules." + RST)
+	println("")
+	let b1 = kw("for") + tx(" (r := ") + num("0") + tx("; r < rows; r++) {")
+	let b2 = tx("    ") + tx(" gRow := g[r]")
+	let b3 = kw("for") + tx(" (c := ") + num("0") + tx("; c < cols; c++) {")
+	let b4 = tx("        ") + kw("if") + tx(" (gRow[c] == ") + num("1") + tx(") {")
+	codeLine(73, b1)
+	codeLine(74, b2)
+	codeLine(75, b3)
+	codeLine(76, b4)
+	println("")
+	println("   " + DIM + "Idea #3 - bad input never crashes the game." + RST)
+	println("")
+	let c1 = fnc("readInt") + tx(" := ") + kw("fn") + tx("(prompt, lo, hi) {")
+	let c2 = tx("    ") + kw("loop") + tx(" {")
+	let c3 = tx("        let r = ") + fnc("try") + tx("(") + fnc("int") + tx("(") + fnc("input") + tx("(prompt)))")
+	let c4 = tx("        ") + kw("if") + tx(" (r[1] >= lo && r[") + num("1") + tx("] <= hi) { ") + kw("return") + tx(" r[") + num("1") + tx("] }")
+	codeLine(281, c1)
+	codeLine(282, c2)
+	codeLine(283, c3)
+	codeLine(285, c4)
+	wait()
+}
+
+// --- scene 4 : the question ---------------------------------------------
+let scene4 = fn() {
+	printf("%s%s", CLR, HOME)
+	println("")
+	println("")
+	println("")
+	println("   " + WHITE + BOLD + "       So. What language is this?" + RST)
+	println("")
+	println("   " + DIM + "      It's not JavaScript." + RST)
+	println("   " + DIM + "      It's not Python." + RST)
+	println("   " + DIM + "      It's not even close." + RST)
+	println("")
+	println("   " + DIM + "      ..." + RST)
+	wait()
+}
+
+// --- scene 5 : the reveal -----------------------------------------------
+let pipe = fn(src, stage, out, count) {
+	println("   " + TXT + src + RST + CYAN + " ──▶ " + RST + WHITE + BOLD + stage + RST + CYAN + " ──▶ " + RST + TXT + out + RST)
+	println("   " + DIM + "      " + count + " lines" + RST)
+}
+
+let scene5 = fn() {
+	printf("%s%s", CLR, HOME)
+	card("It's Zod.", MAG + BOLD + "It's Zod." + RST)
+	typeLine(["A", "language", "I", "wrote", "from", "scratch."], 50)
+	println("")
+	println("   " + DIM + "The game:       390 lines of Zod." + RST)
+	println("   " + DIM + "The interpreter: 7,248 lines of Go." + RST)
+	println("")
+	pipe("source.zd", "LEXER", "tokens", "873")
+	pipe("tokens", "PARSER", "AST", "2,185")
+	pipe("AST", "EVALUATOR", "result", "3,018")
+	println("")
+	println("   " + DIM + "plus ast 565  ·  object 390  ·  token 93  ·  repl 73  ·  main 51" + RST)
+	wait()
+}
+
+// --- scene 6 : what's inside ---------------------------------------------
+let scene6 = fn() {
+	card("What's Inside", CYAN + BOLD + "What's Inside" + RST)
+	println("")
+	println("   " + GRN + "▸" + RST + "  functions and closures")
+	println("   " + GRN + "▸" + RST + "  arrays, hashes, strings, and matrices")
+	println("   " + GRN + "▸" + RST + "  elseif, loop, for, break, continue")
+	println("")
+	println("   " + DIM + "Everything you saw is built on these." + RST)
+	wait()
+}
+
+// --- scene 7 : live demo --------------------------------------------------
+let scene7 = fn() {
+	card("Live Demo", GRN + BOLD + "Live Demo" + RST)
+	println("   " + DIM + "A few lines in the actual REPL:" + RST)
+	println("")
+	sleep(150)
+	println("   " + pr("›") + "  " + " add := " + fnc("fn") + "(x, y) { x + y }")
+	sleep(200)
+	println("   " + pr("›") + "  " + fnc("add") + "(2, 3)")
+	sleep(250)
+	println("   " + num("5"))
+	sleep(300)
+	println("")
+	println("   " + pr("›") + "  " + fnc("try") + "(" + fnc("int") + "(" + str("\"42\"") + "))")
+	sleep(250)
+	println("   " + tx("[") + GRN + "true" + RST + tx(", ") + num("42") + tx("]"))
+	sleep(300)
+	println("")
+	println("   " + pr("›") + "  " + fnc("matrix") + "(2, 3, [1, 2, 3, 4, 5, 6])")
+	sleep(250)
+	println("   " + tx("[[1, 2, 3], [4, 5, 6]]"))
+	wait()
+}
+
+// --- scene 8 : the closer ---------------------------------------------------
+let scene8 = fn() {
+	printf("%s%s", CLR, HOME)
+	println("")
+	println("")
+	println("")
+	println("   " + WHITE + BOLD + "One last thing..." + RST)
+	println("")
+	sleep(250)
+	typeLine(["This", "presentation", "is", "running", "in", "Zod."], 55)
+	println("")
+	typeLine(["The", "slides.", "The", "typewriter.", "Everything."], 55)
+	println("")
+	println("")
+	println("   " + GRN + BOLD + "   Zod is free and open source." + RST)
+	println("   " + DIM + "   github.com/theawakener0/Zod" + RST)
+	println("")
+	println("   " + WHITE + BOLD + "   Thank you." + RST)
+	println("")
+	printf("%s", SHOW)
+}
+
+scene1()
+scene2()
+scene3()
+scene4()
+scene5()
+scene6()
+scene7()
+scene8()

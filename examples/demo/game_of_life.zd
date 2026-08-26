@@ -1,7 +1,12 @@
-// GAME OF LIFE : NEON
-// An animated, toroidal Conway's Game of Life for the Zod terminal.
-// Cells are painted by age: newborn (blue) -> young (green) -> mature
-// (yellow) -> old (orange) -> ancient (magenta).
+/*                      GAME OF LIFE
+
+An animated, toroidal Conway's Game of Life for the Zod terminal.
+Hi-res rendering: each terminal character paints TWO cells via thehalf-block
+half-block glyphs U+2580 (upper) / U+2584 (lower), so a 48-row world
+renders on 24 lines. Cells are shaded with a 24-bit truecolor ramp:
+newborn (deep blue) -> young (cyan/green) -> mature (yellow/orange)  -> old (red) -> ancient (magenta).
+The grid is stored as the new MATRIX value type.
+*/
 
 let CLR = "\x1b[2J"
 let HOME = "\x1b[H"
@@ -10,23 +15,42 @@ let SHOW = "\x1b[?25h"
 let BOLD = "\x1b[1m"
 let RST = "\x1b[0m"
 
-let AGES = [
-	"\x1b[48;5;39m \x1b[0m",
-	"\x1b[48;5;2m \x1b[0m",
-	"\x1b[48;5;3m \x1b[0m",
-	"\x1b[48;5;208m \x1b[0m",
-	"\x1b[48;5;196m \x1b[0m",
-	"\x1b[48;5;5m \x1b[0m"
+// --- 24-bit age ramp (10 buckets) -----------------------------------
+let COLORS = [
+	[30, 70, 255],
+	[0, 170, 255],
+	[0, 235, 210],
+	[50, 255, 130],
+	[140, 255, 40],
+	[225, 255, 25],
+	[255, 225, 20],
+	[255, 165, 20],
+	[255, 95, 30],
+	[255, 60, 140]
 ]
 
-let mod = fn(a, b) { a - (a / b) * b }
-
-let buildGrid = fn(rows, cols, val) {
-	let g = []
-	for (i := 0; i < rows; i++) {
-		g = push(g, make(cols, val))
+let makePaint = fn(prefix, colors) {
+	let out = []
+	for (i := 0; i < len(colors); i++) {
+		let c = colors[i]
+		out = push(out, "\x1b[" + prefix + ";2;" + string(c[0]) + ";" + string(c[1]) + ";" + string(c[2]) + "m")
 	}
-	g
+	out
+}
+
+let FG = makePaint("38", COLORS)
+let BG = makePaint("48", COLORS)
+
+let clampAge = fn(a) {
+	if (a > 9) { a = 9 }
+	a
+}
+
+let chip = fn(a) { FG[a] + BG[a] + "▀" + RST }
+
+// --- simulation ------------------------------------------------------
+let buildGrid = fn(rows, cols, val) {
+	matrix(rows, cols, make(rows * cols, val))
 }
 
 let population = fn(g) {
@@ -39,30 +63,40 @@ let population = fn(g) {
 	count
 }
 
-let neighbors = fn(g, r, c) {
-	let count = 0
-	let rows = len(g)
-	let cols = len(g[0])
-	for (dr := -1; dr <= 1; dr++) {
-		for (dc := -1; dc <= 1; dc++) {
-			if (dr == 0 && dc == 0) { continue }
-			count = count + g[mod(r + dr + rows, rows)][mod(c + dc + cols, cols)]
-		}
-	}
-	count
-}
-
 let step = fn(g, age) {
 	let rows = len(g)
 	let cols = len(g[0])
+	let count = buildGrid(rows, cols, 0)
 	let next = buildGrid(rows, cols, 0)
 	let nage = buildGrid(rows, cols, 0)
 	let born = 0
 	let died = 0
 	for (r := 0; r < rows; r++) {
+		let gRow = g[r]
 		for (c := 0; c < cols; c++) {
-			let n = neighbors(g, r, c)
-			if (g[r][c] == 1) {
+			if (gRow[c] == 1) {
+				for (dr := -1; dr <= 1; dr++) {
+					let rr = r + dr
+					if (rr < 0) { rr = rr + rows }
+					elseif (rr >= rows) { rr = rr - rows }
+					let cRow = count[rr]
+					for (dc := -1; dc <= 1; dc++) {
+						if (dr == 0 && dc == 0) { continue }
+						let cc = c + dc
+						if (cc < 0) { cc = cc + cols }
+						elseif (cc >= cols) { cc = cc - cols }
+						cRow[cc] = cRow[cc] + 1
+					}
+				}
+			}
+		}
+	}
+	for (r := 0; r < rows; r++) {
+		let gRow = g[r]
+		let cRow = count[r]
+		for (c := 0; c < cols; c++) {
+			let n = cRow[c]
+			if (gRow[c] == 1) {
 				if (n == 2 || n == 3) {
 					next[r][c] = 1
 					nage[r][c] = age[r][c] + 1
@@ -78,9 +112,10 @@ let step = fn(g, age) {
 			}
 		}
 	}
-	return {"grid": next, "age": nage, "born": born, "died": died}
+	return [next, nage, born, died]
 }
 
+// --- patterns ---------------------------------------------------------
 let BLINKER = [
 	[0, 1, 2]
 ]
@@ -128,6 +163,28 @@ let GUN = [
 	[12, 13]
 ]
 
+// R-pentomino: 5 cells, explodes and lives ~1103 generations.
+let RPENTO = [
+	[1, 2],
+	[0, 1],
+	[1]
+]
+
+// Acorn: 7 cells, survives ~5206 generations.
+let ACORN = [
+	[1],
+	[3],
+	[0, 1, 4, 5, 6]
+]
+
+// Lightweight spaceship: travels at c/2 horizontally.
+let LWSS = [
+	[1, 4],
+	[0],
+	[0, 3],
+	[0, 1, 2, 3]
+]
+
 let maxWidth = fn(rows) {
 	let m = 0
 	for (r := 0; r < len(rows); r++) {
@@ -158,6 +215,9 @@ let seedRandom = fn(g, density) {
 	}
 }
 
+// --- hi-res renderer ---------------------------------------------------
+// Every output line renders a pair of rows: cell (2*r, c) is the upper
+// half (foreground) and (2*r+1, c) the lower half (background).
 let render = fn(g, age, gen, pop, born, died, peak, name) {
 	printf("%s%s", CLR, HOME)
 	let hud = BOLD + color("CYAN", name) + RST +
@@ -167,27 +227,74 @@ let render = fn(g, age, gen, pop, born, died, peak, name) {
 		"   Died " + color("RED", string(died)) +
 		"   Peak " + string(peak)
 	println(hud)
-	for (r := 0; r < len(g); r++) {
+	let rows = len(g)
+	for (r := 0; r < rows / 2; r++) {
+		let rTop = r * 2
+		let rBot = r * 2 + 1
 		let line = "  "
-		for (c := 0; c < len(g[r]); c++) {
-			if (g[r][c] == 1) {
-				let a = age[r][c]
-				if (a > 5) { a = 5 }
-				line = line + AGES[a]
-			} else {
+		for (c := 0; c < len(g[rTop]); c++) {
+			let top = g[rTop][c]
+			let bot = g[rBot][c]
+			if (top == 0 && bot == 0) {
 				line = line + " "
+			} elseif (top == 1 && bot == 0) {
+				line = line + FG[clampAge(age[rTop][c])] + "▀" + RST
+			} elseif (top == 0 && bot == 1) {
+				line = line + FG[clampAge(age[rBot][c])] + "▄" + RST
+			} else {
+				line = line + FG[clampAge(age[rTop][c])] + BG[clampAge(age[rBot][c])] + "▀" + RST
 			}
 		}
 		println(line)
 	}
-	println("  " + AGES[0] + " newborn   " + AGES[1] + " young   " +
-		AGES[2] + " mature   " + AGES[3] + " old   " + AGES[5] + " ancient")
+	println("  " + chip(0) + " newborn   " + chip(3) + " young   " +
+		chip(5) + " mature   " + chip(7) + " old   " + chip(9) + " ancient")
+}
+
+// --- population sparkline ----------------------------------------------
+let BARS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
+
+let trimTo = fn(arr, n) {
+	let out = []
+	let start = len(arr) - n
+	if (start < 0) { start = 0 }
+	for (i := start; i < len(arr); i++) {
+		out = push(out, arr[i])
+	}
+	out
+}
+
+let sparkline = fn(spark) {
+	let out = "  Pop "
+	let mx = 1
+	for (i := 0; i < len(spark); i++) {
+		if (spark[i] > mx) { mx = spark[i] }
+	}
+	for (i := 0; i < len(spark); i++) {
+		let level = spark[i] * 8 / mx
+		if (level >= 8) { level = 7 }
+		out = out + BARS[level]
+	}
+	out
+}
+
+// --- robust input ------------------------------------------------------
+let readInt = fn(prompt, lo, hi) {
+	loop {
+		let r = try(int(input(prompt)))
+		if (r[0]) {
+			if (r[1] >= lo && r[1] <= hi) { return r[1] }
+			println("  " + color("RED", "Enter " + string(lo) + "-" + string(hi) + "."))
+		} else {
+			println("  " + color("RED", "Enter a number."))
+		}
+	}
 }
 
 let showMenu = fn() {
 	printf("%s%s", CLR, HOME)
 	println("")
-	println(BOLD + color("CYAN", "  ===== GAME OF LIFE : NEON =====") + RST)
+	println(BOLD + color("CYAN", "  ===== GAME OF LIFE : NEON HD =====") + RST)
 	println("")
 	println("  " + color("GREEN", "1") + "  Blinker")
 	println("  " + color("GREEN", "2") + "  Glider")
@@ -195,19 +302,22 @@ let showMenu = fn() {
 	println("  " + color("YELLOW", "4") + "  Pentadecathlon")
 	println("  " + color("MAGENTA", "5") + "  Gosper Glider Gun")
 	println("  " + color("BLUE", "6") + "  Random Soup")
+	println("  " + color("CYAN", "7") + "  R-pentomino")
+	println("  " + color("CYAN", "8") + "  Acorn")
+	println("  " + color("CYAN", "9") + "  Lightweight Spaceship")
 	println("  " + color("RED", "0") + "  Quit")
 	println("")
 }
 
-let ROWS = 24
-let COLS = 60
+let ROWS = 48
+let COLS = 120
 let MAXGEN = 400
 let playing = true
 
 for (playing) {
 	showMenu()
 
-	let choice = int(input("  Choose (0-6): "))
+	let choice = readInt("  Choose (0-9): ", 0, 9)
 	if (choice == 0) { break }
 
 	let g = buildGrid(ROWS, COLS, 0)
@@ -218,19 +328,18 @@ for (playing) {
 	elseif (choice == 4) { name = "Pentadecathlon"; stampCenter(g, PENTA) }
 	elseif (choice == 5) { name = "Gosper Glider Gun"; stampCenter(g, GUN) }
 	elseif (choice == 6) { name = "Random Soup"; seedRandom(g, 0.35) }
-	else {
-		println("  " + color("RED", "Invalid choice. Try again."))
-		continue
-	}
+	elseif (choice == 7) { name = "R-pentomino"; stampCenter(g, RPENTO) }
+	elseif (choice == 8) { name = "Acorn"; stampCenter(g, ACORN) }
+	elseif (choice == 9) { name = "Lightweight Spaceship"; stampCenter(g, LWSS) }
 
 	println("")
 	println("  Speed: " + color("GREEN", "1") + " fast   " +
 		color("YELLOW", "2") + " medium   " + color("RED", "3") + " slow")
-	let spd = int(input("  Choose (1-3): "))
+	let spd = readInt("  Choose (1-3): ", 1, 3)
 	let delay = 0
-	if (spd == 1) { delay = 30 }
-	elseif (spd == 2) { delay = 80 }
-	else { delay = 150 }
+	if (spd == 1) { delay = 40 }
+	elseif (spd == 2) { delay = 100 }
+	else { delay = 200 }
 
 	let age = buildGrid(ROWS, COLS, 0)
 	let gen = 0
@@ -239,20 +348,23 @@ for (playing) {
 	let born = 0
 	let died = 0
 	let reason = "generation limit"
+	let spark = [pop]
 
 	printf("%s", HIDE)
 
 	loop {
 		render(g, age, gen, pop, born, died, peak, name)
+		println(sparkline(spark))
 		sleep(delay)
 		let res = step(g, age)
-		g = res["grid"]
-		age = res["age"]
-		born = res["born"]
-		died = res["died"]
+		g = res[0]
+		age = res[1]
+		born = res[2]
+		died = res[3]
 		gen = gen + 1
 		pop = population(g)
 		if (pop > peak) { peak = pop }
+		spark = trimTo(push(spark, pop), 40)
 		if (pop == 0) { reason = "the colony went extinct"; break }
 		if (born == 0 && died == 0) { reason = "the colony reached a still life"; break }
 		if (gen >= MAXGEN) { reason = "the generation limit was reached"; break }
