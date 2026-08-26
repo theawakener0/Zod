@@ -28,6 +28,7 @@ Requires [Go](https://go.dev/dl/) 1.22 or newer and installs the `Zod` executabl
 
 ### Conway's Game of Life
 
+![Conway's Game of Life](media/demo.gif)
 
 ## Features
 
