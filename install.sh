@@ -77,4 +77,4 @@ case ":${PATH}:" in
     ;;
 esac
 
-echo "Run 'zod -version' to verify."
+echo "Run 'zod --version' to verify."

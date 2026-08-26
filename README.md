@@ -24,9 +24,10 @@ go install github.com/theawakener0/Zod@latest
 
 Requires [Go](https://go.dev/dl/) 1.22 or newer and installs the `Zod` executable into your Go bin directory.
 
-### Option 3: Manual download
+## Demo
 
-Grab the tarball for your OS/architecture from the [Releases page](https://github.com/theawakener0/Zod/releases), extract it, and put the `zod` binary on your `PATH`.
+### Conway's Game of Life
+
 
 ## Features
 
@@ -48,14 +49,18 @@ Grab the tarball for your OS/architecture from the [Releases page](https://githu
 ### Build
 
 ```sh
+# if you installed manually run this
 go build -o zod .
-# if you installed using the script or go install you can just run zod
 ```
 
 ### Run the REPL
 
 ```sh
-./zod
+# if you installed using the script
+zod
+
+# if you installed using go install
+Zod
 ```
 
 Inside the REPL, type `/clear` to clear the screen and `/exit` to quit.
@@ -63,14 +68,11 @@ Inside the REPL, type `/clear` to clear the screen and `/exit` to quit.
 ### Run a script
 
 ```sh
-./zod file.zd
-```
+# if you installed using the script
+zod file.zd
 
-### Run the examples
-
-```sh
-./zod examples/hello.zd
-./zod examples/guess_the_number.zd
+# if you installed using go install
+Zod file.zd
 ```
 
 ## Examples
@@ -79,75 +81,6 @@ Inside the REPL, type `/clear` to clear the screen and `/exit` to quit.
 
 ```zod
 println("Hello, World!")
-```
-
-### Variables and data types
-
-```zod
-let name = "Zod"
-version := 1
-let isAwesome = true
-scores := [10, 20, 30]
-let config = {"lang": "Zod", "year": 2026}
-nothing := null
-```
-
-### Functions and closures
-
-```zod
-let add = fn(x, y) { x + y }
-println(add(2, 3))  // 5
-
-makeAdder := fn(x) {
-    fn(y) { x + y }
-}
-let addFive = makeAdder(5)
-println(addFive(10))  // 15
-```
-
-### Control flow
-
-```zod
-let grade = fn(score) {
-    if (score >= 90) {
-        "A"
-    } elseif (score >= 80) {
-        "B"
-    } else {
-        "C"
-    }
-}
-
-println(grade(95))  // A
-```
-
-### Loops
-
-```zod
-// C-style for loop
-for (i := 0; i < 5; i++) {
-    println(i)  
-/*
-    0
-    1
-    2
-    3
-    4
-*/
-}
-
-// While-style for loop
-let x = 0
-for (x < 3) { x++ }
-println(x)  // 3
-
-// Infinite loop with break / continue
-let i = 0
-loop {
-    i++
-    if (i == 3) { continue }
-    if (i == 6) { break }
-}
 ```
 
 More runnable examples live in [`examples/`](examples/).
@@ -166,10 +99,6 @@ More runnable examples live in [`examples/`](examples/).
 | Hash      | `{"name": "Zod"}`, `{}`         |
 | Matrix    | `matrix(2, 2, [1, 2, 3, 4])`    |
 | Null      | `null`                          |
-
-> [!NOTE]
-> Hashes preserve insertion order: iterating with `keys()` / `vals()` and printing
-> a hash always follow the order the keys were added.
 
 ### Operators
 
@@ -219,6 +148,9 @@ Index assignment works on arrays and hashes too: `nums[0] = 10`, `user["age"] +=
 | `exp(x)`              | e^x |
 | `pi()`                | π |
 
+> [!NOTE]
+> The `color` function is still under development so it doesn't have many colors.
+
 ### Matrices
 
 `matrix(r, c, data)` builds a `MATRIX` value (a row-major grid of integers or
@@ -265,9 +197,6 @@ if (r[0]) {
     println("failed:", r[1])   // failed: could not parse "abc" as integer
 }
 ```
-
-> [!NOTE]
-> The `color` function is still under development so it doesn't have many colors.
 
 ## Acknowledgments
 

@@ -177,11 +177,7 @@ func (p *Parser) parseStatement() ast.Statement {
 
 	switch p.curToken.Type {
 	case tk.LET:
-		ls := p.parseLetStatement()
-		if ls == nil {
-			return nil
-		}
-		return ls
+		return p.parseLetStatement()
 	case tk.IDENT:
 		if p.peekTokenIs(tk.ASSIGNCHAR) { 
 			return p.parseAssignCharStatement()
@@ -222,8 +218,6 @@ func (p *Parser) parseLetStatement() *ast.LetStatement {
 
 	if p.peekTokenIs(tk.SEMICOLON) {
 		p.nextToken()
-	} else {
-		p.checkStatementTerminator()
 	}
 
 	return stmt
@@ -244,8 +238,6 @@ func (p *Parser) parseAssignCharStatement() *ast.AssignStatement {
 	
 	if p.peekTokenIs(tk.SEMICOLON) {
 		p.nextToken()
-	} else {
-		p.checkStatementTerminator()
 	}
 	
 	return stmt
@@ -266,8 +258,6 @@ func (p *Parser) parseAssignStatement() *ast.AssignStatement {
 	
 	if p.peekTokenIs(tk.SEMICOLON) {
 		p.nextToken()
-	} else {
-		p.checkStatementTerminator()
 	}
 	
 	return stmt
@@ -286,8 +276,6 @@ func (p *Parser) parseCompoundAssignStatement() *ast.AssignStatement {
 
 	if p.peekTokenIs(tk.SEMICOLON) {
 		p.nextToken()
-	} else {
-		p.checkStatementTerminator()
 	}
 
 	return stmt
@@ -301,8 +289,6 @@ func (p *Parser) parseReturnStatement() *ast.ReturnStatement {
 
 	if p.peekTokenIs(tk.SEMICOLON) {
 		p.nextToken()
-	} else {
-		p.checkStatementTerminator()
 	}
 
 	return stmt
@@ -313,8 +299,6 @@ func (p *Parser) parseBreakStatement() ast.Statement {
 
 	if p.peekTokenIs(tk.SEMICOLON) {
 		p.nextToken()
-	} else {
-		p.checkStatementTerminator()
 	}
 
 	return stmt
@@ -325,8 +309,6 @@ func (p *Parser) parseContinueStatement() ast.Statement {
 
 	if p.peekTokenIs(tk.SEMICOLON) {
 		p.nextToken()
-	} else {
-		p.checkStatementTerminator()
 	}
 
 	return stmt
@@ -344,8 +326,6 @@ func (p *Parser) parseExpressionStatement() ast.Statement {
 
 	if p.peekTokenIs(tk.SEMICOLON) {
 		p.nextToken()
-	} else {
-		p.checkStatementTerminator()
 	}
 
 	return stmt
@@ -361,8 +341,6 @@ func (p *Parser) parseIndexAssignStatement(idx *ast.IndexExpression) *ast.Assign
 
 	if p.peekTokenIs(tk.SEMICOLON) {
 		p.nextToken()
-	} else {
-		p.checkStatementTerminator()
 	}
 
 	return stmt
@@ -383,16 +361,6 @@ func isAssignOp(tok tk.TokenType) bool {
 func (p *Parser) skipPeekSemicolons() {
 	for p.peekTokenIs(tk.SEMICOLON) && p.peekToken.Literal == "\n" {
 		p.nextToken()
-	}
-}
-
-func (p *Parser) checkStatementTerminator() {
-	if p.peekTokenIs(tk.SEMICOLON) || p.peekTokenIs(tk.RBRACE) || p.peekTokenIs(tk.RPAREN) || p.peekTokenIs(tk.RBRACKET) || p.peekTokenIs(tk.EOF) || p.peekTokenIs(tk.COMMA) {
-		return
-	}
-	// Two statements juxtaposed without separator on same line, e.g. "a b" or "let x=5 let y=6"
-	if p.peekToken.Type == tk.IDENT || p.peekToken.Type == tk.LET || p.peekToken.Type == tk.RETURN || p.peekToken.Type == tk.BREAK || p.peekToken.Type == tk.CONTINUE || p.peekToken.Type == tk.IF || p.peekToken.Type == tk.FOR || p.peekToken.Type == tk.LOOP || p.peekToken.Type == tk.FUNCTION || p.peekToken.Type == tk.TRUE || p.peekToken.Type == tk.FALSE || p.peekToken.Type == tk.NULL || p.peekToken.Type == tk.INT || p.peekToken.Type == tk.FLOAT || p.peekToken.Type == tk.STRING {
-		p.errors = append(p.errors, fmt.Sprintf("missing statement separator before %s", p.peekToken.Type))
 	}
 }
 

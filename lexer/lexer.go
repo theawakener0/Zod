@@ -408,7 +408,7 @@ func (l *Lexer) readString() (string, bool) {
 }
 
 func isLetter(ch byte) bool {
-	return 'a' <= ch && ch <= 'z' || 'A' <= ch && ch <= 'Z'
+	return 'a' <= ch && ch <= 'z' || 'A' <= ch && ch <= 'Z' || ch == '_'
 }
 
 func hexVal(ch byte) (byte, bool) {

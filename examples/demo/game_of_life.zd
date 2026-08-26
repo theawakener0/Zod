@@ -12,6 +12,8 @@ let CLR = "\x1b[2J"
 let HOME = "\x1b[H"
 let HIDE = "\x1b[?25l"
 let SHOW = "\x1b[?25h"
+let SYNC_BEGIN = "\x1b[?2026h"
+let SYNC_END = "\x1b[?2026l"
 let BOLD = "\x1b[1m"
 let RST = "\x1b[0m"
 
@@ -79,13 +81,12 @@ let step = fn(g, age) {
 					let rr = r + dr
 					if (rr < 0) { rr = rr + rows }
 					elseif (rr >= rows) { rr = rr - rows }
-					let cRow = count[rr]
 					for (dc := -1; dc <= 1; dc++) {
 						if (dr == 0 && dc == 0) { continue }
 						let cc = c + dc
 						if (cc < 0) { cc = cc + cols }
 						elseif (cc >= cols) { cc = cc - cols }
-						cRow[cc] = cRow[cc] + 1
+						count[rr][cc] = count[rr][cc] + 1
 					}
 				}
 			}
@@ -218,15 +219,14 @@ let seedRandom = fn(g, density) {
 // --- hi-res renderer ---------------------------------------------------
 // Every output line renders a pair of rows: cell (2*r, c) is the upper
 // half (foreground) and (2*r+1, c) the lower half (background).
-let render = fn(g, age, gen, pop, born, died, peak, name) {
-	printf("%s%s", CLR, HOME)
+let render = fn(g, age, gen, pop, born, died, peak, name, spark) {
 	let hud = BOLD + color("CYAN", name) + RST +
 		"   Gen " + string(gen) +
 		"   Pop " + color("GREEN", string(pop)) +
 		"   Born " + color("GREEN", string(born)) +
 		"   Died " + color("RED", string(died)) +
 		"   Peak " + string(peak)
-	println(hud)
+	let frame = hud + "\n"
 	let rows = len(g)
 	for (r := 0; r < rows / 2; r++) {
 		let rTop = r * 2
@@ -245,10 +245,11 @@ let render = fn(g, age, gen, pop, born, died, peak, name) {
 				line = line + FG[clampAge(age[rTop][c])] + BG[clampAge(age[rBot][c])] + "▀" + RST
 			}
 		}
-		println(line)
+		frame = frame + line + "\n"
 	}
-	println("  " + chip(0) + " newborn   " + chip(3) + " young   " +
-		chip(5) + " mature   " + chip(7) + " old   " + chip(9) + " ancient")
+	let legend = "  " + chip(0) + " newborn   " + chip(3) + " young   " + chip(5) + " mature   " + chip(7) + " old   " + chip(9) + " ancient"
+	frame = frame + legend + "\n" + sparkline(spark) + "\n"
+	printf("%s%s%s%s", SYNC_BEGIN, HOME, frame, SYNC_END)
 }
 
 // --- population sparkline ----------------------------------------------
@@ -353,8 +354,7 @@ for (playing) {
 	printf("%s", HIDE)
 
 	loop {
-		render(g, age, gen, pop, born, died, peak, name)
-		println(sparkline(spark))
+		render(g, age, gen, pop, born, died, peak, name, spark)
 		sleep(delay)
 		let res = step(g, age)
 		g = res[0]
