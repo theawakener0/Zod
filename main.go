@@ -20,10 +20,10 @@ const Banner = `
                                             ▀▀▀  
 `
 
-var version = "dev"
+var version = "v0.4.0"
 
 func main() {
-	if len(os.Args) > 1 && (os.Args[1] == "-version" || os.Args[1] == "--version") {
+	if len(os.Args) > 1 && (os.Args[1] == "-v" || os.Args[1] == "--version") {
 		fmt.Printf("zod %s\n", version)
 		return
 	}

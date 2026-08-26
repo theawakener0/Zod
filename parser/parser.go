@@ -568,7 +568,11 @@ func (p *Parser) parseForExpression() ast.Expression {
 				exp.Condition = es.Expression
 				exp.Init = nil
 				p.nextToken()
-				goto bodyBlock
+				exp.Body = p.parseBraceBlock()
+				if exp.Body == nil {
+					return nil
+				}
+				return exp
 			}
 			p.errors = append(p.errors, "expected ; or ) in for clause")
 			return nil
@@ -588,7 +592,11 @@ func (p *Parser) parseForExpression() ast.Expression {
 			p.nextToken()
 		} else if p.peekTokenIs(tk.RPAREN) {
 			p.nextToken()
-			goto bodyBlock
+			exp.Body = p.parseBraceBlock()
+			if exp.Body == nil {
+				return nil
+			}
+			return exp
 		} else {
 			p.errors = append(p.errors, "expected ; or ) in for condition")
 			return nil
@@ -604,26 +612,19 @@ func (p *Parser) parseForExpression() ast.Expression {
 		}
 	}
 
-bodyBlock:
-	p.skipPeekSemicolons()
-	if !p.expectPeek(tk.LBRACE) {
+	exp.Body = p.parseBraceBlock()
+	if exp.Body == nil {
 		return nil
 	}
-	exp.Body = p.parseBlockStatement()
-
 	return exp
 }
 
 func (p *Parser) parseLoopExpression() ast.Expression {
 	exp := &ast.LoopExpression{Token: p.curToken}
-
-	p.skipPeekSemicolons()
-	if !p.expectPeek(tk.LBRACE) {
+	exp.Body = p.parseBraceBlock()
+	if exp.Body == nil {
 		return nil
 	}
-
-	exp.Body = p.parseBlockStatement()
-
 	return exp
 }
 
@@ -680,32 +681,6 @@ func (p *Parser) parseCallExpression(function ast.Expression) ast.Expression {
 	exp.Arguments = p.parseExpressionList(tk.RPAREN)
 
 	return exp
-}
-
-func (p *Parser) parseCallArguments() []ast.Expression {
-	arguments := []ast.Expression{}
-
-	if p.peekTokenIs(tk.RPAREN) {
-		p.nextToken()
-		return arguments
-	}
-	
-	p.nextToken()
-	arguments = append(arguments, p.parseExpression(LOWEST))
-
-	for p.peekTokenIs(tk.COMMA) {
-		p.nextToken()
-		p.nextToken()
-		nextArg := p.parseExpression(LOWEST)
-		arguments = append(arguments, nextArg)
-	}
-
-	p.skipPeekSemicolons()
-	if !p.expectPeek(tk.RPAREN) {
-		return nil
-	}
-
-	return arguments
 }
 
 func (p *Parser) parseStringLiteral() ast.Expression {
@@ -790,6 +765,14 @@ func (p *Parser) parseHashLiteral() ast.Expression {
 	}
 	
 	return hash
+}
+
+func (p *Parser) parseBraceBlock() *ast.BlockStatement {
+	p.skipPeekSemicolons()
+	if !p.expectPeek(tk.LBRACE) {
+		return nil
+	}
+	return p.parseBlockStatement()
 }
 
 func (p *Parser) noPrefixParseFnError(t tk.TokenType) {
