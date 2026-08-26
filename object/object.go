@@ -73,6 +73,13 @@ func (f *Float) Inspect() string {
 	return s
 }
 func (f *Float) HashKey() HashKey {
+	if f.Value == math.Trunc(f.Value) {
+		iv := int64(f.Value)
+		// Check round-trip to avoid overflow mis-hash: if float64(iv) == f.Value
+		if float64(iv) == f.Value {
+			return HashKey{Type: INTEGER_OBJ, Value: uint64(iv)}
+		}
+	}
 	return HashKey{Type: f.Type(), Value: math.Float64bits(f.Value)}
 }
 

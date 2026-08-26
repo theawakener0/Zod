@@ -14,6 +14,9 @@ var (
 	FALSE = &obj.Boolean{Value: false}
 )
 
+var callDepth int
+const maxCallDepth = 10000
+
 func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
 	switch n := node.(type) {
 	case *ast.Program:
@@ -335,10 +338,10 @@ func evalInfixExpression(operator string, left, right obj.Object) obj.Object {
 	switch {
 	case left.Type() == obj.INTEGER_OBJ && right.Type() == obj.INTEGER_OBJ:
 		return evalIntegerInfixExpression(operator, left, right)
-	case left.Type() == obj.FLOAT_OBJ || right.Type() == obj.FLOAT_OBJ:
-		return evalFloatInfixExpression(operator, left, right)
 	case left.Type() == obj.MATRIX_OBJ || right.Type() == obj.MATRIX_OBJ:
 		return evalMatrixInfixExpression(operator, left, right)
+	case left.Type() == obj.FLOAT_OBJ || right.Type() == obj.FLOAT_OBJ:
+		return evalFloatInfixExpression(operator, left, right)
 	case left.Type() == obj.STRING_OBJ && right.Type() == obj.STRING_OBJ:
 		return evalStringInfixExpression(operator, left, right)
 	case operator == "==":
@@ -354,6 +357,27 @@ func evalMatrixInfixExpression(operator string, left, right obj.Object) obj.Obje
 	leftM, leftIsM := left.(*obj.Matrix)
 	rightM, rightIsM := right.(*obj.Matrix)
 
+	if leftIsM {
+		if len(leftM.Data) != leftM.Rows {
+			return newError("matrix data corrupted: rows mismatch")
+		}
+		for i := 0; i < leftM.Rows; i++ {
+			if len(leftM.Data[i]) != leftM.Cols {
+				return newError("matrix data corrupted: cols mismatch")
+			}
+		}
+	}
+	if rightIsM {
+		if len(rightM.Data) != rightM.Rows {
+			return newError("matrix data corrupted: rows mismatch")
+		}
+		for i := 0; i < rightM.Rows; i++ {
+			if len(rightM.Data[i]) != rightM.Cols {
+				return newError("matrix data corrupted: cols mismatch")
+			}
+		}
+	}
+
 	switch operator {
 	case "+", "-", "*", "/":
 		if leftIsM && rightIsM {
@@ -363,12 +387,52 @@ func evalMatrixInfixExpression(operator string, left, right obj.Object) obj.Obje
 			return evalMatrixScalarInfix(operator, leftM, right)
 		}
 		return evalScalarMatrixInfix(operator, left, rightM)
+	case "==", "!=":
+		if leftIsM && rightIsM {
+			eq := leftM.Rows == rightM.Rows && leftM.Cols == rightM.Cols
+			if eq {
+				for i := 0; i < leftM.Rows; i++ {
+					for j := 0; j < leftM.Cols; j++ {
+						av, _ := numericValue(leftM.Data[i][j])
+						bv, _ := numericValue(rightM.Data[i][j])
+						if av != bv {
+							eq = false
+							break
+						}
+					}
+					if !eq {
+						break
+					}
+				}
+			}
+			if operator == "==" {
+				return nattiveBoolToBooleanObject(eq)
+			}
+			return nattiveBoolToBooleanObject(!eq)
+		}
+		if operator == "==" {
+			return FALSE
+		}
+		return TRUE
 	default:
 		return newError("unknown infix operator: %s %s %s", left.Type(), operator, right.Type())
 	}
 }
 
 func evalMatrixMatrixInfix(operator string, a, b *obj.Matrix) obj.Object {
+	if len(a.Data) != a.Rows || len(b.Data) != b.Rows {
+		return newError("matrix data corrupted: rows mismatch")
+	}
+	for i := 0; i < a.Rows; i++ {
+		if len(a.Data[i]) != a.Cols {
+			return newError("matrix data corrupted: cols mismatch")
+		}
+	}
+	for i := 0; i < b.Rows; i++ {
+		if len(b.Data[i]) != b.Cols {
+			return newError("matrix data corrupted: cols mismatch")
+		}
+	}
 	switch operator {
 	case "+", "-":
 		if a.Rows != b.Rows || a.Cols != b.Cols {
@@ -379,8 +443,14 @@ func evalMatrixMatrixInfix(operator string, a, b *obj.Matrix) obj.Object {
 		for i := 0; i < a.Rows; i++ {
 			row := make([]obj.Object, a.Cols)
 			for j := 0; j < a.Cols; j++ {
-				av, _ := numericValue(a.Data[i][j])
-				bv, _ := numericValue(b.Data[i][j])
+				av, ok := numericValue(a.Data[i][j])
+				if !ok {
+					return newError("matrix element not numeric, got %s", a.Data[i][j].Type())
+				}
+				bv, ok := numericValue(b.Data[i][j])
+				if !ok {
+					return newError("matrix element not numeric, got %s", b.Data[i][j].Type())
+				}
 				var v float64
 				if operator == "+" {
 					v = av + bv
@@ -403,8 +473,14 @@ func evalMatrixMatrixInfix(operator string, a, b *obj.Matrix) obj.Object {
 			for j := 0; j < b.Cols; j++ {
 				var sum float64
 				for k := 0; k < a.Cols; k++ {
-					av, _ := numericValue(a.Data[i][k])
-					bv, _ := numericValue(b.Data[k][j])
+					av, ok := numericValue(a.Data[i][k])
+					if !ok {
+						return newError("matrix element not numeric, got %s", a.Data[i][k].Type())
+					}
+					bv, ok := numericValue(b.Data[k][j])
+					if !ok {
+						return newError("matrix element not numeric, got %s", b.Data[k][j].Type())
+					}
 					sum += av * bv
 				}
 				row[j] = resultValue(sum, allInt)
@@ -412,12 +488,22 @@ func evalMatrixMatrixInfix(operator string, a, b *obj.Matrix) obj.Object {
 			data[i] = row
 		}
 		return &obj.Matrix{Rows: a.Rows, Cols: b.Cols, Data: data}
+	case "/":
+		return newError("matrix division not supported: use scalar division")
 	default:
 		return newError("unknown infix operator: %s %s %s", a.Type(), operator, b.Type())
 	}
 }
 
 func evalMatrixScalarInfix(operator string, m *obj.Matrix, scalar obj.Object) obj.Object {
+	if len(m.Data) != m.Rows {
+		return newError("matrix data corrupted: rows mismatch")
+	}
+	for i := 0; i < m.Rows; i++ {
+		if len(m.Data[i]) != m.Cols {
+			return newError("matrix data corrupted: cols mismatch")
+		}
+	}
 	if _, ok := numericValue(scalar); !ok {
 		return newError("matrix arithmetic requires numeric operand, got %s", scalar.Type())
 	}
@@ -426,7 +512,10 @@ func evalMatrixScalarInfix(operator string, m *obj.Matrix, scalar obj.Object) ob
 	for i := 0; i < m.Rows; i++ {
 		row := make([]obj.Object, m.Cols)
 		for j := 0; j < m.Cols; j++ {
-			mv, _ := numericValue(m.Data[i][j])
+			mv, ok := numericValue(m.Data[i][j])
+			if !ok {
+				return newError("matrix element not numeric, got %s", m.Data[i][j].Type())
+			}
 			sv, _ := numericValue(scalar)
 			var v float64
 			switch operator {
@@ -450,6 +539,14 @@ func evalMatrixScalarInfix(operator string, m *obj.Matrix, scalar obj.Object) ob
 }
 
 func evalScalarMatrixInfix(operator string, scalar obj.Object, m *obj.Matrix) obj.Object {
+	if len(m.Data) != m.Rows {
+		return newError("matrix data corrupted: rows mismatch")
+	}
+	for i := 0; i < m.Rows; i++ {
+		if len(m.Data[i]) != m.Cols {
+			return newError("matrix data corrupted: cols mismatch")
+		}
+	}
 	if _, ok := numericValue(scalar); !ok {
 		return newError("matrix arithmetic requires numeric operand, got %s", scalar.Type())
 	}
@@ -458,7 +555,10 @@ func evalScalarMatrixInfix(operator string, scalar obj.Object, m *obj.Matrix) ob
 	for i := 0; i < m.Rows; i++ {
 		row := make([]obj.Object, m.Cols)
 		for j := 0; j < m.Cols; j++ {
-			mv, _ := numericValue(m.Data[i][j])
+			mv, ok := numericValue(m.Data[i][j])
+			if !ok {
+				return newError("matrix element not numeric, got %s", m.Data[i][j].Type())
+			}
 			sv, _ := numericValue(scalar)
 			var v float64
 			switch operator {
@@ -499,7 +599,13 @@ func resultValue(v float64, isInt bool) obj.Object {
 }
 
 func matrixIsAllInteger(m *obj.Matrix) bool {
+	if len(m.Data) != m.Rows {
+		return false
+	}
 	for i := 0; i < m.Rows; i++ {
+		if len(m.Data[i]) != m.Cols {
+			return false
+		}
 		for j := 0; j < m.Cols; j++ {
 			if _, ok := m.Data[i][j].(*obj.Integer); !ok {
 				return false
@@ -597,6 +703,18 @@ func evalIfExpression(ie *ast.IfExpression, env *obj.Enviroment) obj.Object {
 func evalForExpression(fe *ast.ForExpression, env *obj.Enviroment) obj.Object {
 	loopEnv := obj.NewEnclosedEnviroment(env)
 
+	loopVarName := ""
+	if fe.Init != nil {
+		switch initStmt := fe.Init.(type) {
+		case *ast.LetStatement:
+			loopVarName = initStmt.Name.Value
+		case *ast.AssignStatement:
+			if ident, ok := initStmt.Left.(*ast.Identifier); ok {
+				loopVarName = ident.Value
+			}
+		}
+	}
+
 	if fe.Init != nil {
 		result := Eval(fe.Init, loopEnv)
 		if isError(result) {
@@ -621,6 +739,11 @@ func evalForExpression(fe *ast.ForExpression, env *obj.Enviroment) obj.Object {
 		}
 
 		bodyEnv := obj.NewEnclosedEnviroment(loopEnv)
+		if loopVarName != "" {
+			if val, ok := loopEnv.Get(loopVarName); ok {
+				bodyEnv.Set(loopVarName, val)
+			}
+		}
 		result := Eval(fe.Body, bodyEnv)
 		if result != nil {
 			switch result.Type() {
@@ -826,8 +949,14 @@ func applyFunction(fn obj.Object, args []obj.Object) obj.Object {
 		if len(args) != len(function.Parameters) {
 			return newError("wrong number of arguments. got=%d, want=%d", len(args), len(function.Parameters))
 		}
+		callDepth++
+		if callDepth > maxCallDepth {
+			callDepth--
+			return newError("maximum call depth exceeded")
+		}
 		extendedEnv := extendFunctonEnv(function, args)
 		eval := Eval(function.Body, extendedEnv)
+		callDepth--
 		return unwrapReturnValue(eval)
 	case *obj.Builtin:
 		return function.Fn(args...)
@@ -853,6 +982,9 @@ func evalStringInfixExpression(operator string, left, right obj.Object) obj.Obje
 }
 
 func evalIndexExpression(left, index obj.Object) obj.Object {
+	if index.Type() != obj.INTEGER_OBJ && (left.Type() == obj.ARRAY_OBJ || left.Type() == obj.MATRIX_OBJ) {
+		return newError("index operator requires integer index, got %s", index.Type())
+	}
 	switch {
 	case left.Type() == obj.ARRAY_OBJ && index.Type() == obj.INTEGER_OBJ:
 		return evalArrayIndexExpression(left, index)
@@ -873,7 +1005,10 @@ func evalMatrixIndexExpression(matrix, index obj.Object) obj.Object {
 		return NULL
 	}
 
-	return &obj.Array{Elements: matrixObj.Data[idx]}
+	row := matrixObj.Data[idx]
+	copied := make([]obj.Object, len(row))
+	copy(copied, row)
+	return &obj.Array{Elements: copied}
 }
 
 func evalArrayIndexExpression(array, index obj.Object) obj.Object {
@@ -929,6 +1064,90 @@ func evalIndexAssignment(idx *ast.IndexExpression, opt string, val obj.Object, e
 		}
 
 		return nil
+	}
+
+	if matrix, ok := left.(*obj.Matrix); ok {
+		i, ok := index.(*obj.Integer)
+		if !ok {
+			return newError("index assignment requires integer index, got %s", index.Type())
+		}
+		if i.Value < 0 || i.Value >= int64(matrix.Rows) {
+			return newError("index out of range: %d", i.Value)
+		}
+		if opt != "=" {
+			return newError("matrix row assignment only supports =, got %s", opt)
+		}
+		arr, ok := val.(*obj.Array)
+		if !ok {
+			return newError("matrix row assignment requires array, got %s", val.Type())
+		}
+		if len(arr.Elements) != matrix.Cols {
+			return newError("matrix row assignment dimension mismatch: got %d, want %d", len(arr.Elements), matrix.Cols)
+		}
+		for _, e := range arr.Elements {
+			if _, ok := e.(*obj.Integer); !ok {
+				if _, ok := e.(*obj.Float); !ok {
+					return newError("matrix row elements must be numeric, got %s", e.Type())
+				}
+			}
+		}
+		newRow := make([]obj.Object, matrix.Cols)
+		copy(newRow, arr.Elements)
+		matrix.Data[i.Value] = newRow
+		return nil
+	}
+
+	// Handle m[row][col] = val where m is Matrix (needs direct Data write, not via copied row)
+	if leftIdx, ok := idx.Left.(*ast.IndexExpression); ok {
+		matObj := Eval(leftIdx.Left, env)
+		if isError(matObj) {
+			return matObj
+		}
+		if mat, ok := matObj.(*obj.Matrix); ok {
+			rowIdxObj := Eval(leftIdx.Index, env)
+			if isError(rowIdxObj) {
+				return rowIdxObj
+			}
+			rowIdx, ok := rowIdxObj.(*obj.Integer)
+			if !ok {
+				return newError("index operator requires integer index, got %s", rowIdxObj.Type())
+			}
+			if rowIdx.Value < 0 || rowIdx.Value >= int64(mat.Rows) {
+				return newError("index out of range: %d", rowIdx.Value)
+			}
+			colIdx, ok := index.(*obj.Integer)
+			if !ok {
+				return newError("index operator requires integer index, got %s", index.Type())
+			}
+			if colIdx.Value < 0 || colIdx.Value >= int64(mat.Cols) {
+				return newError("index out of range: %d", colIdx.Value)
+			}
+			if _, ok := val.(*obj.Integer); !ok {
+				if _, ok := val.(*obj.Float); !ok {
+					return newError("matrix element must be numeric, got %s", val.Type())
+				}
+			}
+			switch opt {
+			case "=":
+				mat.Data[rowIdx.Value][colIdx.Value] = val
+			case "+=", "-=", "*=", "/=":
+				curr := mat.Data[rowIdx.Value][colIdx.Value]
+				result := evalInfixExpression(string(opt[0]), curr, val)
+				if isError(result) {
+					return result
+				}
+				if _, ok := result.(*obj.Integer); !ok {
+					if _, ok := result.(*obj.Float); !ok {
+						return newError("matrix element must be numeric, got %s", result.Type())
+					}
+				}
+				mat.Data[rowIdx.Value][colIdx.Value] = result
+				return nil
+			default:
+				return newError("unknown assignment operator: %s", opt)
+			}
+			return nil
+		}
 	}
 
 	array, ok := left.(*obj.Array)

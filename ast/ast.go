@@ -218,9 +218,13 @@ func (ie *InfixExpression) String() string {
 	var out bytes.Buffer
 
 	out.WriteString("(")
-	out.WriteString(ie.Left.String())
+	if ie.Left != nil {
+		out.WriteString(ie.Left.String())
+	}
 	out.WriteString(" " + ie.Opt + " ")
-	out.WriteString(ie.Right.String())
+	if ie.Right != nil {
+		out.WriteString(ie.Right.String())
+	}
 	out.WriteString(")")
 
 	return out.String()

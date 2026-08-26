@@ -170,8 +170,12 @@ func (l *Lexer) nextToken() tk.Token {
 			tok = newToken(tk.ILLEGAL, l.ch)
 		}
 	case '"':
-		tok.Type = tk.STRING
-		tok.Literal = l.readString()
+		lit, ok := l.readString()
+		if !ok {
+			tok = tk.Token{Type: tk.ILLEGAL, Literal: "unterminated string literal"}
+		} else {
+			tok = tk.Token{Type: tk.STRING, Literal: lit}
+		}
 	case 0:
 		tok.Literal = ""
 		tok.Type = tk.EOF
@@ -189,6 +193,11 @@ func (l *Lexer) nextToken() tk.Token {
 			return tok
 		} else if isDigit(l.ch) {
 			tok.Literal = l.readNumber()
+			// L1: empty 0x/0b/0o prefix with 0 digits -> ILLEGAL (hardened)
+			if len(tok.Literal) == 2 && (tok.Literal == "0x" || tok.Literal == "0X" || tok.Literal == "0b" || tok.Literal == "0B" || tok.Literal == "0o" || tok.Literal == "0O") {
+				tok.Type = tk.ILLEGAL
+				return tok
+			}
 			if strings.Contains(tok.Literal, ".") {
 				tok.Type = tk.FLOAT
 			} else {
@@ -215,6 +224,33 @@ func (l *Lexer) readIdentifier() string {
 
 func (l *Lexer) readNumber() string {
 	position := l.position
+
+	if l.ch == '0' {
+		peek := l.peekChar()
+		if peek == 'x' || peek == 'X' || peek == 'b' || peek == 'B' || peek == 'o' || peek == 'O' {
+			l.readChar()
+			l.readChar()
+			afterPrefix := l.position
+			switch peek {
+			case 'x', 'X':
+				for isHexDigit(l.ch) {
+					l.readChar()
+				}
+			case 'b', 'B':
+				for l.ch == '0' || l.ch == '1' {
+					l.readChar()
+				}
+			case 'o', 'O':
+				for '0' <= l.ch && l.ch <= '7' {
+					l.readChar()
+				}
+			}
+			// L1: if no valid digit after prefix (l.position == afterPrefix),
+			// return prefix literal as-is (e.g. "0x", "0b"); caller will emit ILLEGAL.
+			_ = afterPrefix
+			return l.input[position:l.position]
+		}
+	}
 
 	for isDigit(l.ch) {
 		l.readChar()
@@ -272,13 +308,24 @@ func (l *Lexer) skipWhitespaceAndComments() bool {
 		} else {
 			l.readChar()
 			l.readChar()
+			sawNewline := false
 			for l.ch != 0 && !(l.ch == '*' && l.peekChar() == '/') {
+				if l.ch == '\n' || l.ch == '\r' {
+					sawNewline = true
+				}
 				l.readChar()
+			}
+			// L2: unterminated block comment - loop terminates safely on EOF (l.ch == 0);
+			// ideally would emit ILLEGAL, but skipWhitespaceAndComments is not token-producing,
+			// so we just ensure no infinite loop / panic. Documented as safe.
+			if sawNewline {
+				crossedNewline = true
 			}
 			if l.ch == '*' {
 				l.readChar()
 				l.readChar()
 			}
+			// L2: if l.ch == 0 here, comment was unterminated (EOF without closing */) - handled as EOF
 		}
 	}
 
@@ -298,7 +345,7 @@ func lastTokenCanEndStatement(t tk.TokenType) bool {
 	}
 }
 
-func (l *Lexer) readString() string {
+func (l *Lexer) readString() (string, bool) {
 	l.readChar()
 
 	var sb strings.Builder
@@ -319,20 +366,27 @@ func (l *Lexer) readString() string {
 			case 'x':
 				l.readChar()
 				c1 := l.ch
-				l.readChar()
-				c2 := l.ch
-				hi, hiOK := hexVal(c1)
-				lo, loOK := hexVal(c2)
-				if hiOK && loOK {
-					sb.WriteByte(hi*16 + lo)
-				} else {
+				if c1 == '"' || c1 == 0 {
 					sb.WriteString(`\x`)
-					if c1 != 0 {
+					continue
+				}
+				_, hiOK := hexVal(c1)
+				if hiOK {
+					c2 := l.peekChar()
+					_, loOK := hexVal(c2)
+					if loOK {
+						l.readChar()
+						c2 = l.ch
+						hi, _ := hexVal(c1)
+						lo, _ := hexVal(c2)
+						sb.WriteByte(hi*16 + lo)
+					} else {
+						sb.WriteString(`\x`)
 						sb.WriteByte(c1)
 					}
-					if c2 != 0 {
-						sb.WriteByte(c2)
-					}
+				} else {
+					sb.WriteString(`\x`)
+					continue
 				}
 			case 0:
 				sb.WriteByte('\\')
@@ -347,7 +401,10 @@ func (l *Lexer) readString() string {
 		l.readChar()
 	}
 
-	return sb.String()
+	if l.ch == 0 {
+		return sb.String(), false
+	}
+	return sb.String(), true
 }
 
 func isLetter(ch byte) bool {
@@ -364,6 +421,11 @@ func hexVal(ch byte) (byte, bool) {
 		return ch - 'A' + 10, true
 	}
 	return 0, false
+}
+
+func isHexDigit(ch byte) bool {
+	_, ok := hexVal(ch)
+	return ok
 }
 
 func isDigit(ch byte) bool {

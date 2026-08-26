@@ -59,8 +59,13 @@ var builtins = map[string]*obj.Builtin{
 				valArgs[i] = objectToValue(arg)
 			}
 
-			fmt.Printf(format.Value, valArgs...)
-
+			var buf strings.Builder
+			_, _ = fmt.Fprintf(&buf, format.Value, valArgs...)
+			out := buf.String()
+			if strings.Contains(out, "%!") {
+				return newError("printf format error: verb/type mismatch or missing argument in %q -> %q", format.Value, out)
+			}
+			fmt.Print(out)
 			return NULL
 		},
 	},
@@ -449,13 +454,24 @@ var builtins = map[string]*obj.Builtin{
 			case *obj.Integer:
 				size = args[0].(*obj.Integer).Value
 			case *obj.Float:
-				size = int64(args[0].(*obj.Float).Value)
+				fVal := args[0].(*obj.Float).Value
+				if math.IsNaN(fVal) {
+					return newError("size to `make` must be integer, got NaN")
+				}
+				if math.IsInf(fVal, 0) {
+					return newError("size to `make` must be finite, got %v", fVal)
+				}
+				size = int64(fVal)
 			default:
 				return newError("first argument to `make` not an integer or float. got=%s", args[0].Type())
 			}
 
 			if size < 0 {
 				return newError("size to `make` must be non-negative. got=%d", size)
+			}
+			const maxArraySize int64 = 10000000
+			if size > maxArraySize {
+				return newError("size to `make` too large. got=%d, want <= %d", size, maxArraySize)
 			}
 			
 			fill := obj.Object(NULL)

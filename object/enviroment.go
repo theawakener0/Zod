@@ -4,17 +4,22 @@ package object
 type Enviroment struct {
 	store map[string]Object
 	outer *Enviroment
+	Depth int
 }
 
 func NewEnclosedEnviroment(outer *Enviroment) *Enviroment {
 	env := NewEnviroment()
-	env.outer = outer
+	// Depth is retained for potential future use but recursion now uses global callDepth in evaluator.
+	if outer != nil {
+		env.outer = outer
+		env.Depth = outer.Depth
+	}
 	return env
 }
 
 func NewEnviroment() *Enviroment {
 	s := make(map[string]Object)
-	return &Enviroment{store: s, outer: nil}
+	return &Enviroment{store: s, outer: nil, Depth: 0}
 }
 
 func (e *Enviroment) Get(name string) (Object, bool) {
