@@ -8,7 +8,12 @@ name: CI
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        arch: [amd64, arm64]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -17,6 +22,6 @@ jobs:
       - name: Vet
         run: go vet -composites=false ./...
       - name: Build
-        run: go build ./...
+        run: GOARCH=${{ matrix.arch }} go build ./...
       - name: Test
         run: go test ./...
