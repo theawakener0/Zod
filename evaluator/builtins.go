@@ -547,8 +547,11 @@ var builtins = map[string]*obj.Builtin{
 			}
 		},
 	},
-	"pi" : {
+	"pi": {
 		Fn: func(args ...obj.Object) obj.Object {
+			if len(args) != 0 {
+				return newError("wrong number of arguments. got=%d, want=0", len(args))
+			}
 			return &obj.Float{Value: math.Pi}
 		},
 	},

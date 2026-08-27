@@ -127,21 +127,7 @@ Index assignment works on arrays and hashes too: `nums[0] = 10`, `user["age"] +=
 | `println(...)`        | Print each argument on its own line            |
 | `printf(fmt, ...)`    | Formatted output (Go-style verbs)              |
 | `input(prompt)`       | Read a line of input from the user             |
-| `int(x)`              | Convert a string/bool to an integer            |
-| `float(x)`            | Convert a string/int to a float                |
-| `string(x)`           | Convert an int/bool to a string                |
 | `type(x)`             | Return the type name of `x`                    |
-| `first(arr)`          | First element of an array                      |
-| `last(arr)`           | Last element of an array                       |
-| `push(arr, x)`        | New array with `x` appended                    |
-| `pop(arr)`            | New array without its last element             |
-| `insert(hash, k, v)`  | New hash with `k: v` added                     |
-| `remove(hash, k)`     | New hash without key `k`                       |
-| `keys(hash)`          | Array of keys in a hash (insertion order)      |
-| `vals(hash)`          | Array of values in a hash (insertion order)    |
-| `contains(hash, k)`   | Whether a hash contains key `k`                |
-| `random()`            | Random float in `[0, 1)`                       |
-| `random(x)`           | Random integer in `[0, x)`                     |
 | `matrix(r, c, data)`  | Matrix with `r` rows and `c` cols from `data`  |
 | `make(size) / make(size, value)` | Create a new array with `size` elements, and value |
 | `color(color, text)`  | Change the color of `text` to `color`          |
@@ -152,52 +138,7 @@ Index assignment works on arrays and hashes too: `nums[0] = 10`, `user["age"] +=
 > [!NOTE]
 > The `color` function is still under development so it doesn't have many colors.
 
-### Matrices
-
-`matrix(r, c, data)` builds a `MATRIX` value (a row-major grid of integers or
-floats) from a flat `data` array whose length must equal `r * c`.
-
-```zod
-let a = matrix(2, 3, [1, 2, 3, 4, 5, 6])
-a[0]        // [1, 2, 3]  (first row)
-a[0][1]     // 2
-len(a)      // 2          (number of rows)
-```
-
-Matrices support element-wise `+` and `-` (same dimensions), scalar
-`+ - * /`, and matrix multiplication with `*` (columns of the left must match
-rows of the right). Mismatched dimensions raise an error.
-
-```zod
-let a = matrix(2, 3, [1, 2, 3, 4, 5, 6])
-let b = matrix(2, 3, [1, 1, 1, 1, 1, 1])
-println(a + b)             // [[2, 3, 4], [5, 6, 7]]
-println(a * 2)             // [[2, 4, 6], [8, 10, 12]]
-
-let c = matrix(3, 2, [7, 8, 9, 10, 11, 12])
-println(a * c)             // [[58, 64], [139, 154]]
-```
-
-### Error handling with `try()`
-
-`try(expr)` evaluates `expr` and always returns a two-element array
-`[ok, value]` instead of aborting the program:
-
-- On success it returns `[true, result]`.
-- On failure it returns `[false, "error message"]`.
-
-```zod
-let r = try(int("42"))
-println(r[0])              // true
-println(r[1])              // 42
-
-let r = try(int("abc"))
-if (r[0]) {
-    println("parsed:", r[1])
-} else {
-    println("failed:", r[1])   // failed: could not parse "abc" as integer
-}
-```
+for more details. Go to the [docs](docs/introduction.md).
 
 ## Acknowledgments
 
