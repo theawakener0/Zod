@@ -3,6 +3,7 @@ package parser
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/theawakener0/Zod/ast"
 	lx "github.com/theawakener0/Zod/lexer"
@@ -393,7 +394,15 @@ func (p *Parser) parseIdentifier() ast.Expression {
 func (p *Parser) parseIntegerLiteral() ast.Expression {
 	lit := &ast.IntegerLiteral{Token: p.curToken}
 
-	value, err := strconv.ParseInt(p.curToken.Literal, 0, 64)
+	literal := p.curToken.Literal
+	var value int64
+	var err error
+
+	if len(literal) >= 2 && literal[0] == '0' && strings.Contains("xXbBoO", string(literal[1])) {
+		value, err = strconv.ParseInt(literal, 0, 64)
+	} else {
+		value, err = strconv.ParseInt(literal, 10, 64)
+	}
 	if err != nil {
 		msg := fmt.Sprintf("could not parse %q as integer", p.curToken.Literal)
 		p.errors = append(p.errors, msg)

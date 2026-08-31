@@ -94,7 +94,15 @@ var builtins = map[string]*obj.Builtin{
 
 			switch arg := args[0].(type) {
 			case *obj.String:
-				val, err := strconv.ParseInt(arg.Value, 0, 64)
+				s := arg.Value
+				var val int64
+				var err error
+
+				if len(s) >= 2 && s[0] == '0' && strings.Contains("xXbBoO", string(s[1])) {
+					val, err = strconv.ParseInt(s, 0, 64)
+				} else {
+					val, err = strconv.ParseInt(s, 10, 64)
+				}
 				if err != nil {
 					return newError("could not parse %q as integer", arg.Value)
 				}
