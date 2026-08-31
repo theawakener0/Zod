@@ -59,6 +59,9 @@ func (c *Compiler) Compile (node ast.Node) error {
 	case *ast.IntegerLiteral:
 		integer := &obj.Integer{Value: node.Value}
 		c.emit(code.OpConstant, c.addConstant(integer))
+	case *ast.FloatLiteral:
+		float := &obj.Float{Value: node.Value}
+		c.emit(code.OpConstant, c.addConstant(float))
 	}
 	return nil
 }
