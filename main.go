@@ -28,13 +28,36 @@ func main() {
 		return
 	}
 
+
+	if len(os.Args) > 1 && os.Args[1] == "--eng=vm" {
+		if len(os.Args) > 2 {
+			source, err := os.ReadFile(os.Args[2])
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			repl.Execute(string(source), os.Stdout, os.Args[1])
+			return
+		}
+
+		user, err := user.Current()
+		if err != nil {
+			panic(err)
+		}
+
+		fmt.Printf("\x1b[0;34m%s\x1b[0m\n", Banner)
+		fmt.Printf("\nHello %s! Type the command here.\n", user.Username)
+
+		repl.Start(os.Stdin, os.Stdout, os.Args[1])
+	}
+
 	if len(os.Args) > 1 {
 		source, err := os.ReadFile(os.Args[1])
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		repl.Execute(string(source), os.Stdout)
+		repl.Execute(string(source), os.Stdout, "--eng=eval")
 		return
 	}
 
@@ -46,6 +69,6 @@ func main() {
 	fmt.Printf("\x1b[0;34m%s\x1b[0m\n", Banner)
 	fmt.Printf("\nHello %s! Type the command here.\n", user.Username)
 
-	repl.Start(os.Stdin, os.Stdout)
+	repl.Start(os.Stdin, os.Stdout, "--eng=eval")
 
 }

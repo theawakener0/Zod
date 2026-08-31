@@ -7,15 +7,17 @@ import (
 	"os"
 
 	ev "github.com/theawakener0/Zod/evaluator"
+	"github.com/theawakener0/Zod/compiler"
 	lx "github.com/theawakener0/Zod/lexer"
 	obj "github.com/theawakener0/Zod/object"
 	ps "github.com/theawakener0/Zod/parser"
+	"github.com/theawakener0/Zod/vm"
 )
 
 const PROMPT = "\x1b[0;32m>>\x1b[0m "
 
 
-func Start(in io.Reader, out io.Writer) {
+func Start(in io.Reader, out io.Writer, engine string) {
 	scanner := bufio.NewScanner(in)
 	env := obj.NewEnviroment()
 
@@ -37,16 +39,61 @@ func Start(in io.Reader, out io.Writer) {
 			os.Exit(0)
 		}
 
-		run(line, env, out)
+		if engine == "--eng=vm" {
+			runVM(line, out)
+			continue
+		}
+
+		if engine == "--eng=eval" {
+			runEval(line, env, out)
+			continue
+		}
+
 	}
 }
 
-func Execute(source string, out io.Writer) {
-	env := obj.NewEnviroment()
-	run(source, env, out)
+func runVM(source string, out io.Writer) {
+	l := lx.New(source)
+	p := ps.New(l)
+
+	program := p.ParseProgram()
+	if len(p.Errors()) != 0 {
+		printParseErrors(out, p.Errors())
+		return
+	}
+
+	comp := compiler.New()
+	err0 := comp.Compile(program)
+	if err0 != nil {
+		fmt.Fprintf(out, "Oh shit here we go again! Compilation failed:\n %s\n", err0)
+		return
+	}
+
+	machine := vm.New(comp.Bytecode())
+	err1 := machine.Run()
+	if err1 != nil {
+		fmt.Fprintf(out, "Oh shit here we go again! Executing bytecode failed:\n %s\n", err1)
+		return
+	}
+
+	stackTop := machine.StackTop()
+	io.WriteString(out, stackTop.Inspect())
+	io.WriteString(out, "\n")
 }
 
-func run(source string, env *obj.Enviroment, out io.Writer) {
+func Execute(source string, out io.Writer, engine string) {
+	env := obj.NewEnviroment()
+	if engine == "--eng=vm" {
+		runVM(source, out)
+		return
+	}
+	if engine == "--eng=eval" {
+		runEval(source, env, out)
+		return
+	}
+}
+
+func runEval(source string, env *obj.Enviroment, out io.Writer) {
 	l := lx.New(source)
 	p := ps.New(l)
 
