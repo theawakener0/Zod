@@ -39,7 +39,22 @@ func (c *Compiler) Compile (node ast.Node) error {
 		if err != nil {
 			return err
 		}
+		c.emit(code.OpPop)
 	case *ast.InfixExpression:
+		if node.Opt == "<" {
+			err0 := c.Compile(node.Right)
+			if err0 != nil {
+				return err0
+			}
+
+			err1 := c.Compile(node.Left)
+			if err1 != nil {
+				return err1
+			}
+
+			c.emit(code.OpGreaterThan)
+			return nil
+		}
 		err0 := c.Compile(node.Left)
 		if err0 != nil {
 			return err0
@@ -53,6 +68,32 @@ func (c *Compiler) Compile (node ast.Node) error {
 		switch node.Opt {
 		case "+":
 			c.emit(code.OpAdd)
+		case "-":
+			c.emit(code.OpSub)
+		case "*":
+			c.emit(code.OpMul)
+		case "/":
+			c.emit(code.OpDiv)
+		case ">":
+			c.emit(code.OpGreaterThan)
+		case "==":
+			c.emit(code.OpEqual)
+		case "!=":
+			c.emit(code.OpNotEqual)
+		default:
+			return fmt.Errorf("unknown operator %s", node.Opt)
+		}
+	case *ast.PrefixExpression:
+		err := c.Compile(node.Right)
+		if err != nil {
+			return err
+		}
+
+		switch node.Opt {
+		case "!":
+			c.emit(code.OpBang)
+		case "-":
+			c.emit(code.OpMinus)
 		default:
 			return fmt.Errorf("unknown operator %s", node.Opt)
 		}
@@ -62,6 +103,12 @@ func (c *Compiler) Compile (node ast.Node) error {
 	case *ast.FloatLiteral:
 		float := &obj.Float{Value: node.Value}
 		c.emit(code.OpConstant, c.addConstant(float))
+	case *ast.Boolean:
+		if node.Value {
+			c.emit(code.OpTrue)
+		} else {
+			c.emit(code.OpFalse)
+		}
 	}
 	return nil
 }

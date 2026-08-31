@@ -25,12 +25,175 @@ func TestIntergerArthimetic(t *testing.T) {
 				code.Make(code.OpConstant, 0),
 				code.Make(code.OpConstant, 1),
 				code.Make(code.OpAdd),
+				code.Make(code.OpPop),
+			},
+		},
+		{
+			input: "1.0 + 2.0",
+			expectedConstants: []any{1.0, 2.0},
+			expectedInstructions: []code.Instructions{
+				code.Make(code.OpConstant, 0),
+				code.Make(code.OpConstant, 1),
+				code.Make(code.OpAdd),
+				code.Make(code.OpPop),
+			},
+		},
+		{
+			input: "1; 2",
+			expectedConstants: []any{1, 2},
+			expectedInstructions: []code.Instructions{
+				code.Make(code.OpConstant, 0),
+				code.Make(code.OpPop),
+				code.Make(code.OpConstant, 1),
+				code.Make(code.OpPop),
+			},
+		},
+		{
+			input: "1.0; 2.0",
+			expectedConstants: []any{1.0, 2.0},
+			expectedInstructions: []code.Instructions{
+				code.Make(code.OpConstant, 0),
+				code.Make(code.OpPop),
+				code.Make(code.OpConstant, 1),
+				code.Make(code.OpPop),
+			},
+		},
+		{
+			input: "1 - 2",
+			expectedConstants: []any{1, 2},
+			expectedInstructions: []code.Instructions{
+				code.Make(code.OpConstant, 0),
+				code.Make(code.OpConstant, 1),
+				code.Make(code.OpSub),
+				code.Make(code.OpPop),
+			},
+		},
+		{
+			input: "1 * 2",
+			expectedConstants: []any{1, 2},
+			expectedInstructions: []code.Instructions{
+				code.Make(code.OpConstant, 0),
+				code.Make(code.OpConstant, 1),
+				code.Make(code.OpMul),
+				code.Make(code.OpPop),
+			},
+		},
+		{
+			input: "1.0 / 2",
+			expectedConstants: []any{1.0, 2},
+			expectedInstructions: []code.Instructions{
+				code.Make(code.OpConstant, 0),
+				code.Make(code.OpConstant, 1),
+				code.Make(code.OpDiv),
+				code.Make(code.OpPop),
+			},
+		},
+		{
+			input: "-1",
+			expectedConstants: []any{1},
+			expectedInstructions: []code.Instructions{
+				code.Make(code.OpConstant, 0),
+				code.Make(code.OpMinus),
+				code.Make(code.OpPop),
 			},
 		},
 	}
 
 	runCompilerTests(t, tests)
 }
+
+func TestBooleanExpressions(t *testing.T) {
+	tests := []compilerTestCase{
+		{
+			input: "true",
+			expectedConstants: []any{},
+			expectedInstructions: []code.Instructions{
+				code.Make(code.OpTrue),
+				code.Make(code.OpPop),
+			},
+		},
+		{
+			input: "false",
+			expectedConstants: []any{},
+			expectedInstructions: []code.Instructions{
+				code.Make(code.OpFalse),
+				code.Make(code.OpPop),
+			},
+		},
+		{
+			input: "1 > 2",
+			expectedConstants: []any{1, 2},
+			expectedInstructions: []code.Instructions{
+				code.Make(code.OpConstant, 0),
+				code.Make(code.OpConstant, 1),
+				code.Make(code.OpGreaterThan),
+				code.Make(code.OpPop),
+			},
+		},
+		{
+			input: "1 < 2",
+			expectedConstants: []any{2, 1},
+			expectedInstructions: []code.Instructions{
+				code.Make(code.OpConstant, 0),
+				code.Make(code.OpConstant, 1),
+				code.Make(code.OpGreaterThan),
+				code.Make(code.OpPop),
+			},
+		},
+		{
+			input: "1 == 2",
+			expectedConstants: []any{1, 2},
+			expectedInstructions: []code.Instructions{
+				code.Make(code.OpConstant, 0),
+				code.Make(code.OpConstant, 1),
+				code.Make(code.OpEqual),
+				code.Make(code.OpPop),
+			},
+		},
+		{
+			input: "1 != 2",
+			expectedConstants: []any{1, 2},
+			expectedInstructions: []code.Instructions{
+				code.Make(code.OpConstant, 0),
+				code.Make(code.OpConstant, 1),
+				code.Make(code.OpNotEqual),
+				code.Make(code.OpPop),
+			},
+		},
+		{
+			input: "true == false",
+			expectedConstants: []any{},
+			expectedInstructions: []code.Instructions{
+				code.Make(code.OpTrue),
+				code.Make(code.OpFalse),
+				code.Make(code.OpEqual),
+				code.Make(code.OpPop),
+			},
+		},
+		{
+			input: "true != false",
+			expectedConstants: []any{},
+			expectedInstructions: []code.Instructions{
+				code.Make(code.OpTrue),
+				code.Make(code.OpFalse),
+				code.Make(code.OpNotEqual),
+				code.Make(code.OpPop),
+			},
+		},
+		{
+			input: "!true",
+			expectedConstants: []any{},
+			expectedInstructions: []code.Instructions{
+				code.Make(code.OpTrue),
+				code.Make(code.OpBang),
+				code.Make(code.OpPop),
+			},
+		},
+	}
+
+	runCompilerTests(t, tests)
+}
+
 
 func runCompilerTests(t *testing.T, tests []compilerTestCase) {
 	t.Helper()

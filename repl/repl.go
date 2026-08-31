@@ -76,8 +76,8 @@ func runVM(source string, out io.Writer) {
 		return
 	}
 
-	stackTop := machine.StackTop()
-	io.WriteString(out, stackTop.Inspect())
+	LastPopped := machine.LastPoppedStackElem()
+	io.WriteString(out, LastPopped.Inspect())
 	io.WriteString(out, "\n")
 }
 
