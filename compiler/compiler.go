@@ -55,6 +55,20 @@ func (c *Compiler) Compile (node ast.Node) error {
 			c.emit(code.OpGreaterThan)
 			return nil
 		}
+		if node.Opt == "<=" {
+			err0 := c.Compile(node.Right)
+			if err0 != nil {
+				return err0
+			}
+
+			err1 := c.Compile(node.Left)
+			if err1 != nil {
+				return err1
+			}
+
+			c.emit(code.OpGreaterThanEqual)
+			return nil
+		}
 		err0 := c.Compile(node.Left)
 		if err0 != nil {
 			return err0
@@ -80,6 +94,8 @@ func (c *Compiler) Compile (node ast.Node) error {
 			c.emit(code.OpEqual)
 		case "!=":
 			c.emit(code.OpNotEqual)
+		case ">=":
+			c.emit(code.OpGreaterThanEqual)
 		default:
 			return fmt.Errorf("unknown operator %s", node.Opt)
 		}

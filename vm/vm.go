@@ -81,7 +81,7 @@ func (vm *VM) Run() error {
 			if err != nil {
 				return err
 			}
-		case code.OpEqual, code.OpNotEqual, code.OpGreaterThan:
+		case code.OpEqual, code.OpNotEqual, code.OpGreaterThan, code.OpGreaterThanEqual:
 			err := vm.executeComparison(op)
 			if err != nil {
 				return err
@@ -204,6 +204,8 @@ func (vm *VM) executeBinaryComparison(op code.Opcode, left, right obj.Object) er
 		return vm.push(nativeBoolToBooleanObj(rightVal != leftVal))
 	case code.OpGreaterThan:
 		return vm.push(nativeBoolToBooleanObj(leftVal > rightVal))
+	case code.OpGreaterThanEqual:
+		return vm.push(nativeBoolToBooleanObj(leftVal >= rightVal))
 	}
 
 	return fmt.Errorf("unknown operation: %s", string(op))
