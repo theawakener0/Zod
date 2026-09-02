@@ -13,6 +13,7 @@ const StackSize = 2048
 
 var True = &obj.Boolean{Value: true}
 var False = &obj.Boolean{Value: false}
+var Null = &obj.Null{}
 
 type VM struct {
 	constant		[]obj.Object
@@ -96,7 +97,24 @@ func (vm *VM) Run() error {
 			if err != nil {
 				return err
 			}
+		case code.OpJump:
+			pos := int(binary.BigEndian.Uint16(vm.instructions[ip+1:]))
+			ip = pos - 1
+		case code.OpJumpNotTruthy:
+			pos := int(binary.BigEndian.Uint16(vm.instructions[ip+1:]))
+			ip += 2
+
+			condition := vm.pop()
+			if !isTruthy(condition) {
+				ip = pos - 1
+			}
+		case code.OpNull:
+			err := vm.push(Null)
+			if err != nil {
+				return  err
+			}
 		}
+		
 	}
 
 	return nil
@@ -238,6 +256,8 @@ func (vm *VM) executeBangOperator() error {
 		return vm.push(False)
 	case False:
 		return vm.push(True)
+	case Null:
+		return vm.push(True)
 	default:
 		return vm.push(False)
 	}
@@ -261,6 +281,17 @@ func (vm *VM) executeMinusOperator() error {
 	}
 	
 	return fmt.Errorf("unsupported type for negation: %s", operand.Type())
+}
+
+func isTruthy(o obj.Object) bool {
+	switch o := o.(type) {
+	case *obj.Boolean:
+		return o.Value
+	case *obj.Null:
+		return false
+	default:
+		return true
+	}
 }
 
 

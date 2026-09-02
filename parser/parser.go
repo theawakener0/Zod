@@ -356,9 +356,6 @@ func isAssignOp(tok tk.TokenType) bool {
 	}
 }
 
-// skipPeekSemicolons advances over semicolons that were auto-inserted at a
-// line break (their Literal is "\n"). Explicit ";" tokens are never skipped,
-// so statement boundaries in user code are preserved.
 func (p *Parser) skipPeekSemicolons() {
 	for p.peekTokenIs(tk.SEMICOLON) && p.peekToken.Literal == "\n" {
 		p.nextToken()
