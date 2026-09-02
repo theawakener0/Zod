@@ -21,6 +21,10 @@ func Start(in io.Reader, out io.Writer, engine string) {
 	scanner := bufio.NewScanner(in)
 	env := obj.NewEnviroment()
 
+	constants := []obj.Object{}
+	globals := make([]obj.Object, vm.GlobalsSize)
+	symbolTable := compiler.NewSymbolTable()
+
 	for {
 		fmt.Printf(PROMPT)
 
@@ -40,7 +44,7 @@ func Start(in io.Reader, out io.Writer, engine string) {
 		}
 
 		if engine == "--eng=vm" {
-			runVM(line, out)
+			runVM(line, out, constants, globals, symbolTable)
 			continue
 		}
 
@@ -52,7 +56,7 @@ func Start(in io.Reader, out io.Writer, engine string) {
 	}
 }
 
-func runVM(source string, out io.Writer) {
+func runVM(source string, out io.Writer, constants []obj.Object, globals []obj.Object, symbolTable *compiler.SymbolTable) {
 	l := lx.New(source)
 	p := ps.New(l)
 
@@ -62,14 +66,14 @@ func runVM(source string, out io.Writer) {
 		return
 	}
 
-	comp := compiler.New()
+	comp := compiler.NewWithState(symbolTable, constants)
 	err0 := comp.Compile(program)
 	if err0 != nil {
 		fmt.Fprintf(out, "Oh shit here we go again! Compilation failed:\n %s\n", err0)
 		return
 	}
 
-	machine := vm.New(comp.Bytecode())
+	machine := vm.NewWithGlobalsStore(comp.Bytecode(), globals)
 	err1 := machine.Run()
 	if err1 != nil {
 		fmt.Fprintf(out, "Oh shit here we go again! Executing bytecode failed:\n %s\n", err1)
@@ -82,12 +86,17 @@ func runVM(source string, out io.Writer) {
 }
 
 func Execute(source string, out io.Writer, engine string) {
-	env := obj.NewEnviroment()
 	if engine == "--eng=vm" {
-		runVM(source, out)
+		constants := []obj.Object{}
+		globals := make([]obj.Object, vm.GlobalsSize)
+		symbolTable := compiler.NewSymbolTable()
+
+		runVM(source, out, constants, globals, symbolTable)
 		return
 	}
 	if engine == "--eng=eval" {
+		env := obj.NewEnviroment()
+
 		runEval(source, env, out)
 		return
 	}
