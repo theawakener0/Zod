@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/theawakener0/Zod/ast"
 	"github.com/theawakener0/Zod/code"
@@ -210,6 +211,50 @@ func (c *Compiler) Compile (node ast.Node) error {
 	case *ast.FloatLiteral:
 		float := &obj.Float{Value: node.Value}
 		c.emit(code.OpConstant, c.addConstant(float))
+	case *ast.StringLiteral:
+		str := &obj.String{Value: node.Value}
+		c.emit(code.OpConstant, c.addConstant(str))
+	case *ast.ArrayLiteral:
+		for _, ele := range node.Elements {
+			err := c.Compile(ele)
+			if err != nil {
+				return err
+			}
+		}
+		c.emit(code.OpArray, len(node.Elements))
+	case *ast.HashLiteral:
+		pairs := make([]ast.HashLiteralPair, len(node.Pairs))
+		copy(pairs, node.Pairs)
+
+		sort.Slice(pairs, func(i, j int) bool {
+			return pairs[i].Key.String() < pairs[j].Key.String()
+		})
+
+		for _, pairs := range pairs {
+			err0 := c.Compile(pairs.Key)
+			if err0 != nil {
+				return err0
+			}
+
+			err1 := c.Compile(pairs.Value)
+			if err1 != nil {
+				return err1
+			}
+		}
+		
+		c.emit(code.OpHash, len(node.Pairs)*2)
+	case *ast.IndexExpression:
+		err0 := c.Compile(node.Left)
+		if err0 != nil {
+			return err0
+		}
+
+		err1 := c.Compile(node.Index)
+		if err1 != nil {
+			return err1
+		}
+
+		c.emit(code.OpIndex)
 	case *ast.Boolean:
 		if node.Value {
 			c.emit(code.OpTrue)
