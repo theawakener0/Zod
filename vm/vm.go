@@ -353,6 +353,7 @@ func (vm *VM) buildArray(startIndex, endIndex int) obj.Object {
 
 func (vm *VM) buildHash(startIndex, endIndex int) (obj.Object, error) {
 	hashedPairs := make(map[obj.HashKey]obj.HashPair)
+	order := make([]obj.HashKey, 0, (endIndex-startIndex)/2)
 
 	for i := startIndex; i < endIndex; i += 2 {
 		key := vm.stack[i]
@@ -365,10 +366,14 @@ func (vm *VM) buildHash(startIndex, endIndex int) (obj.Object, error) {
 			return nil, fmt.Errorf("unusable as hash key: %s", key.Type())
 		}
 
-		hashedPairs[hashKey.HashKey()] = pair
+		hashed := hashKey.HashKey()
+		if _, exists := hashedPairs[hashed]; !exists {
+			order = append(order, hashed)
+		}
+		hashedPairs[hashed] = pair
 	}
 
-	return &obj.Hash{Pairs: hashedPairs}, nil
+	return &obj.Hash{Pairs: hashedPairs, Order: order}, nil
 }
 
 func (vm *VM) executeArrayIndex(array, index obj.Object) error {

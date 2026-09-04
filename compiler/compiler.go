@@ -2,7 +2,6 @@ package compiler
 
 import (
 	"fmt"
-	"sort"
 
 	"github.com/theawakener0/Zod/ast"
 	"github.com/theawakener0/Zod/code"
@@ -223,14 +222,7 @@ func (c *Compiler) Compile (node ast.Node) error {
 		}
 		c.emit(code.OpArray, len(node.Elements))
 	case *ast.HashLiteral:
-		pairs := make([]ast.HashLiteralPair, len(node.Pairs))
-		copy(pairs, node.Pairs)
-
-		sort.Slice(pairs, func(i, j int) bool {
-			return pairs[i].Key.String() < pairs[j].Key.String()
-		})
-
-		for _, pairs := range pairs {
+		for _, pairs := range node.Pairs {
 			err0 := c.Compile(pairs.Key)
 			if err0 != nil {
 				return err0

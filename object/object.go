@@ -3,10 +3,11 @@ package object
 import (
 	"bytes"
 	"fmt"
+	"hash/fnv"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
-	"hash/fnv"
 
 	"github.com/theawakener0/Zod/ast"
 )
@@ -278,9 +279,28 @@ func (h *Hash) Inspect() string {
 	var out bytes.Buffer
 
 	pairs := make([]string, 0, len(h.Pairs))
-	for _, key := range h.Order {
-		pair := h.Pairs[key]
-		pairs = append(pairs, fmt.Sprintf("%s: %s", pair.Key.Inspect(), pair.Value.Inspect()))
+	if len(h.Order) == 0 && len(h.Pairs) > 0 {
+		// Fallback for hashes built without Order 
+		// Sort by rendered key for deterministic output.
+		rendered := make([]string, 0, len(h.Pairs))
+		byRendered := make(map[string]HashPair, len(h.Pairs))
+		for _, pair := range h.Pairs {
+			r := pair.Key.Inspect()
+			if _, exists := byRendered[r]; !exists {
+				rendered = append(rendered, r)
+				byRendered[r] = pair
+			}
+		}
+		sort.Strings(rendered)
+		for _, r := range rendered {
+			pair := byRendered[r]
+			pairs = append(pairs, fmt.Sprintf("%s: %s", pair.Key.Inspect(), pair.Value.Inspect()))
+		}
+	} else {
+		for _, key := range h.Order {
+			pair := h.Pairs[key]
+			pairs = append(pairs, fmt.Sprintf("%s: %s", pair.Key.Inspect(), pair.Value.Inspect()))
+		}
 	}
 
 	out.WriteString("{")
