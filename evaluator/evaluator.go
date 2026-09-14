@@ -9,9 +9,9 @@ import (
 )
 
 var (
-	NULL  = &obj.Null{}
-	TRUE  = &obj.Boolean{Value: true}
-	FALSE = &obj.Boolean{Value: false}
+	NULL  = obj.NULL
+	TRUE  = obj.TRUE
+	FALSE = obj.FALSE
 )
 
 var callDepth int
@@ -888,8 +888,8 @@ func evalIdentifier(node *ast.Identifier, env *obj.Enviroment) obj.Object {
 		return val
 	}
 
-	if builtin, ok := builtins[node.Value]; ok {
-		return builtin
+	if b := GetBuiltinByName(node.Value); b != nil {
+		return b
 	}
 
 	return newError("identifier not found: %s", node.Value)

@@ -33,6 +33,12 @@ const (
 	OpArray
 	OpHash
 	OpIndex
+	OpCall
+	OpReturnValue
+	OpReturn
+	OpGetLocal
+	OpSetLocal
+	OpGetBuiltin
 )
 
 type Definition struct {
@@ -129,6 +135,30 @@ var definition = map[Opcode]*Definition {
 		Name: "OpIndex",
 		OperandWidths: []int{},
 	},
+	OpCall: {
+		Name: "OpCall",
+		OperandWidths: []int{1},
+	},
+	OpReturnValue: {
+		Name: "OpReturnValue",
+		OperandWidths: []int{},
+	},
+	OpReturn: {
+		Name: "OpReturn",
+		OperandWidths: []int{},
+	},
+	OpGetLocal: {
+		Name: "OpGetLocal",
+		OperandWidths: []int{1},
+	},
+	OpSetLocal: {
+		Name: "OpSetLocal",
+		OperandWidths: []int{1},
+	},
+	OpGetBuiltin: {
+		Name: "OpGetBuiltin",
+		OperandWidths: []int{1},
+	},
 }
 
 func Lookup(op byte) (*Definition, error) {
@@ -160,6 +190,8 @@ func Make(op Opcode, operands ...int) []byte {
 		switch width {
 		case 2:
 			binary.BigEndian.PutUint16(instruction[offset:], uint16(w))
+		case 1:
+			instruction[offset] = byte(w)
 		}
 		offset += width
 	}
@@ -196,6 +228,8 @@ func ReadOperands(def *Definition, ins Instructions) ([]int, int) {
 		switch width {
 		case 2:
 			operands[i] = int(binary.BigEndian.Uint16(ins[offset:]))
+		case 1:
+			operands[i] = int(ReadUnit8(ins[offset:]))
 		}
 
 		offset += width
@@ -220,5 +254,7 @@ func (ins Instructions) fmtInstructions(def *Definition, operands []int) string 
 
 	return fmt.Sprintf("ERROR: unhandled operandCount for %s\n", def.Name)
 }
+
+func ReadUnit8(ins Instructions) uint8 { return uint8(ins[0]) } 
 
 

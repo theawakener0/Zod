@@ -159,6 +159,247 @@ func TestIndexExpressions(t *testing.T) {
 	runVMTests(t, tests)
 }
 
+func TestCallingFunctionWithoutArguments(t *testing.T) {
+	tests := []vmTestCase{
+		{
+			input: "fivePlusTen := fn() { 5 + 10 }; fivePlusTen();",
+			expected: 15,
+		},
+		{
+			input: "one := fn() { 1 }; two := fn() { 2 }; one() + two()",
+			expected: 3,
+		},
+		{
+			input: "let a = fn() { 1 }; b := fn() { a() + 1}; let c = fn() { b() + 1 }; c();",
+			expected: 3,
+		},
+	}
+
+	runVMTests(t, tests)
+}
+
+func TestFunctionWithReturnStatement(t *testing.T) {
+	tests := []vmTestCase {
+		{
+			input: "let earlyExit = fn() {return 99; 100}; earlyExit();",
+			expected: 99,
+		},
+		{
+			input: "let earlyExit = fn() {return 99; return 100}; earlyExit();",
+			expected: 99,
+		},
+	}
+
+	runVMTests(t, tests)
+}
+
+func TestFunctionWithoutReturnStatement(t *testing.T) {
+	tests := []vmTestCase{
+		{
+			input: "let noReturn = fn() { }; noReturn()",
+			expected: Null,
+		},
+		{
+			input: "let noReturn = fn() { }; noReturnTwo := fn() { noReturn() }; noReturnTwo(); noReturn()",
+			expected: Null,
+		},
+	}
+
+	runVMTests(t, tests)
+}
+
+func TestFirstClassFunctions(t *testing.T) {
+	tests := []vmTestCase{
+		{
+			input: "let returnsOne = fn() { 1 }; returnsOneReturner := fn() { returnsOne }; returnsOneReturner()();",
+			expected: 1,
+		},
+	}
+
+	runVMTests(t, tests)
+}
+
+func TestCallingFunctionsWithBindings(t *testing.T) {
+	tests := []vmTestCase{
+		{
+			input: "let one = fn() { one := 1; one }; one();",
+			expected: 1,
+		},
+		{
+			input: "let oneAndTwo = fn() { let one = 1; two := 2; one + two }; oneAndTwo();",
+			expected: 3,
+		},
+		{
+			input: "let oneAndTwo = fn() { let one = 1; let two = 2; one + two; }; let threeAndFour = fn() { let three = 3; let four = 4; three + four; }; oneAndTwo() + threeAndFour();",
+			expected: 10,
+		},
+		{
+			input: "let firstFoobar = fn() { let foobar = 50; foobar; }; let secondFoobar = fn() { let foobar = 100; foobar; }; firstFoobar() + secondFoobar();",
+			expected: 150,
+		},
+		{
+			input: "let globalSeed = 50; let minusOne = fn() { let num = 1; globalSeed - num; } let minusTwo = fn() { let num = 2; globalSeed - num; } minusOne() + minusTwo();",
+			expected: 97,
+		},
+	}
+
+	runVMTests(t, tests)
+}
+
+
+func TestCallingFunctionsWithArgumentsAndBindings(t *testing.T) {
+	tests := []vmTestCase{
+		{
+			input: "let identity = fn(a) { a; }; identity(4)",
+			expected: 4,
+		},
+		{
+			input: "sum := fn(a, b) { a + b }; sum(1, 2)",
+			expected: 3,
+		},
+		{
+			input: "sum := fn(a, b) { let c = a + b; c }; sum(1, 2);",
+			expected: 3,
+		},
+		{
+			input: "let sum = fn(a, b) { c := a + b; c }; sum(1, 2) + sum(3, 4);",
+			expected: 10,
+		},
+		{
+			input: "sum := fn(a, b) { let c = a + b; c }; outer := fn() { sum(1, 2) + sum(3, 4) }; outer()",
+			expected: 10,
+		},
+	}
+
+	runVMTests(t, tests)
+}
+
+func TestCallingFunctionsWithWrongArguments(t *testing.T) {
+	tests := []vmTestCase{
+		{
+			input: "fn() { 1 }(1);",
+			expected: "wrong number of arguments: want=0, got=1",
+		},
+		{
+			input: "fn(a) { a }();",
+			expected: "wrong number of arguments: want=1, got=0",
+		},
+		{
+			input: "fn(a, b) { a + b }(1);",
+			expected: "wrong number of arguments: want=2, got=1",
+		},
+	}
+
+	for _, tt := range tests {
+		program := parse(tt.input)
+
+		comp := compiler.New()
+		err := comp.Compile(program)
+		if err != nil {
+			t.Fatalf("compiler error: %s", err)
+		}
+
+		vm := New(comp.Bytecode())
+		err = vm.Run()
+		if err == nil {
+			t.Fatalf("expected VM error but resulted in none.")
+		}
+
+		if err.Error() != tt.expected {
+			t.Errorf("wrong VM error: want=%q, got=%q", tt.expected, err)
+		}
+	}
+}
+
+func TestBuiltinFunctions(t *testing.T) {
+	tests := []vmTestCase{
+		{
+			input: `len("")`,
+			expected: 0,
+		},
+		{
+			input: `len("four")`, 
+			expected: 4,
+		},
+		{
+			input: `len("hello world")`,
+			expected: 11,
+		},
+		{
+			input :`len(1)`,
+			expected: &obj.Error{
+				Message: "argument to `len` not supported. got=INTEGER",
+			},
+		},
+		{
+			input: `len("one", "two")`,
+			expected: &obj.Error{
+				Message: "wrong number of arguments. got=2, want=1",
+			},
+		},
+		{
+			input: `len([1, 2, 3])`,
+			expected: 3,
+		},
+		{
+			input: `len([])`, 
+			expected: 0,
+		},
+		{
+			input: `println("hello", "world!")`,
+			expected: Null,
+		},
+		{
+			input: `first([1, 2, 3])`, 
+			expected: 1,
+		},
+		{
+			input: `first([])`, 
+			expected: Null,
+		},
+		{
+			input : `first(1)`,
+			expected: &obj.Error{
+				Message: "argument to `first` not supported. got=INTEGER",
+			},
+		},
+		{
+			input: `last([1, 2, 3])`, 
+			expected: 3,
+		},
+		{
+			input: `last([])`, 
+			expected: Null,
+		},
+		{
+			input: `last(1)`,
+			expected: &obj.Error{
+				Message: "argument to `last` not supported. got=INTEGER",
+			},
+		},
+		{
+			input: `pop([1, 2, 3])`,
+			expected: []int{1, 2},
+		},
+		{
+			input: `pop([])`,
+			expected: Null,
+		},
+		{
+			input: `push([], 1)`, 
+			expected: []int{1},
+		},
+		{
+			input: `push(1, 1)`,
+			expected: &obj.Error{
+				Message: "argument to `push` not supported. got=INTEGER",
+			},
+		},
+	}
+
+	runVMTests(t, tests)
+}
+
 func runVMTests(t *testing.T, tests []vmTestCase) {
 	t.Helper()
 
@@ -244,6 +485,15 @@ func testExpectedObject(
 			if err != nil {
 				t.Errorf("testIntegerObject failed: %s", err)
 			}
+		}
+	case *obj.Error:
+		errObj, ok := actual.(*obj.Error)
+		if !ok {
+			t.Errorf("object is not Error. got=%T (%+v)", actual, actual)
+			return
+		}
+		if errObj.Message != expected.Message {
+			t.Errorf("wrong error message. expected=%q, got=%q", expected.Message, errObj.Message)
 		} 
 	case *obj.Null:
 		if actual != Null {

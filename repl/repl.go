@@ -24,6 +24,9 @@ func Start(in io.Reader, out io.Writer, engine string) {
 	constants := []obj.Object{}
 	globals := make([]obj.Object, vm.GlobalsSize)
 	symbolTable := compiler.NewSymbolTable()
+	for i, v := range obj.Builtins {
+		symbolTable.DefineBuiltin(i, v.Name)
+	}
 
 	for {
 		fmt.Printf(PROMPT)
@@ -44,7 +47,7 @@ func Start(in io.Reader, out io.Writer, engine string) {
 		}
 
 		if engine == "--eng=vm" {
-			runVM(line, out, constants, globals, symbolTable)
+			constants = runVM(line, out, constants, globals, symbolTable)
 			continue
 		}
 
@@ -56,33 +59,37 @@ func Start(in io.Reader, out io.Writer, engine string) {
 	}
 }
 
-func runVM(source string, out io.Writer, constants []obj.Object, globals []obj.Object, symbolTable *compiler.SymbolTable) {
+func runVM(source string, out io.Writer, constants []obj.Object, globals []obj.Object, symbolTable *compiler.SymbolTable) []obj.Object {
 	l := lx.New(source)
 	p := ps.New(l)
 
 	program := p.ParseProgram()
 	if len(p.Errors()) != 0 {
 		printParseErrors(out, p.Errors())
-		return
+		return constants
 	}
 
 	comp := compiler.NewWithState(symbolTable, constants)
 	err0 := comp.Compile(program)
 	if err0 != nil {
 		fmt.Fprintf(out, "Oh shit here we go again! Compilation failed:\n %s\n", err0)
-		return
+		return constants
 	}
 
-	machine := vm.NewWithGlobalsStore(comp.Bytecode(), globals)
+	bytecode := comp.Bytecode()
+
+	machine := vm.NewWithGlobalsStore(bytecode, globals)
 	err1 := machine.Run()
 	if err1 != nil {
 		fmt.Fprintf(out, "Oh shit here we go again! Executing bytecode failed:\n %s\n", err1)
-		return
+		return bytecode.Constant
 	}
 
 	LastPopped := machine.LastPoppedStackElem()
 	io.WriteString(out, LastPopped.Inspect())
 	io.WriteString(out, "\n")
+
+	return bytecode.Constant
 }
 
 func Execute(source string, out io.Writer, engine string) {
@@ -90,6 +97,9 @@ func Execute(source string, out io.Writer, engine string) {
 		constants := []obj.Object{}
 		globals := make([]obj.Object, vm.GlobalsSize)
 		symbolTable := compiler.NewSymbolTable()
+		for i, v := range obj.Builtins {
+			symbolTable.DefineBuiltin(i, v.Name)
+		}
 
 		runVM(source, out, constants, globals, symbolTable)
 		return
