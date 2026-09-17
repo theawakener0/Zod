@@ -123,7 +123,11 @@ func (c *Compiler) Compile (node ast.Node) error {
 		}
 	case *ast.FunctionLiteral:
 		c.enterScope()
-	
+
+		if node.Name != "" {
+			c.symbolTable.DefineFunctionName(node.Name)
+		}
+
 		for _, param := range node.Parameters {
 			c.symbolTable.Define(param.Value)
 		}
@@ -141,11 +145,17 @@ func (c *Compiler) Compile (node ast.Node) error {
 			c.emit(code.OpReturn)
 		}
 
+		freeSymbols := c.symbolTable.FreeSymbols
 		numLocals := c.symbolTable.numDefinitions
 		instructions := c.leaveScope()
 
+		for _, s := range freeSymbols {
+			c.loadSymbol(s)
+		}
+
 		compiledFn := &obj.CompiledFunction{Instructions: instructions, NumLocals: numLocals, NumParams: len(node.Parameters)}
-		c.emit(code.OpConstant, c.addConstant(compiledFn))
+		fnIndex := c.addConstant(compiledFn)
+		c.emit(code.OpClosure, fnIndex, len(freeSymbols))
 	case *ast.ReturnStatement:
 		err := c.Compile(node.ReturnValue)
 		if err != nil {
@@ -168,21 +178,17 @@ func (c *Compiler) Compile (node ast.Node) error {
 
 		c.emit(code.OpCall, len(node.Arguments))
 	case *ast.LetStatement:
+		symbol := c.symbolTable.Define(node.Name.Value)
 		err := c.Compile(node.Value)
 		if err != nil {
 			return err
 		}
-		symbol := c.symbolTable.Define(node.Name.Value)
 		if symbol.Scope == GlobalScope {
 			c.emit(code.OpSetGlobal, symbol.Index)
 		} else {
 			c.emit(code.OpSetLocal, symbol.Index)
 		}
 	case *ast.AssignStatement:
-		err := c.Compile(node.Value)
-		if err != nil {
-			return err
-		}
 		ident, ok := node.Left.(*ast.Identifier)
 		if !ok {
 			return fmt.Errorf("only identifier assignment supported, got %T", node.Left)
@@ -190,6 +196,10 @@ func (c *Compiler) Compile (node ast.Node) error {
 		switch node.Token.Literal {
 		case ":=":
 			symbol := c.symbolTable.DefineIfNotExists(ident.Value)
+			err := c.Compile(node.Value)
+			if err != nil {
+				return err
+			}
 			if symbol.Scope == GlobalScope {
 				c.emit(code.OpSetGlobal, symbol.Index)
 			} else {
@@ -199,6 +209,10 @@ func (c *Compiler) Compile (node ast.Node) error {
 			symbol, found := c.symbolTable.Resolve(ident.Value)
 			if !found {
 				return fmt.Errorf("identifier not found: %s", ident.Value)
+			}
+			err := c.Compile(node.Value)
+			if err != nil {
+				return err
 			}
 			if symbol.Scope == GlobalScope {
 				c.emit(code.OpSetGlobal, symbol.Index)
@@ -499,6 +513,10 @@ func (c *Compiler) loadSymbol(s Symbol) {
 		c.emit(code.OpGetLocal, s.Index)
 	case BuiltinScope:
 		c.emit(code.OpGetBuiltin, s.Index)
+	case FreeScope:
+		c.emit(code.OpGetFree, s.Index)
+	case FunctionScope:
+		c.emit(code.OpCurrentClosure)
 	}
 }
 

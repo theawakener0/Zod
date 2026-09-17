@@ -400,6 +400,36 @@ func TestBuiltinFunctions(t *testing.T) {
 	runVMTests(t, tests)
 }
 
+func TestClosures(t *testing.T) {
+	tests := []vmTestCase{
+		{
+			input: "newClosure := fn(a) { fn() { a } }; let closure = newClosure(99); closure();",
+			expected: 99,
+		},
+	}
+
+	runVMTests(t, tests)
+}
+
+func TestRecursiveFunctions(t *testing.T) {
+	tests := []vmTestCase{
+		{
+			input: "countDown := fn(x) { if (x == 0) { return 0; } else { countDown(x - 1) } }; countDown(1)",
+			expected: 0,
+		},
+		{
+			input: "countDown := fn(x) { if (x == 0) { return 0; } else { countDown(x - 1) } }; let wrapper = fn() { countDown(1) }; wrapper()",
+			expected: 0,
+		},
+		{
+			input: "let wrapper = fn() { countDown := fn(x) { if (x == 0) { return 0; } else { countDown(x - 1) } }; countDown(1) }; wrapper()",
+			expected: 0,
+		},
+	}
+
+	runVMTests(t, tests)
+}
+
 func runVMTests(t *testing.T, tests []vmTestCase) {
 	t.Helper()
 
@@ -410,6 +440,17 @@ func runVMTests(t *testing.T, tests []vmTestCase) {
 		err0 := comp.Compile(program)
 		if err0 != nil {
 			t.Fatalf("compiler error: %s", err0)
+		}
+
+		for i, constant := range comp.Bytecode().Constant {
+			fmt.Printf("CONSTANT %d %p (%T):\n", i, constant, constant)
+
+			switch constant := constant.(type) {
+			case *obj.CompiledFunction:
+				fmt.Printf(" Instructions:\n%s", constant.Instructions)
+			case *obj.Integer:
+				fmt.Printf(" Value: %d\n", constant.Value)
+			}
 		}
 
 		vm := New(comp.Bytecode())

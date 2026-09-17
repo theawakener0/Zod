@@ -217,6 +217,10 @@ func (p *Parser) parseLetStatement() *ast.LetStatement {
 	p.nextToken()
 	stmt.Value = p.parseExpression(LOWEST)
 
+	if fl, ok := stmt.Value.(*ast.FunctionLiteral); ok {
+		fl.Name = stmt.Name.Value
+	}
+
 	if p.peekTokenIs(tk.SEMICOLON) {
 		p.nextToken()
 	}
@@ -237,6 +241,12 @@ func (p *Parser) parseAssignCharStatement() *ast.AssignStatement {
 	p.nextToken()
 	stmt.Value = p.parseExpression(LOWEST)
 	
+	if fl, ok := stmt.Value.(*ast.FunctionLiteral); ok {
+		if ident, ok := stmt.Left.(*ast.Identifier); ok {
+			fl.Name = ident.Value
+		}
+	}
+
 	if p.peekTokenIs(tk.SEMICOLON) {
 		p.nextToken()
 	}

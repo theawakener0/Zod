@@ -39,6 +39,9 @@ const (
 	OpGetLocal
 	OpSetLocal
 	OpGetBuiltin
+	OpClosure
+	OpGetFree
+	OpCurrentClosure
 )
 
 type Definition struct {
@@ -159,6 +162,18 @@ var definition = map[Opcode]*Definition {
 		Name: "OpGetBuiltin",
 		OperandWidths: []int{1},
 	},
+	OpClosure: {
+		Name: "OpClosure",
+		OperandWidths: []int{2, 1},
+	},
+	OpGetFree: {
+		Name: "OpGetFree",
+		OperandWidths: []int{1},
+	},
+	OpCurrentClosure: {
+		Name: "OpCurrentClosure",
+		OperandWidths: []int{},
+	},
 }
 
 func Lookup(op byte) (*Definition, error) {
@@ -250,6 +265,8 @@ func (ins Instructions) fmtInstructions(def *Definition, operands []int) string 
 		return def.Name
 	case 1:
 		return fmt.Sprintf("%s %d", def.Name, operands[0])
+	case 2:
+		return fmt.Sprintf("%s %d %d", def.Name, operands[0], operands[1])
 	}
 
 	return fmt.Sprintf("ERROR: unhandled operandCount for %s\n", def.Name)
