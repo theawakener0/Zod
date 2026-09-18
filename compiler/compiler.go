@@ -282,6 +282,14 @@ func (c *Compiler) Compile (node ast.Node) error {
 			return fmt.Errorf("unknown operator %s", node.Opt)
 		}
 	case *ast.PrefixExpression:
+		if node.Opt == "++" || node.Opt == "--" {
+			ident, ok := node.Right.(*ast.Identifier)
+			if !ok {
+				return fmt.Errorf("++/-- requires identifier")
+			}
+			return c.compileIncrementDecrement(ident, node.Opt, false)
+		}
+
 		err := c.Compile(node.Right)
 		if err != nil {
 			return err
@@ -295,6 +303,15 @@ func (c *Compiler) Compile (node ast.Node) error {
 		default:
 			return fmt.Errorf("unknown operator %s", node.Opt)
 		}
+	case *ast.PostfixExpression:
+		if node.Opt == "++" || node.Opt == "--" {
+			ident, ok := node.Left.(*ast.Identifier)
+			if !ok {
+				return fmt.Errorf("++/-- requires identifier")
+			}
+			return c.compileIncrementDecrement(ident, node.Opt, true)
+		}
+		return fmt.Errorf("unknown postfix operator %s", node.Opt)
 	case *ast.IntegerLiteral:
 		integer := &obj.Integer{Value: node.Value}
 		c.emit(code.OpConstant, c.addConstant(integer))
@@ -351,7 +368,8 @@ func (c *Compiler) Compile (node ast.Node) error {
 		}
 
 		c.loadSymbol(symbol)
-		
+	case *ast.NullLiteral:
+		c.emit(code.OpNull)
 	}
 	return nil
 }
@@ -518,6 +536,38 @@ func (c *Compiler) loadSymbol(s Symbol) {
 	case FunctionScope:
 		c.emit(code.OpCurrentClosure)
 	}
+}
+
+func (c *Compiler) compileIncrementDecrement(ident *ast.Identifier, op string, isPostfix bool) error {
+	symbol, ok := c.symbolTable.Resolve(ident.Value)
+	if !ok {
+		return fmt.Errorf("undefined variable %s", ident.Value)
+	}
+
+	c.loadSymbol(symbol)
+
+	if isPostfix {
+		c.emit(code.OpDup)
+	}
+
+	one := c.addConstant(&obj.Integer{Value: 1})
+	c.emit(code.OpConstant, one)
+	if op == "++" {
+		c.emit(code.OpAdd)
+	} else {
+		c.emit(code.OpSub)
+	}
+
+	switch symbol.Scope {
+	case GlobalScope:
+		c.emit(code.OpSetGlobal, symbol.Index)
+	case LocalScope:
+		c.emit(code.OpSetLocal, symbol.Index)
+	default:
+		return fmt.Errorf("cannot ++/-- %s", ident.Value)
+	}
+
+	return nil
 }
 
 func NewWithState(s *SymbolTable, constants []obj.Object) *Compiler {

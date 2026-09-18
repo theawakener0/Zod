@@ -265,6 +265,15 @@ func (vm *VM) Run() error {
 			if err != nil {
 				return err
 			}
+		case code.OpDup:
+			if vm.sp == 0 {
+				return fmt.Errorf("stack underflow on OpDup")
+			}
+
+			err := vm.push(vm.stack[vm.sp-1])
+			if err != nil {
+				return err
+			}
 		}
 		
 	}

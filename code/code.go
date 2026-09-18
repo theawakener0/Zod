@@ -42,6 +42,7 @@ const (
 	OpClosure
 	OpGetFree
 	OpCurrentClosure
+	OpDup
 )
 
 type Definition struct {
@@ -172,6 +173,10 @@ var definition = map[Opcode]*Definition {
 	},
 	OpCurrentClosure: {
 		Name: "OpCurrentClosure",
+		OperandWidths: []int{},
+	},
+	OpDup: {
+		Name: "OpDup",
 		OperandWidths: []int{},
 	},
 }
