@@ -43,141 +43,171 @@ const (
 	OpGetFree
 	OpCurrentClosure
 	OpDup
+	OpSetFree
+	OpSetIndex
+	OpTry
+	OpGetLocalCell
+	OpGetFreeCell
+	OpDefineLocal
 )
 
 type Definition struct {
-	Name 			string
-	OperandWidths 	[]int
+	Name          string
+	OperandWidths []int
 }
 
-var definition = map[Opcode]*Definition {
+var definition = map[Opcode]*Definition{
 	OpConstant: {
-		Name: "OpConstant",
+		Name:          "OpConstant",
 		OperandWidths: []int{2},
 	},
 	OpAdd: {
-		Name: "OpAdd",
+		Name:          "OpAdd",
 		OperandWidths: []int{},
 	},
 	OpPop: {
-		Name: "OpPop",
+		Name:          "OpPop",
 		OperandWidths: []int{},
 	},
 	OpSub: {
-		Name: "OpSub",
+		Name:          "OpSub",
 		OperandWidths: []int{},
 	},
 	OpMul: {
-		Name: "OpMul",
+		Name:          "OpMul",
 		OperandWidths: []int{},
 	},
 	OpDiv: {
-		Name: "OpDiv",
+		Name:          "OpDiv",
 		OperandWidths: []int{},
 	},
 	OpTrue: {
-		Name: "OpTrue",
+		Name:          "OpTrue",
 		OperandWidths: []int{},
 	},
 	OpFalse: {
-		Name: "OpFalse",
+		Name:          "OpFalse",
 		OperandWidths: []int{},
 	},
 	OpEqual: {
-		Name: "OpEqual",
+		Name:          "OpEqual",
 		OperandWidths: []int{},
 	},
 	OpNotEqual: {
-		Name: "OpNotEqual",
+		Name:          "OpNotEqual",
 		OperandWidths: []int{},
 	},
 	OpGreaterThan: {
-		Name: "OpGreaterThan",
+		Name:          "OpGreaterThan",
 		OperandWidths: []int{},
 	},
 	OpGreaterThanEqual: {
-		Name: "OpGreaterThanEqual",
+		Name:          "OpGreaterThanEqual",
 		OperandWidths: []int{},
 	},
 	OpMinus: {
-		Name: "OpMinus",
+		Name:          "OpMinus",
 		OperandWidths: []int{},
 	},
 	OpBang: {
-		Name: "OpBang",
+		Name:          "OpBang",
 		OperandWidths: []int{},
 	},
 	OpJumpNotTruthy: {
-		Name: "OpJumpNotTruthy",
+		Name:          "OpJumpNotTruthy",
 		OperandWidths: []int{2},
 	},
 	OpJump: {
-		Name: "OpJump",
+		Name:          "OpJump",
 		OperandWidths: []int{2},
 	},
 	OpNull: {
-		Name: "OpNull",
+		Name:          "OpNull",
 		OperandWidths: []int{},
 	},
 	OpGetGlobal: {
-		Name: "OpGetGlobal",
+		Name:          "OpGetGlobal",
 		OperandWidths: []int{2},
 	},
 	OpSetGlobal: {
-		Name: "OpSetGlobal",
+		Name:          "OpSetGlobal",
 		OperandWidths: []int{2},
 	},
 	OpArray: {
-		Name: "OpArray",
+		Name:          "OpArray",
 		OperandWidths: []int{2},
 	},
 	OpHash: {
-		Name: "OpHash",
+		Name:          "OpHash",
 		OperandWidths: []int{2},
 	},
 	OpIndex: {
-		Name: "OpIndex",
+		Name:          "OpIndex",
 		OperandWidths: []int{},
 	},
 	OpCall: {
-		Name: "OpCall",
+		Name:          "OpCall",
 		OperandWidths: []int{1},
 	},
 	OpReturnValue: {
-		Name: "OpReturnValue",
+		Name:          "OpReturnValue",
 		OperandWidths: []int{},
 	},
 	OpReturn: {
-		Name: "OpReturn",
+		Name:          "OpReturn",
 		OperandWidths: []int{},
 	},
 	OpGetLocal: {
-		Name: "OpGetLocal",
+		Name:          "OpGetLocal",
 		OperandWidths: []int{1},
 	},
 	OpSetLocal: {
-		Name: "OpSetLocal",
+		Name:          "OpSetLocal",
 		OperandWidths: []int{1},
 	},
 	OpGetBuiltin: {
-		Name: "OpGetBuiltin",
+		Name:          "OpGetBuiltin",
 		OperandWidths: []int{1},
 	},
 	OpClosure: {
-		Name: "OpClosure",
+		Name:          "OpClosure",
 		OperandWidths: []int{2, 1},
 	},
 	OpGetFree: {
-		Name: "OpGetFree",
+		Name:          "OpGetFree",
 		OperandWidths: []int{1},
 	},
 	OpCurrentClosure: {
-		Name: "OpCurrentClosure",
+		Name:          "OpCurrentClosure",
 		OperandWidths: []int{},
 	},
 	OpDup: {
-		Name: "OpDup",
+		Name:          "OpDup",
 		OperandWidths: []int{},
+	},
+	OpSetFree: {
+		Name:          "OpSetFree",
+		OperandWidths: []int{1},
+	},
+	OpSetIndex: {
+		Name:          "OpSetIndex",
+		OperandWidths: []int{1},
+	},
+	OpTry: {
+		Name:          "OpTry",
+		OperandWidths: []int{},
+	},
+	OpGetLocalCell: {
+		Name:          "OpGetLocalCell",
+		OperandWidths: []int{1},
+	},
+	OpGetFreeCell: {
+		Name:          "OpGetFreeCell",
+		OperandWidths: []int{1},
+	},
+	OpDefineLocal: {
+		Name:          "OpDefineLocal",
+		OperandWidths: []int{1},
 	},
 }
 
@@ -231,7 +261,7 @@ func (ins Instructions) String() string {
 		}
 
 		operands, read := ReadOperands(def, ins[i+1:])
-		
+
 		fmt.Fprintf(&out, "%04d %s\n", i, ins.fmtInstructions(def, operands))
 
 		i += 1 + read
@@ -243,7 +273,7 @@ func (ins Instructions) String() string {
 func ReadOperands(def *Definition, ins Instructions) ([]int, int) {
 	operands := make([]int, len(def.OperandWidths))
 	offset := 0
-	
+
 	for i, width := range def.OperandWidths {
 		switch width {
 		case 2:
@@ -255,7 +285,7 @@ func ReadOperands(def *Definition, ins Instructions) ([]int, int) {
 		offset += width
 	}
 
-	return  operands, offset
+	return operands, offset
 }
 
 func (ins Instructions) fmtInstructions(def *Definition, operands []int) string {
@@ -266,7 +296,7 @@ func (ins Instructions) fmtInstructions(def *Definition, operands []int) string 
 	}
 
 	switch operandCount {
-	case 0: 
+	case 0:
 		return def.Name
 	case 1:
 		return fmt.Sprintf("%s %d", def.Name, operands[0])
@@ -277,6 +307,4 @@ func (ins Instructions) fmtInstructions(def *Definition, operands []int) string 
 	return fmt.Sprintf("ERROR: unhandled operandCount for %s\n", def.Name)
 }
 
-func ReadUnit8(ins Instructions) uint8 { return uint8(ins[0]) } 
-
-
+func ReadUnit8(ins Instructions) uint8 { return uint8(ins[0]) }

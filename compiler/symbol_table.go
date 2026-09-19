@@ -3,48 +3,90 @@ package compiler
 type SymbolScope string
 
 const (
-	LocalScope 		SymbolScope = "LOCAL"
-	GlobalScope 	SymbolScope = "GLOBAL"
-	BuiltinScope 	SymbolScope = "BUILTIN"
-	FreeScope		SymbolScope = "FREE"
-	FunctionScope 	SymbolScope = "FUNCTION"
+	LocalScope    SymbolScope = "LOCAL"
+	GlobalScope   SymbolScope = "GLOBAL"
+	BuiltinScope  SymbolScope = "BUILTIN"
+	FreeScope     SymbolScope = "FREE"
+	FunctionScope SymbolScope = "FUNCTION"
 )
 
 type Symbol struct {
-	Name 	string
-	Scope 	SymbolScope
-	Index 	int
+	Name  string
+	Scope SymbolScope
+	Index int
 }
 
 type SymbolTable struct {
-	Outer 			*SymbolTable
+	Outer *SymbolTable
 
-	store 			map[string]Symbol
-	numDefinitions 	int
+	store          map[string]Symbol
+	numDefinitions int
 
-	FreeSymbols 	[]Symbol
+	FreeSymbols []Symbol
+
+	isFunction bool
+
+	scopedGlobals map[string]bool
 }
 
 func NewSymbolTable() *SymbolTable {
 	s := make(map[string]Symbol)
 	freeSymbols := []Symbol{}
-	return &SymbolTable{store: s, FreeSymbols: freeSymbols}
+	return &SymbolTable{store: s, FreeSymbols: freeSymbols, isFunction: true}
 }
 
 func NewEnclosedSymbolTable(outer *SymbolTable) *SymbolTable {
 	s := NewSymbolTable()
 	s.Outer = outer
+	s.isFunction = true
 	return s
 }
 
-func (s *SymbolTable) Define(name string) Symbol {
-	symbol := Symbol{Name: name, Index: s.numDefinitions}
-	if s.Outer == nil {
-		symbol.Scope = GlobalScope
-	} else {
-		symbol.Scope = LocalScope
+func NewBlockSymbolTable(outer *SymbolTable) *SymbolTable {
+	s := make(map[string]Symbol)
+	return &SymbolTable{
+		Outer:          outer,
+		store:          s,
+		FreeSymbols:    []Symbol{},
+		numDefinitions: outer.numDefinitions,
+		isFunction:     false,
 	}
+}
 
+func (s *SymbolTable) Define(name string) Symbol {
+	if s.Outer == nil {
+		symbol := Symbol{Name: name, Index: s.numDefinitions, Scope: GlobalScope}
+		s.store[name] = symbol
+		s.numDefinitions++
+		return symbol
+	}
+	if !s.isFunction {
+		hasFunc := false
+		root := s
+		for t := s; t != nil; t = t.Outer {
+			if t.isFunction && t.Outer != nil {
+				hasFunc = true
+				break
+			}
+			if t.Outer == nil {
+				root = t
+			}
+		}
+		if !hasFunc {
+			symbol := Symbol{Name: name, Index: root.numDefinitions, Scope: GlobalScope}
+			s.store[name] = symbol
+			root.numDefinitions++
+			if root.scopedGlobals == nil {
+				root.scopedGlobals = make(map[string]bool)
+			}
+			root.scopedGlobals[name] = true
+			if s.numDefinitions < root.numDefinitions {
+				s.numDefinitions = root.numDefinitions
+			}
+			return symbol
+		}
+	}
+	symbol := Symbol{Name: name, Index: s.numDefinitions, Scope: LocalScope}
 	s.store[name] = symbol
 	s.numDefinitions++
 
@@ -59,14 +101,35 @@ func (s *SymbolTable) Resolve(name string) (Symbol, bool) {
 			return obj, ok
 		}
 
-		if obj.Scope == GlobalScope || obj.Scope == BuiltinScope {
+		if obj.Scope == BuiltinScope {
+			return obj, ok
+		}
+
+		if obj.Scope == GlobalScope {
+			if !s.isFunction || !s.isScopedGlobal(obj.Name) {
+				return obj, ok
+			}
+		} else if !s.isFunction {
 			return obj, ok
 		}
 
 		free := s.defineFree(obj)
 		return free, true
 	}
-	return  obj, ok
+	return obj, ok
+}
+
+func (s *SymbolTable) isScopedGlobal(name string) bool {
+	root := s
+	for t := s; t != nil; t = t.Outer {
+		if t.Outer == nil {
+			root = t
+		}
+	}
+	if root.scopedGlobals == nil {
+		return false
+	}
+	return root.scopedGlobals[name]
 }
 
 func (s *SymbolTable) DefineIfNotExists(name string) Symbol {
@@ -85,7 +148,7 @@ func (s *SymbolTable) DefineBuiltin(index int, name string) Symbol {
 }
 
 func (s *SymbolTable) DefineFunctionName(name string) Symbol {
-	symbol := Symbol{Name: name,Index: 0, Scope: FunctionScope}
+	symbol := Symbol{Name: name, Index: 0, Scope: FunctionScope}
 	s.store[name] = symbol
 	return symbol
 }
@@ -99,5 +162,3 @@ func (s *SymbolTable) defineFree(original Symbol) Symbol {
 	s.store[original.Name] = symbol
 	return symbol
 }
-
-

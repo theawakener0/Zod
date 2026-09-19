@@ -216,6 +216,33 @@ let seedRandom = fn(g, density) {
 	}
 }
 
+// --- population sparkline ----------------------------------------------
+let BARS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
+
+let trimTo = fn(arr, n) {
+	let out = []
+	let start = len(arr) - n
+	if (start < 0) { start = 0 }
+	for (i := start; i < len(arr); i++) {
+		out = push(out, arr[i])
+	}
+	out
+}
+
+let sparkline = fn(spark) {
+	let out = "  Pop "
+	let mx = 1
+	for (i := 0; i < len(spark); i++) {
+		if (spark[i] > mx) { mx = spark[i] }
+	}
+	for (i := 0; i < len(spark); i++) {
+		let level = spark[i] * 8 / mx
+		if (level >= 8) { level = 7 }
+		out = out + BARS[level]
+	}
+	out
+}
+
 // --- hi-res renderer ---------------------------------------------------
 // Every output line renders a pair of rows: cell (2*r, c) is the upper
 // half (foreground) and (2*r+1, c) the lower half (background).
@@ -250,33 +277,6 @@ let render = fn(g, age, gen, pop, born, died, peak, name, spark) {
 	let legend = "  " + chip(0) + " newborn   " + chip(3) + " young   " + chip(5) + " mature   " + chip(7) + " old   " + chip(9) + " ancient"
 	frame = frame + legend + "\n" + sparkline(spark) + "\n"
 	printf("%s%s%s%s", SYNC_BEGIN, HOME, frame, SYNC_END)
-}
-
-// --- population sparkline ----------------------------------------------
-let BARS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
-
-let trimTo = fn(arr, n) {
-	let out = []
-	let start = len(arr) - n
-	if (start < 0) { start = 0 }
-	for (i := start; i < len(arr); i++) {
-		out = push(out, arr[i])
-	}
-	out
-}
-
-let sparkline = fn(spark) {
-	let out = "  Pop "
-	let mx = 1
-	for (i := 0; i < len(spark); i++) {
-		if (spark[i] > mx) { mx = spark[i] }
-	}
-	for (i := 0; i < len(spark); i++) {
-		let level = spark[i] * 8 / mx
-		if (level >= 8) { level = 7 }
-		out = out + BARS[level]
-	}
-	out
 }
 
 // --- robust input ------------------------------------------------------

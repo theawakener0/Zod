@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/theawakener0/Zod/ast"
 	"github.com/theawakener0/Zod/code"
@@ -9,37 +10,44 @@ import (
 )
 
 type EmittedInstruction struct {
-	Opcode 		code.Opcode
-	Position 	int
+	Opcode   code.Opcode
+	Position int
 }
 
 type CompilationScope struct {
-	instructions 			code.Instructions
-	lastInstruction 		EmittedInstruction
-	previousInstruction 	EmittedInstruction
+	instructions        code.Instructions
+	lastInstruction     EmittedInstruction
+	previousInstruction EmittedInstruction
+}
+
+type loopContext struct {
+	breakJumps    []int
+	continueJumps []int
 }
 
 type Compiler struct {
-	instructions 		code.Instructions
-	constant 			[]obj.Object
+	instructions code.Instructions
+	constant     []obj.Object
 
-	lastInstruction 	EmittedInstruction
+	lastInstruction     EmittedInstruction
 	previousInstruction EmittedInstruction
-	symbolTable 		*SymbolTable
+	symbolTable         *SymbolTable
 
-	scopes 				[]CompilationScope
-	scopesIndex			int
+	scopes      []CompilationScope
+	scopesIndex int
+
+	loops []loopContext
 }
 
 type Bytecode struct {
-	Instructions 	code.Instructions
-	Constant 		[]obj.Object
+	Instructions code.Instructions
+	Constant     []obj.Object
 }
 
 func New() *Compiler {
 	mainScope := CompilationScope{
-		instructions: code.Instructions{},
-		lastInstruction: EmittedInstruction{},
+		instructions:        code.Instructions{},
+		lastInstruction:     EmittedInstruction{},
 		previousInstruction: EmittedInstruction{},
 	}
 	symbolTable := NewSymbolTable()
@@ -49,14 +57,14 @@ func New() *Compiler {
 	}
 
 	return &Compiler{
-		constant: []obj.Object{},
+		constant:    []obj.Object{},
 		symbolTable: symbolTable,
-		scopes: []CompilationScope{mainScope},
+		scopes:      []CompilationScope{mainScope},
 		scopesIndex: 0,
 	}
 }
 
-func (c *Compiler) Compile (node ast.Node) error {
+func (c *Compiler) Compile(node ast.Node) error {
 	switch node := node.(type) {
 	case *ast.Program:
 		for _, s := range node.Statements {
@@ -76,7 +84,7 @@ func (c *Compiler) Compile (node ast.Node) error {
 		if err0 != nil {
 			return err0
 		}
-		
+
 		jumpNotTruthyPos := c.emit(code.OpJumpNotTruthy, 9999)
 
 		err1 := c.Compile(node.Consequence)
@@ -84,9 +92,7 @@ func (c *Compiler) Compile (node ast.Node) error {
 			return err1
 		}
 
-		if c.lastInstructionIs(code.OpPop) {
-			c.removeLastPop()
-		}
+		c.ensureBlockValue()
 
 		jumpPos := c.emit(code.OpJump, 9999)
 
@@ -98,7 +104,7 @@ func (c *Compiler) Compile (node ast.Node) error {
 			if err != nil {
 				return err
 			}
-		} else if (node.Alternative == nil) {
+		} else if node.Alternative == nil {
 			c.emit(code.OpNull)
 		} else {
 			err := c.Compile(node.Alternative)
@@ -106,21 +112,22 @@ func (c *Compiler) Compile (node ast.Node) error {
 				return err
 			}
 
-			if c.lastInstructionIs(code.OpPop) {
-				c.removeLastPop()
-			}
+			c.ensureBlockValue()
 
 		}
 
 		afterAlternativePos := len(c.currentInstruction())
 		c.changeOperand(jumpPos, afterAlternativePos)
 	case *ast.BlockStatement:
+		c.enterBlockScope()
 		for _, s := range node.Statements {
 			err := c.Compile(s)
 			if err != nil {
+				c.leaveBlockScope()
 				return err
 			}
 		}
+		c.leaveBlockScope()
 	case *ast.FunctionLiteral:
 		c.enterScope()
 
@@ -150,7 +157,18 @@ func (c *Compiler) Compile (node ast.Node) error {
 		instructions := c.leaveScope()
 
 		for _, s := range freeSymbols {
-			c.loadSymbol(s)
+			switch s.Scope {
+			case LocalScope:
+				c.emit(code.OpGetLocalCell, s.Index)
+			case FreeScope:
+				c.emit(code.OpGetFreeCell, s.Index)
+			case GlobalScope:
+				c.emit(code.OpGetGlobal, s.Index)
+			case BuiltinScope:
+				c.emit(code.OpGetBuiltin, s.Index)
+			case FunctionScope:
+				c.emit(code.OpCurrentClosure)
+			}
 		}
 
 		compiledFn := &obj.CompiledFunction{Instructions: instructions, NumLocals: numLocals, NumParams: len(node.Parameters)}
@@ -161,9 +179,35 @@ func (c *Compiler) Compile (node ast.Node) error {
 		if err != nil {
 			return err
 		}
-		
+
 		c.emit(code.OpReturnValue)
+	case *ast.BreakStatement:
+		if len(c.loops) == 0 {
+			return fmt.Errorf("break used outside of loop")
+		}
+		pos := c.emit(code.OpJump, 9999)
+		c.loops[len(c.loops)-1].breakJumps = append(c.loops[len(c.loops)-1].breakJumps, pos)
+	case *ast.ContinueStatement:
+		if len(c.loops) == 0 {
+			return fmt.Errorf("continue used outside of loop")
+		}
+		pos := c.emit(code.OpJump, 9999)
+		c.loops[len(c.loops)-1].continueJumps = append(c.loops[len(c.loops)-1].continueJumps, pos)
 	case *ast.CallExpression:
+		if ident, ok := node.Function.(*ast.Identifier); ok && ident.Value == "try" {
+			if len(node.Arguments) != 1 {
+				tryErr := &obj.Error{Message: fmt.Sprintf("wrong number of arguments. got=%d, want=1", len(node.Arguments))}
+				c.emit(code.OpConstant, c.addConstant(tryErr))
+				c.emit(code.OpTry)
+				return nil
+			}
+			err := c.Compile(node.Arguments[0])
+			if err != nil {
+				return err
+			}
+			c.emit(code.OpTry)
+			return nil
+		}
 		err := c.Compile(node.Function)
 		if err != nil {
 			return err
@@ -183,46 +227,16 @@ func (c *Compiler) Compile (node ast.Node) error {
 		if err != nil {
 			return err
 		}
-		if symbol.Scope == GlobalScope {
-			c.emit(code.OpSetGlobal, symbol.Index)
-		} else {
-			c.emit(code.OpSetLocal, symbol.Index)
-		}
+		c.emitDefine(symbol)
 	case *ast.AssignStatement:
-		ident, ok := node.Left.(*ast.Identifier)
-		if !ok {
-			return fmt.Errorf("only identifier assignment supported, got %T", node.Left)
-		}
-		switch node.Token.Literal {
-		case ":=":
-			symbol := c.symbolTable.DefineIfNotExists(ident.Value)
-			err := c.Compile(node.Value)
-			if err != nil {
-				return err
-			}
-			if symbol.Scope == GlobalScope {
-				c.emit(code.OpSetGlobal, symbol.Index)
-			} else {
-				c.emit(code.OpSetLocal, symbol.Index)
-			}
-		case "=":
-			symbol, found := c.symbolTable.Resolve(ident.Value)
-			if !found {
-				return fmt.Errorf("identifier not found: %s", ident.Value)
-			}
-			err := c.Compile(node.Value)
-			if err != nil {
-				return err
-			}
-			if symbol.Scope == GlobalScope {
-				c.emit(code.OpSetGlobal, symbol.Index)
-			} else {
-				c.emit(code.OpSetLocal, symbol.Index)
-			}
-		default:
-			return fmt.Errorf("unknown assignment operator %s", node.Token.Literal)
-		}
+		return c.compileAssignStatement(node)
 	case *ast.InfixExpression:
+		if node.Opt == "&&" {
+			return c.compileLogicalAnd(node)
+		}
+		if node.Opt == "||" {
+			return c.compileLogicalOr(node)
+		}
 		if node.Opt == "<" {
 			err0 := c.Compile(node.Right)
 			if err0 != nil {
@@ -341,7 +355,7 @@ func (c *Compiler) Compile (node ast.Node) error {
 				return err1
 			}
 		}
-		
+
 		c.emit(code.OpHash, len(node.Pairs)*2)
 	case *ast.IndexExpression:
 		err0 := c.Compile(node.Left)
@@ -364,12 +378,16 @@ func (c *Compiler) Compile (node ast.Node) error {
 	case *ast.Identifier:
 		symbol, ok := c.symbolTable.Resolve(node.Value)
 		if !ok {
-			return fmt.Errorf("undefined variable %s", node.Value)
+			return fmt.Errorf("identifier not found: %s", node.Value)
 		}
 
 		c.loadSymbol(symbol)
 	case *ast.NullLiteral:
 		c.emit(code.OpNull)
+	case *ast.ForExpression:
+		return c.compileForExpression(node)
+	case *ast.LoopExpression:
+		return c.compileLoopExpression(node)
 	}
 	return nil
 }
@@ -377,7 +395,7 @@ func (c *Compiler) Compile (node ast.Node) error {
 func (c *Compiler) Bytecode() *Bytecode {
 	return &Bytecode{
 		Instructions: c.currentInstruction(),
-		Constant: c.constant,
+		Constant:     c.constant,
 	}
 }
 
@@ -454,12 +472,23 @@ func (c *Compiler) changeOperand(opPos int, operand int) {
 	c.replaceInstruction(opPos, newInstruction)
 }
 
+func (c *Compiler) ensureBlockValue() {
+	if c.lastInstructionIs(code.OpPop) {
+		c.removeLastPop()
+		return
+	}
+	if c.lastInstructionIs(code.OpReturnValue) || c.lastInstructionIs(code.OpReturn) {
+		return
+	}
+	c.emit(code.OpNull)
+}
+
 func (c *Compiler) compileIfExpression(node *ast.IfExpression) error {
 	err0 := c.Compile(node.Condition)
 	if err0 != nil {
 		return err0
 	}
-	
+
 	jumpNotTruthyPos := c.emit(code.OpJumpNotTruthy, 9999)
 
 	err1 := c.Compile(node.Consequence)
@@ -467,16 +496,19 @@ func (c *Compiler) compileIfExpression(node *ast.IfExpression) error {
 		return err1
 	}
 
-	if c.lastInstructionIs(code.OpPop) {
-		c.removeLastPop()
-	}
+	c.ensureBlockValue()
 
 	jumpPos := c.emit(code.OpJump, 9999)
 
 	afterConsequencePos := len(c.currentInstruction())
 	c.changeOperand(jumpNotTruthyPos, afterConsequencePos)
 
-	if node.Alternative == nil {
+	if node.ElseIf != nil {
+		err := c.compileIfExpression(node.ElseIf)
+		if err != nil {
+			return err
+		}
+	} else if node.Alternative == nil {
 		c.emit(code.OpNull)
 	} else {
 		err := c.Compile(node.Alternative)
@@ -484,9 +516,7 @@ func (c *Compiler) compileIfExpression(node *ast.IfExpression) error {
 			return err
 		}
 
-		if c.lastInstructionIs(code.OpPop) {
-			c.removeLastPop()
-		}
+		c.ensureBlockValue()
 
 	}
 
@@ -502,8 +532,8 @@ func (c *Compiler) currentInstruction() code.Instructions {
 
 func (c *Compiler) enterScope() {
 	scope := CompilationScope{
-		instructions: code.Instructions{},
-		lastInstruction: EmittedInstruction{},
+		instructions:        code.Instructions{},
+		lastInstruction:     EmittedInstruction{},
 		previousInstruction: EmittedInstruction{},
 	}
 	c.scopes = append(c.scopes, scope)
@@ -523,6 +553,22 @@ func (c *Compiler) leaveScope() code.Instructions {
 	return instructions
 }
 
+func (c *Compiler) enterBlockScope() {
+	block := NewBlockSymbolTable(c.symbolTable)
+	c.symbolTable = block
+}
+
+func (c *Compiler) leaveBlockScope() {
+	block := c.symbolTable
+	outer := block.Outer
+	if outer != nil {
+		if block.numDefinitions > outer.numDefinitions {
+			outer.numDefinitions = block.numDefinitions
+		}
+		c.symbolTable = outer
+	}
+}
+
 func (c *Compiler) loadSymbol(s Symbol) {
 	switch s.Scope {
 	case GlobalScope:
@@ -538,10 +584,284 @@ func (c *Compiler) loadSymbol(s Symbol) {
 	}
 }
 
+func (c *Compiler) emitStore(s Symbol) {
+	switch s.Scope {
+	case GlobalScope:
+		c.emit(code.OpSetGlobal, s.Index)
+	case LocalScope:
+		c.emit(code.OpSetLocal, s.Index)
+	case FreeScope:
+		c.emit(code.OpSetFree, s.Index)
+	default:
+		c.emit(code.OpSetGlobal, s.Index)
+	}
+}
+
+func (c *Compiler) emitDefine(s Symbol) {
+	switch s.Scope {
+	case GlobalScope:
+		c.emit(code.OpSetGlobal, s.Index)
+	default:
+		c.emit(code.OpDefineLocal, s.Index)
+	}
+}
+
+func assignKind(op string) (int, error) {
+	switch op {
+	case "=":
+		return 0, nil
+	case "+=":
+		return 1, nil
+	case "-=":
+		return 2, nil
+	case "*=":
+		return 3, nil
+	case "/=":
+		return 4, nil
+	default:
+		return 0, fmt.Errorf("unknown assignment operator %s", op)
+	}
+}
+
+func (c *Compiler) compileAssignStatement(node *ast.AssignStatement) error {
+	if idx, ok := node.Left.(*ast.IndexExpression); ok {
+		kind, err := assignKind(node.Token.Literal)
+		if err != nil {
+			return err
+		}
+		return c.compileIndexAssign(idx, node.Value, kind)
+	}
+
+	ident, ok := node.Left.(*ast.Identifier)
+	if !ok {
+		return fmt.Errorf("only identifier assignment supported, got %T", node.Left)
+	}
+
+	switch node.Token.Literal {
+	case ":=":
+		symbol := c.symbolTable.DefineIfNotExists(ident.Value)
+		err := c.Compile(node.Value)
+		if err != nil {
+			return err
+		}
+		c.emitDefine(symbol)
+		return nil
+	case "=", "+=", "-=", "*=", "/=":
+		if node.Token.Literal == "=" {
+			symbol, found := c.symbolTable.Resolve(ident.Value)
+			if !found {
+				return fmt.Errorf("identifier not found: %s", ident.Value)
+			}
+			err := c.Compile(node.Value)
+			if err != nil {
+				return err
+			}
+			c.emitStore(symbol)
+			return nil
+		}
+		symbol, found := c.symbolTable.Resolve(ident.Value)
+		if !found {
+			return fmt.Errorf("identifier not found: %s", ident.Value)
+		}
+		c.loadSymbol(symbol)
+		err := c.Compile(node.Value)
+		if err != nil {
+			return err
+		}
+		switch node.Token.Literal {
+		case "+=":
+			c.emit(code.OpAdd)
+		case "-=":
+			c.emit(code.OpSub)
+		case "*=":
+			c.emit(code.OpMul)
+		case "/=":
+			c.emit(code.OpDiv)
+		}
+		c.emitStore(symbol)
+		return nil
+	default:
+		return fmt.Errorf("unknown assignment operator %s", node.Token.Literal)
+	}
+}
+
+func (c *Compiler) compileIndexAssign(idx *ast.IndexExpression, value ast.Expression, kind int) error {
+	if inner, ok := idx.Left.(*ast.IndexExpression); ok {
+		if err := c.Compile(inner.Left); err != nil {
+			return err
+		}
+		if err := c.Compile(inner.Index); err != nil {
+			return err
+		}
+		if err := c.Compile(idx.Index); err != nil {
+			return err
+		}
+		if err := c.Compile(value); err != nil {
+			return err
+		}
+		c.emit(code.OpSetIndex, 10+kind)
+		return nil
+	}
+	if err := c.Compile(idx.Left); err != nil {
+		return err
+	}
+	if err := c.Compile(idx.Index); err != nil {
+		return err
+	}
+	if err := c.Compile(value); err != nil {
+		return err
+	}
+	c.emit(code.OpSetIndex, kind)
+	return nil
+}
+
+func (c *Compiler) compileLogicalAnd(node *ast.InfixExpression) error {
+	if err := c.Compile(node.Left); err != nil {
+		return err
+	}
+	c.emit(code.OpDup)
+	jumpPos := c.emit(code.OpJumpNotTruthy, 9999)
+	c.emit(code.OpPop)
+	if err := c.Compile(node.Right); err != nil {
+		return err
+	}
+	c.changeOperand(jumpPos, len(c.currentInstruction()))
+	return nil
+}
+
+func (c *Compiler) compileLogicalOr(node *ast.InfixExpression) error {
+	if err := c.Compile(node.Left); err != nil {
+		return err
+	}
+	c.emit(code.OpDup)
+	jumpNotTruthyPos := c.emit(code.OpJumpNotTruthy, 9999)
+	jumpEndPos := c.emit(code.OpJump, 9999)
+	rightPos := len(c.currentInstruction())
+	c.changeOperand(jumpNotTruthyPos, rightPos)
+	c.emit(code.OpPop)
+	if err := c.Compile(node.Right); err != nil {
+		return err
+	}
+	c.changeOperand(jumpEndPos, len(c.currentInstruction()))
+	return nil
+}
+
+func (c *Compiler) compileForExpression(node *ast.ForExpression) error {
+	c.enterBlockScope()
+	c.loops = append(c.loops, loopContext{})
+
+	before := make(map[string]struct{}, len(c.symbolTable.store))
+	for name := range c.symbolTable.store {
+		before[name] = struct{}{}
+	}
+
+	if node.Init != nil {
+		if err := c.Compile(node.Init); err != nil {
+			return err
+		}
+	}
+
+	type shadowedVar struct {
+		name string
+		idx  int
+	}
+	var shadowed []shadowedVar
+	for name, sym := range c.symbolTable.store {
+		if _, ok := before[name]; ok {
+			continue
+		}
+		if sym.Scope != LocalScope {
+			continue
+		}
+		shadowed = append(shadowed, shadowedVar{name: name, idx: sym.Index})
+	}
+	sort.Slice(shadowed, func(a, b int) bool { return shadowed[a].idx < shadowed[b].idx })
+
+	condPos := len(c.currentInstruction())
+	var endJump int = -1
+	if node.Condition != nil {
+		if err := c.Compile(node.Condition); err != nil {
+			return err
+		}
+		endJump = c.emit(code.OpJumpNotTruthy, 9999)
+	}
+
+	if node.Body == nil {
+		return fmt.Errorf("for missing body")
+	}
+	c.enterBlockScope()
+	for _, sv := range shadowed {
+		shadow := c.symbolTable.Define(sv.name)
+		c.emit(code.OpGetLocal, sv.idx)
+		c.emit(code.OpDefineLocal, shadow.Index)
+	}
+	for _, s := range node.Body.Statements {
+		if err := c.Compile(s); err != nil {
+			c.leaveBlockScope()
+			return err
+		}
+	}
+	c.leaveBlockScope()
+
+	updatePos := len(c.currentInstruction())
+	if node.Update != nil {
+		if err := c.Compile(node.Update); err != nil {
+			return err
+		}
+	}
+
+	c.emit(code.OpJump, condPos)
+
+	endPos := len(c.currentInstruction())
+	if endJump != -1 {
+		c.changeOperand(endJump, endPos)
+	}
+	ctx := c.loops[len(c.loops)-1]
+	for _, pos := range ctx.breakJumps {
+		c.changeOperand(pos, endPos)
+	}
+	for _, pos := range ctx.continueJumps {
+		c.changeOperand(pos, updatePos)
+	}
+	c.loops = c.loops[:len(c.loops)-1]
+	c.leaveBlockScope()
+
+	c.emit(code.OpNull)
+	return nil
+}
+
+func (c *Compiler) compileLoopExpression(node *ast.LoopExpression) error {
+	c.enterBlockScope()
+	c.loops = append(c.loops, loopContext{})
+
+	startPos := len(c.currentInstruction())
+	if node.Body == nil {
+		return fmt.Errorf("loop missing body")
+	}
+	if err := c.Compile(node.Body); err != nil {
+		return err
+	}
+	c.emit(code.OpJump, startPos)
+
+	endPos := len(c.currentInstruction())
+	ctx := c.loops[len(c.loops)-1]
+	for _, pos := range ctx.breakJumps {
+		c.changeOperand(pos, endPos)
+	}
+	for _, pos := range ctx.continueJumps {
+		c.changeOperand(pos, startPos)
+	}
+	c.loops = c.loops[:len(c.loops)-1]
+	c.leaveBlockScope()
+
+	c.emit(code.OpNull)
+	return nil
+}
+
 func (c *Compiler) compileIncrementDecrement(ident *ast.Identifier, op string, isPostfix bool) error {
 	symbol, ok := c.symbolTable.Resolve(ident.Value)
 	if !ok {
-		return fmt.Errorf("undefined variable %s", ident.Value)
+		return fmt.Errorf("identifier not found: %s", ident.Value)
 	}
 
 	c.loadSymbol(symbol)
@@ -558,16 +878,17 @@ func (c *Compiler) compileIncrementDecrement(ident *ast.Identifier, op string, i
 		c.emit(code.OpSub)
 	}
 
+	if !isPostfix {
+		c.emit(code.OpDup)
+	}
+
 	switch symbol.Scope {
-	case GlobalScope:
-		c.emit(code.OpSetGlobal, symbol.Index)
-	case LocalScope:
-		c.emit(code.OpSetLocal, symbol.Index)
+	case GlobalScope, LocalScope, FreeScope:
+		c.emitStore(symbol)
+		return nil
 	default:
 		return fmt.Errorf("cannot ++/-- %s", ident.Value)
 	}
-
-	return nil
 }
 
 func NewWithState(s *SymbolTable, constants []obj.Object) *Compiler {
@@ -577,5 +898,3 @@ func NewWithState(s *SymbolTable, constants []obj.Object) *Compiler {
 
 	return compiler
 }
-
-

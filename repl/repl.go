@@ -6,8 +6,8 @@ import (
 	"io"
 	"os"
 
-	ev "github.com/theawakener0/Zod/evaluator"
 	"github.com/theawakener0/Zod/compiler"
+	ev "github.com/theawakener0/Zod/evaluator"
 	lx "github.com/theawakener0/Zod/lexer"
 	obj "github.com/theawakener0/Zod/object"
 	ps "github.com/theawakener0/Zod/parser"
@@ -15,7 +15,6 @@ import (
 )
 
 const PROMPT = "\x1b[0;32m>>\x1b[0m "
-
 
 func Start(in io.Reader, out io.Writer, engine string) {
 	scanner := bufio.NewScanner(in)
@@ -35,9 +34,9 @@ func Start(in io.Reader, out io.Writer, engine string) {
 		if !scanned {
 			return
 		}
-		
+
 		line := scanner.Text()
-		
+
 		switch line {
 		case "/clear":
 			fmt.Printf("\x1b[2J\x1b[H")
@@ -86,8 +85,10 @@ func runVM(source string, out io.Writer, constants []obj.Object, globals []obj.O
 	}
 
 	LastPopped := machine.LastPoppedStackElem()
-	io.WriteString(out, LastPopped.Inspect())
-	io.WriteString(out, "\n")
+	if LastPopped != nil && LastPopped.Type() != obj.NULL_OBJ {
+		io.WriteString(out, LastPopped.Inspect())
+		io.WriteString(out, "\n")
+	}
 
 	return bytecode.Constant
 }
@@ -133,7 +134,6 @@ func printParseErrors(out io.Writer, error []string) {
 	io.WriteString(out, "We ran into some problems while parsing your program.\n")
 	io.WriteString(out, "Parse errors:\n")
 	for _, msg := range error {
-		io.WriteString(out, "\t" + msg + "\n")
+		io.WriteString(out, "\t"+msg+"\n")
 	}
 }
-

@@ -32,6 +32,7 @@ const (
 	MATRIX_OBJ = "MATRIX"
 	COMPILED_FUNCTION_OBJ = "COMPILED_FUNCTION_OBJ"
 	CLOSURE_OBJ = "CLOSURE"
+	CELL_OBJ = "CELL"
 )
 
 type Object interface {
@@ -336,5 +337,36 @@ func (cl *Closure) Type() ObjectType {
 }
 func (cl *Closure) Inspect() string {
 	return fmt.Sprintf("Closure[%p]", cl)
+}
+
+type Cell struct {
+	Value Object
+}
+
+func (c *Cell) Type() ObjectType {
+	return CELL_OBJ
+}
+func (c *Cell) Inspect() string {
+	if c.Value == nil {
+		return "null"
+	}
+	return c.Value.Inspect()
+}
+
+func NewCell(v Object) *Cell {
+	return &Cell{Value: v}
+}
+
+func Deref(o Object) Object {
+	if cell, ok := o.(*Cell); ok {
+		if cell == nil || cell.Value == nil {
+			return NULL
+		}
+		return cell.Value
+	}
+	if o == nil {
+		return NULL
+	}
+	return o
 }
 
