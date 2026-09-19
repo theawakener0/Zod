@@ -193,7 +193,6 @@ func (l *Lexer) nextToken() tk.Token {
 			return tok
 		} else if isDigit(l.ch) {
 			tok.Literal = l.readNumber()
-			// L1: empty 0x/0b/0o prefix with 0 digits -> ILLEGAL (hardened)
 			if len(tok.Literal) == 2 && (tok.Literal == "0x" || tok.Literal == "0X" || tok.Literal == "0b" || tok.Literal == "0B" || tok.Literal == "0o" || tok.Literal == "0O") {
 				tok.Type = tk.ILLEGAL
 				return tok
@@ -245,8 +244,6 @@ func (l *Lexer) readNumber() string {
 					l.readChar()
 				}
 			}
-			// L1: if no valid digit after prefix (l.position == afterPrefix),
-			// return prefix literal as-is (e.g. "0x", "0b"); caller will emit ILLEGAL.
 			_ = afterPrefix
 			return l.input[position:l.position]
 		}
@@ -315,9 +312,6 @@ func (l *Lexer) skipWhitespaceAndComments() bool {
 				}
 				l.readChar()
 			}
-			// L2: unterminated block comment - loop terminates safely on EOF (l.ch == 0);
-			// ideally would emit ILLEGAL, but skipWhitespaceAndComments is not token-producing,
-			// so we just ensure no infinite loop / panic. Documented as safe.
 			if sawNewline {
 				crossedNewline = true
 			}
@@ -325,7 +319,6 @@ func (l *Lexer) skipWhitespaceAndComments() bool {
 				l.readChar()
 				l.readChar()
 			}
-			// L2: if l.ch == 0 here, comment was unterminated (EOF without closing */) - handled as EOF
 		}
 	}
 

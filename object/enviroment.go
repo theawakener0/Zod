@@ -9,7 +9,6 @@ type Enviroment struct {
 
 func NewEnclosedEnviroment(outer *Enviroment) *Enviroment {
 	env := NewEnviroment()
-	// Depth is retained for potential future use but recursion now uses global callDepth in evaluator.
 	if outer != nil {
 		env.outer = outer
 		env.Depth = outer.Depth

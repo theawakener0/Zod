@@ -7,7 +7,7 @@ Zod is a small, interpreted, dynamically-typed language for joyful programming f
 
 ## What Is Zod?
 
-Zod is a small, interpreted, dynamically-typed language implemented in Go and inspired by Thorsten Ball's *Writing an Interpreter in Go*. It offers first-class functions and closures, plus core types including integers, floats, booleans, strings, arrays, hashes, matrices, and null. Programs run via script files or an interactive REPL.
+Zod is a small, interpreted, dynamically-typed language implemented in Go and inspired by Thorsten Ball's *Writing an Interpreter in Go* and *Writing a Compiler in Go*. It offers first-class functions and closures, plus core types including integers, floats, booleans, strings, arrays, hashes, matrices, and null. Programs run via script files or an interactive REPL.
 
 ## Try It in 30 Seconds
 
@@ -54,6 +54,7 @@ Zod is designed to be small, simple, and easy to use. It is not a general-purpos
 - Rich built-ins for I/O, collections, and math
 - Interactive REPL and script-file execution
 - Operators including `+`, `-`, `*`, `/`, comparisons, and logical operators
+- A top-level denfition 
 
 ## At a Glance: Built-in Functions
 

@@ -3,6 +3,7 @@ package parser
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/theawakener0/Zod/ast"
 	lx "github.com/theawakener0/Zod/lexer"
@@ -216,6 +217,10 @@ func (p *Parser) parseLetStatement() *ast.LetStatement {
 	p.nextToken()
 	stmt.Value = p.parseExpression(LOWEST)
 
+	if fl, ok := stmt.Value.(*ast.FunctionLiteral); ok {
+		fl.Name = stmt.Name.Value
+	}
+
 	if p.peekTokenIs(tk.SEMICOLON) {
 		p.nextToken()
 	}
@@ -236,6 +241,12 @@ func (p *Parser) parseAssignCharStatement() *ast.AssignStatement {
 	p.nextToken()
 	stmt.Value = p.parseExpression(LOWEST)
 	
+	if fl, ok := stmt.Value.(*ast.FunctionLiteral); ok {
+		if ident, ok := stmt.Left.(*ast.Identifier); ok {
+			fl.Name = ident.Value
+		}
+	}
+
 	if p.peekTokenIs(tk.SEMICOLON) {
 		p.nextToken()
 	}
@@ -355,9 +366,6 @@ func isAssignOp(tok tk.TokenType) bool {
 	}
 }
 
-// skipPeekSemicolons advances over semicolons that were auto-inserted at a
-// line break (their Literal is "\n"). Explicit ";" tokens are never skipped,
-// so statement boundaries in user code are preserved.
 func (p *Parser) skipPeekSemicolons() {
 	for p.peekTokenIs(tk.SEMICOLON) && p.peekToken.Literal == "\n" {
 		p.nextToken()
@@ -393,7 +401,15 @@ func (p *Parser) parseIdentifier() ast.Expression {
 func (p *Parser) parseIntegerLiteral() ast.Expression {
 	lit := &ast.IntegerLiteral{Token: p.curToken}
 
-	value, err := strconv.ParseInt(p.curToken.Literal, 0, 64)
+	literal := p.curToken.Literal
+	var value int64
+	var err error
+
+	if len(literal) >= 2 && literal[0] == '0' && strings.Contains("xXbBoO", string(literal[1])) {
+		value, err = strconv.ParseInt(literal, 0, 64)
+	} else {
+		value, err = strconv.ParseInt(literal, 10, 64)
+	}
 	if err != nil {
 		msg := fmt.Sprintf("could not parse %q as integer", p.curToken.Literal)
 		p.errors = append(p.errors, msg)

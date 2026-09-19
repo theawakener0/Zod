@@ -3,12 +3,14 @@ package object
 import (
 	"bytes"
 	"fmt"
+	"hash/fnv"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
-	"hash/fnv"
 
 	"github.com/theawakener0/Zod/ast"
+	"github.com/theawakener0/Zod/code"
 )
 
 type ObjectType string
@@ -28,6 +30,9 @@ const (
 	ARRAY_OBJ = "ARRAY"
 	HASH_OBJ = "HASH"
 	MATRIX_OBJ = "MATRIX"
+	COMPILED_FUNCTION_OBJ = "COMPILED_FUNCTION_OBJ"
+	CLOSURE_OBJ = "CLOSURE"
+	CELL_OBJ = "CELL"
 )
 
 type Object interface {
@@ -75,7 +80,6 @@ func (f *Float) Inspect() string {
 func (f *Float) HashKey() HashKey {
 	if f.Value == math.Trunc(f.Value) {
 		iv := int64(f.Value)
-		// Check round-trip to avoid overflow mis-hash: if float64(iv) == f.Value
 		if float64(iv) == f.Value {
 			return HashKey{Type: INTEGER_OBJ, Value: uint64(iv)}
 		}
@@ -279,9 +283,28 @@ func (h *Hash) Inspect() string {
 	var out bytes.Buffer
 
 	pairs := make([]string, 0, len(h.Pairs))
-	for _, key := range h.Order {
-		pair := h.Pairs[key]
-		pairs = append(pairs, fmt.Sprintf("%s: %s", pair.Key.Inspect(), pair.Value.Inspect()))
+	if len(h.Order) == 0 && len(h.Pairs) > 0 {
+		// Fallback for hashes built without Order 
+		// Sort by rendered key for deterministic output.
+		rendered := make([]string, 0, len(h.Pairs))
+		byRendered := make(map[string]HashPair, len(h.Pairs))
+		for _, pair := range h.Pairs {
+			r := pair.Key.Inspect()
+			if _, exists := byRendered[r]; !exists {
+				rendered = append(rendered, r)
+				byRendered[r] = pair
+			}
+		}
+		sort.Strings(rendered)
+		for _, r := range rendered {
+			pair := byRendered[r]
+			pairs = append(pairs, fmt.Sprintf("%s: %s", pair.Key.Inspect(), pair.Value.Inspect()))
+		}
+	} else {
+		for _, key := range h.Order {
+			pair := h.Pairs[key]
+			pairs = append(pairs, fmt.Sprintf("%s: %s", pair.Key.Inspect(), pair.Value.Inspect()))
+		}
 	}
 
 	out.WriteString("{")
@@ -289,5 +312,61 @@ func (h *Hash) Inspect() string {
 	out.WriteString("}")
 
 	return out.String()
+}
+
+type CompiledFunction struct {
+	Instructions code.Instructions
+	NumLocals    int
+	NumParams    int
+}
+
+func (cf *CompiledFunction) Type() ObjectType {
+	return COMPILED_FUNCTION_OBJ
+}
+func (cf *CompiledFunction) Inspect() string {
+	return fmt.Sprintf("CompiledFunction[%p]", cf)
+}
+
+type Closure struct {
+	Fn 		*CompiledFunction
+	Free 	[]Object
+}
+
+func (cl *Closure) Type() ObjectType {
+	return CLOSURE_OBJ
+}
+func (cl *Closure) Inspect() string {
+	return fmt.Sprintf("Closure[%p]", cl)
+}
+
+type Cell struct {
+	Value Object
+}
+
+func (c *Cell) Type() ObjectType {
+	return CELL_OBJ
+}
+func (c *Cell) Inspect() string {
+	if c.Value == nil {
+		return "null"
+	}
+	return c.Value.Inspect()
+}
+
+func NewCell(v Object) *Cell {
+	return &Cell{Value: v}
+}
+
+func Deref(o Object) Object {
+	if cell, ok := o.(*Cell); ok {
+		if cell == nil || cell.Value == nil {
+			return NULL
+		}
+		return cell.Value
+	}
+	if o == nil {
+		return NULL
+	}
+	return o
 }
 

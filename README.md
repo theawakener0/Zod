@@ -142,7 +142,7 @@ for more details. Go to the [docs](docs/introduction.md).
 
 ## Acknowledgments
 
-Inspired by Thorsten Ball's *Writing an Interpreter in Go*.
+Inspired by Thorsten Ball's *Writing an Interpreter in Go* and *Writing a Compiler in Go*.
 
 ## License
 
