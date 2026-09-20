@@ -498,5 +498,28 @@ func TestElseIfKeywords(t *testing.T) {
 	}
 }
 
+func TestImportToken(t *testing.T) {
+	input := `import "math.zd"`
+	tests := []tk.Token{
+		{tk.IMPORT, "import"},
+		{tk.STRING, "math.zd"},
+		{tk.EOF, ""},
+	}
+
+	l := New(input)
+	for i, tt := range tests {
+		tok := l.NextToken()
+
+		if tok.Type != tt.Type {
+			t.Fatalf("test[%d] - tokentype wrong. expected=%q, got=%q", i, tt.Type, tok.Type)
+		}
+
+		if tok.Literal != tt.Literal {
+			t.Fatalf("test[%d] - literal wrong. expected=%q, got=%q", i, tt.Literal, tok.Literal)
+		}
+	}
+
+}
+
 
 

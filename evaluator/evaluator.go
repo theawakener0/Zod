@@ -3,9 +3,13 @@ package evaluator
 import (
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 
 	"github.com/theawakener0/Zod/ast"
+	"github.com/theawakener0/Zod/lexer"
 	obj "github.com/theawakener0/Zod/object"
+	"github.com/theawakener0/Zod/parser"
 )
 
 var (
@@ -237,6 +241,8 @@ func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
 		return evalIndexExpression(left, index)
 	case *ast.HashLiteral:
 		return evalHashLiteral(n, env)
+	case *ast.ImportStatement:
+		return evalImport(n ,env)
 	}
 
 	return nil
@@ -1227,4 +1233,61 @@ func evalHashIndexExpression(hash, index obj.Object) obj.Object {
 	}
 
 	return pair.Value
+}
+
+func evalImport(stmt *ast.ImportStatement, env *obj.Enviroment) obj.Object {
+	path := stmt.Path.Value
+	
+	resolved, err := resolveModulePath(path)
+	if err != nil {
+		return newError("module not found: %s", path)
+	}
+
+	if loadingModules[resolved] {
+		return newError("circular import detected: %s", resolved)
+	}
+
+	if cached, ok := moduleCache[resolved]; ok {
+		for name, val := range cached.GetAll() {
+			env.Set(name, val)
+		}
+		return NULL
+	}
+
+	loadingModules[resolved] = true
+	defer delete(loadingModules, resolved)
+
+	source, err := os.ReadFile(resolved)
+	if err != nil {
+		return newError("could not read module %s: %s", resolved, err)
+	}
+
+	l := lexer.New(string(source))
+	p := parser.New(l)
+	program := p.ParseProgram()
+	if len(p.Errors()) > 0 {
+		return newError("parse errors in module %s: %v", resolved, p.Errors())
+	}
+
+	moduleEnv := obj.NewEnviroment()
+
+	result := Eval(program, moduleEnv)
+	if isError(result) {
+		return result
+	}
+
+	moduleCache[resolved] = moduleEnv
+	for name, val := range moduleEnv.GetAll() {
+		env.Set(name, val)
+	}
+	
+	return NULL
+}
+
+func resolveModulePath(path string) (string, error) {
+	if _, err := os.Stat(path); err == nil {
+		return filepath.Abs(path)
+	}
+
+	return "", fmt.Errorf("module not found")
 }

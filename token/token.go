@@ -66,6 +66,8 @@ const (
 	BREAK = "BREAK"
 	CONTINUE = "CONTINUE"
 	NULL = "NULL"
+
+	IMPORT = "IMPORT"
 )
 
 var keywords = map[string]TokenType {
@@ -82,6 +84,7 @@ var keywords = map[string]TokenType {
 	"break": BREAK,
 	"continue": CONTINUE,
 	"null": NULL,
+	"import": IMPORT,
 }
 
 func LookupIdent(ident string) TokenType {

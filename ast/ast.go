@@ -539,4 +539,23 @@ func (i *Identifier) String() string {
 	return i.Value
 }
 
+type ImportStatement struct {
+	Token 	tk.Token
+	Path 	*StringLiteral
+}
+
+func (is *ImportStatement) statementNode() {}
+func (is *ImportStatement) TokenLiteral() string {
+	return is.Token.Literal
+}
+func (is *ImportStatement) String() string {
+	var out bytes.Buffer
+
+	out.WriteString(is.TokenLiteral() + " ")
+	out.WriteString(is.Path.String())
+	out.WriteString(";")
+
+	return out.String()
+}
+
 

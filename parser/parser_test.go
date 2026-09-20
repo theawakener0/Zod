@@ -1198,6 +1198,25 @@ func TestParsingHashLiteralsWithExpressionKeys(t *testing.T) {
 	}
 }
 
+func TestImportStatement(t *testing.T) {
+	input := `import "math.zd"`
+
+	l := lx.New(input)
+	p := New(l)
+	program := p.ParseProgram()
+	checkParseErrors(t, p)
+
+	stmt := program.Statements[0].(*ast.ImportStatement)
+	if stmt.TokenLiteral() != "import" {
+		t.Errorf("stmt.TokenLiteral not 'import', got %q", stmt.TokenLiteral())
+	}
+	
+	if stmt.Path.TokenLiteral() != "math.zd" {
+		t.Errorf("stmt.Path.TokenLiteral not 'math.zd', got %q", stmt.Path.TokenLiteral())
+	} 
+
+}
+
 func testLetStatement(t *testing.T, s ast.Statement, name string) bool {
 	if s.TokenLiteral() != "let" {
 		t.Errorf("s.TokenLiteral no 'let', got %q", s.TokenLiteral())

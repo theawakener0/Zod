@@ -29,6 +29,16 @@ func (e *Enviroment) Get(name string) (Object, bool) {
 	return obj, ok
 }
 
+func (e *Enviroment) GetAll() map[string]Object {
+	result := make(map[string]Object, len(e.store))
+
+	for k, v := range e.store {
+		result[k] = v
+	}
+
+	return result
+}
+
 func (e *Enviroment) Set(name string, val Object) Object {
 	e.store[name] = val
 	return val

@@ -196,6 +196,8 @@ func (p *Parser) parseStatement() ast.Statement {
 		return p.parseBreakStatement()
 	case tk.CONTINUE:
 		return p.parseContinueStatement()
+	case tk.IMPORT:
+		return p.parseImportStatement()
 	default:
 		return p.parseExpressionStatement()
 	}
@@ -798,6 +800,22 @@ func (p *Parser) parseBraceBlock() *ast.BlockStatement {
 		return nil
 	}
 	return p.parseBlockStatement()
+}
+
+func (p *Parser) parseImportStatement() *ast.ImportStatement {
+	stmt := &ast.ImportStatement{Token: p.curToken}
+
+	if !p.expectPeek(tk.STRING) {
+		return nil
+	}
+
+	stmt.Path = &ast.StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+
+	if p.peekTokenIs(tk.SEMICOLON) {
+		p.nextToken()
+	}
+
+	return stmt
 }
 
 func (p *Parser) noPrefixParseFnError(t tk.TokenType) {
