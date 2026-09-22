@@ -542,6 +542,7 @@ func (i *Identifier) String() string {
 type ImportStatement struct {
 	Token 	tk.Token
 	Path 	*StringLiteral
+	Alias	*Identifier
 }
 
 func (is *ImportStatement) statementNode() {}
@@ -553,7 +554,33 @@ func (is *ImportStatement) String() string {
 
 	out.WriteString(is.TokenLiteral() + " ")
 	out.WriteString(is.Path.String())
+	if is.Alias != nil {
+		out.WriteString(" as ")
+		out.WriteString(is.Alias.String())
+	}
 	out.WriteString(";")
+
+	return out.String()
+}
+
+type PropertyExpression struct {
+	Token 		tk.Token
+	Object 		Expression
+	Property 	*Identifier
+}
+
+func (pe *PropertyExpression) expressionNode() {}
+func (pe *PropertyExpression) TokenLiteral() string {
+	return pe.Token.Literal
+}
+func (pe *PropertyExpression) String() string {
+	var out bytes.Buffer
+
+	out.WriteString("(")
+	out.WriteString(pe.Object.String())
+	out.WriteString(".")
+	out.WriteString(pe.Property.String())
+	out.WriteString(")")
 
 	return out.String()
 }

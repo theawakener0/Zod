@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/theawakener0/Zod/ast"
 	"github.com/theawakener0/Zod/lexer"
@@ -243,6 +244,8 @@ func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
 		return evalHashLiteral(n, env)
 	case *ast.ImportStatement:
 		return evalImport(n ,env)
+	case *ast.PropertyExpression:
+		return evalPropertyExpression(n, env)
 	}
 
 	return nil
@@ -1246,48 +1249,87 @@ func evalImport(stmt *ast.ImportStatement, env *obj.Enviroment) obj.Object {
 	if loadingModules[resolved] {
 		return newError("circular import detected: %s", resolved)
 	}
+	var moduleEnv *obj.Enviroment
 
 	if cached, ok := moduleCache[resolved]; ok {
-		for name, val := range cached.GetAll() {
-			env.Set(name, val)
+		moduleEnv = cached
+	} else {
+		loadingModules[resolved] = true
+		defer delete(loadingModules, resolved)
+
+		source, err := os.ReadFile(resolved)
+		if err != nil {
+			return newError("could not read module %s: %s", resolved, err)
 		}
-		return NULL
+
+		l := lexer.New(string(source))
+		p := parser.New(l)
+		program := p.ParseProgram()
+		if len(p.Errors()) > 0 {
+			return newError("parse errors in module %s: %v", resolved, p.Errors())
+		}
+
+		moduleEnv = obj.NewEnviroment()
+
+		result := Eval(program, moduleEnv)
+		if isError(result) {
+			return result
+		}
+		moduleCache[resolved] = moduleEnv
 	}
 
-	loadingModules[resolved] = true
-	defer delete(loadingModules, resolved)
-
-	source, err := os.ReadFile(resolved)
-	if err != nil {
-		return newError("could not read module %s: %s", resolved, err)
+	moduleName := path
+	if stmt.Alias != nil {
+		moduleName = stmt.Alias.Value
+	} else {
+		moduleName = strings.TrimSuffix(filepath.Base(path), ".zd")
 	}
 
-	l := lexer.New(string(source))
-	p := parser.New(l)
-	program := p.ParseProgram()
-	if len(p.Errors()) > 0 {
-		return newError("parse errors in module %s: %v", resolved, p.Errors())
+	mod := &obj.Module{
+		Name: moduleName,
+		Env:  moduleEnv,
 	}
 
-	moduleEnv := obj.NewEnviroment()
-
-	result := Eval(program, moduleEnv)
-	if isError(result) {
-		return result
-	}
-
-	moduleCache[resolved] = moduleEnv
-	for name, val := range moduleEnv.GetAll() {
-		env.Set(name, val)
-	}
-	
+	env.Set(moduleName, mod)
 	return NULL
 }
 
-func resolveModulePath(path string) (string, error) {
-	if _, err := os.Stat(path); err == nil {
-		return filepath.Abs(path)
+func evalPropertyExpression(node *ast.PropertyExpression, env *obj.Enviroment) obj.Object {
+	left := Eval(node.Object, env)
+	if isError(left) {
+		return left
 	}
 
+	switch object := left.(type) {
+	case *obj.Module:
+		val, ok := object.Env.Get(node.Property.Value)
+		if !ok {
+			return newError("undefined property %s on module %s", node.Property.Value, object.Name)
+		}
+		return val
+	default:
+		return newError("property access not supported on type %s", left.Type())
+	} 
+}
+
+func resolveModulePath(path string) (string, error) {
+	candidate := []string{
+		path,
+		filepath.Join(".", path),
+		filepath.Join(stdlibImports(), path),
+		filepath.Join(stdlibImports(), path + ".zd"),
+	}
+	for _, c := range candidate {
+		if abs, err := filepath.Abs(c); err == nil {
+			if _, err := os.Stat(abs); err == nil {
+				return abs, nil
+			}
+		}
+	}
 	return "", fmt.Errorf("module not found")
+}
+
+func stdlibImports() string {
+	exe, _ := os.Executable()
+	return filepath.Join(filepath.Dir(exe), "stdlib")
 }

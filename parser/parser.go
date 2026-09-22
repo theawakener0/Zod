@@ -39,6 +39,7 @@ const (
 	PREFIX
 	CALL
 	INDEX
+	PROPERTY
 )
 
 var precedences = map[tk.TokenType]int {
@@ -58,6 +59,7 @@ var precedences = map[tk.TokenType]int {
 	tk.INC:			CALL,
 	tk.DEC:			CALL,
 	tk.LBRACKET:	INDEX,
+	tk.DOT: 		PROPERTY,
 }
 
 func New(l *lx.Lexer) *Parser {
@@ -90,6 +92,7 @@ func New(l *lx.Lexer) *Parser {
 	p.registerInfix(tk.INC, p.parsePostfixExpression)
 	p.registerInfix(tk.DEC, p.parsePostfixExpression)
 	p.registerInfix(tk.LBRACKET, p.parseIndexExpression)
+	p.registerInfix(tk.DOT, p.parsePropertyExpression)
 
 	p.registerPrefix(tk.TRUE, p.parseBoolean)
 	p.registerPrefix(tk.FALSE, p.parseBoolean)
@@ -811,11 +814,32 @@ func (p *Parser) parseImportStatement() *ast.ImportStatement {
 
 	stmt.Path = &ast.StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
 
+	if p.peekTokenIs(tk.IDENT) && p.peekToken.Literal == "as" {
+		p.nextToken()
+		if !p.expectPeek(tk.IDENT) {
+			return nil
+		}
+
+		stmt.Alias = &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
+	}
+
 	if p.peekTokenIs(tk.SEMICOLON) {
 		p.nextToken()
 	}
 
 	return stmt
+}
+
+func (p *Parser) parsePropertyExpression(left ast.Expression) ast.Expression {
+	exp := &ast.PropertyExpression{Token: p.curToken, Object: left}
+
+	if !p.expectPeek(tk.IDENT) {
+		return nil
+	}
+
+	exp.Property = &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
+
+	return exp
 }
 
 func (p *Parser) noPrefixParseFnError(t tk.TokenType) {

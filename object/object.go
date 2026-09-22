@@ -33,6 +33,7 @@ const (
 	COMPILED_FUNCTION_OBJ = "COMPILED_FUNCTION_OBJ"
 	CLOSURE_OBJ = "CLOSURE"
 	CELL_OBJ = "CELL"
+	MODULE_OBJ = "MODULE"
 )
 
 type Object interface {
@@ -368,5 +369,17 @@ func Deref(o Object) Object {
 		return NULL
 	}
 	return o
+}
+
+type Module struct {
+	Name 	string
+	Env 	*Enviroment
+}
+
+func (m *Module) Type() ObjectType {
+	return MODULE_OBJ
+}
+func (m *Module) Inspect() string {
+	return fmt.Sprintf("module(%s)", m.Name)
 }
 
