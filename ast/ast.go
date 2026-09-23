@@ -543,6 +543,8 @@ type ImportStatement struct {
 	Token 	tk.Token
 	Path 	*StringLiteral
 	Alias	*Identifier
+	Names   []*Identifier
+	IsFrom  bool
 }
 
 func (is *ImportStatement) statementNode() {}
@@ -551,12 +553,23 @@ func (is *ImportStatement) TokenLiteral() string {
 }
 func (is *ImportStatement) String() string {
 	var out bytes.Buffer
-
-	out.WriteString(is.TokenLiteral() + " ")
-	out.WriteString(is.Path.String())
-	if is.Alias != nil {
-		out.WriteString(" as ")
-		out.WriteString(is.Alias.String())
+	
+	if is.IsFrom {
+		out.WriteString("from ")
+		out.WriteString(is.Path.String())
+		out.WriteString(" import ")
+		names := []string{}
+		for _, n := range is.Names {
+			names = append(names, n.String())
+		}
+		out.WriteString(strings.Join(names, ", "))
+	} else {
+		out.WriteString("import ")
+		out.WriteString(is.Path.String())
+		if is.Alias != nil {
+			out.WriteString(" as ")
+			out.WriteString(is.Alias.String())
+		}
 	}
 	out.WriteString(";")
 

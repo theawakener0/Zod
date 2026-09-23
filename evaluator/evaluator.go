@@ -1254,6 +1254,9 @@ func evalImport(stmt *ast.ImportStatement, env *obj.Enviroment) obj.Object {
 	if cached, ok := moduleCache[resolved]; ok {
 		moduleEnv = cached
 	} else {
+		if loadingModules[resolved] {
+			return newError("circular import detected: %s", resolved)
+		}
 		loadingModules[resolved] = true
 		defer delete(loadingModules, resolved)
 
@@ -1278,19 +1281,30 @@ func evalImport(stmt *ast.ImportStatement, env *obj.Enviroment) obj.Object {
 		moduleCache[resolved] = moduleEnv
 	}
 
-	moduleName := path
-	if stmt.Alias != nil {
-		moduleName = stmt.Alias.Value
+	if stmt.IsFrom {
+		for _, name := range stmt.Names {
+			val, ok := moduleEnv.Get(name.Value)
+			if !ok {
+				return newError("module %s has no export named %s", path, name.Value)
+			}
+			env.Set(name.Value, val)
+		}
 	} else {
-		moduleName = strings.TrimSuffix(filepath.Base(path), ".zd")
+		moduleName := path
+		if stmt.Alias != nil {
+			moduleName = stmt.Alias.Value
+		} else {
+			moduleName = strings.TrimSuffix(filepath.Base(path), ".zd")
+		}
+
+		mod := &obj.Module{
+			Name: moduleName,
+			Env:  moduleEnv,
+		}
+
+		env.Set(moduleName, mod)
 	}
 
-	mod := &obj.Module{
-		Name: moduleName,
-		Env:  moduleEnv,
-	}
-
-	env.Set(moduleName, mod)
 	return NULL
 }
 
@@ -1313,12 +1327,27 @@ func evalPropertyExpression(node *ast.PropertyExpression, env *obj.Enviroment) o
 }
 
 func resolveModulePath(path string) (string, error) {
-	candidate := []string{
-		path,
-		filepath.Join(".", path),
-		filepath.Join(stdlibImports(), path),
-		filepath.Join(stdlibImports(), path + ".zd"),
+	if abs, err := filepath.Abs(path); err == nil {
+		if _, err := os.Stat(abs); err == nil {
+			return abs, nil
+		}
 	}
+
+	if !strings.HasPrefix(path, ".zd") {
+		withExt := path + ".zd"
+		if abs, err := filepath.Abs(withExt); err == nil {
+			if _, err := os.Stat(abs); err == nil {
+				return abs, nil
+			}
+		}
+	}
+
+	stdlib := stdlibPath()
+	candidate := []string{
+		filepath.Join(stdlib, path),
+		filepath.Join(stdlib, path + ".zd"),
+	}
+
 	for _, c := range candidate {
 		if abs, err := filepath.Abs(c); err == nil {
 			if _, err := os.Stat(abs); err == nil {
@@ -1326,10 +1355,18 @@ func resolveModulePath(path string) (string, error) {
 			}
 		}
 	}
+
 	return "", fmt.Errorf("module not found")
 }
 
-func stdlibImports() string {
-	exe, _ := os.Executable()
-	return filepath.Join(filepath.Dir(exe), "stdlib")
+func stdlibPath() string {
+	if p := os.Getenv("ZOD_STDLIB"); p != "" {
+		return p
+	}
+
+	if exe, err := os.Executable(); err == nil {
+		return filepath.Join(filepath.Dir(exe), "stdlib")
+	}
+
+	return "stdlib"
 }

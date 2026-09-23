@@ -1,4 +1,4 @@
-import "math.zd" as math
+from "math.zd" import abs
 
 x := [5, 2, 4, 1, 3, 7, 2]
 
@@ -16,4 +16,4 @@ for (i := 0; i < len(x); ++i) {
 
 println(x)
 println("--------------")
-println(math.abs(-10))
+println(abs(-10))

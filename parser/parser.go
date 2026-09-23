@@ -201,6 +201,8 @@ func (p *Parser) parseStatement() ast.Statement {
 		return p.parseContinueStatement()
 	case tk.IMPORT:
 		return p.parseImportStatement()
+	case tk.FROM:
+		return p.parseFromImportStatement()
 	default:
 		return p.parseExpressionStatement()
 	}
@@ -806,7 +808,7 @@ func (p *Parser) parseBraceBlock() *ast.BlockStatement {
 }
 
 func (p *Parser) parseImportStatement() *ast.ImportStatement {
-	stmt := &ast.ImportStatement{Token: p.curToken}
+	stmt := &ast.ImportStatement{Token: p.curToken, IsFrom: false}
 
 	if !p.expectPeek(tk.STRING) {
 		return nil
@@ -840,6 +842,44 @@ func (p *Parser) parsePropertyExpression(left ast.Expression) ast.Expression {
 	exp.Property = &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal}
 
 	return exp
+}
+
+func (p *Parser) parseFromImportStatement() *ast.ImportStatement {
+	stmt := &ast.ImportStatement{Token: p.curToken, IsFrom: true}
+
+	if !p.expectPeek(tk.STRING) {
+		return nil
+	}
+	stmt.Path = &ast.StringLiteral{Token: p.curToken, Value: p.curToken.Literal}
+
+	// if !p.expectPeek(tk.IDENT) || p.curToken.Literal != "import" {
+	// 	p.errors = append(p.errors, "expected 'import' after module path")
+	// 	return nil
+	// }
+	if !p.expectPeek(tk.IMPORT) {
+		return nil
+	}
+
+	stmt.Names = []*ast.Identifier{}
+
+	if !p.expectPeek(tk.IDENT) {
+		return nil
+	}
+	stmt.Names = append(stmt.Names, &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal})
+
+	for p.peekTokenIs(tk.COMMA) {
+		p.nextToken()
+		if !p.expectPeek(tk.IDENT) {
+			return nil
+		}
+		stmt.Names = append(stmt.Names, &ast.Identifier{Token: p.curToken, Value: p.curToken.Literal})
+	}
+
+	if p.peekTokenIs(tk.SEMICOLON) {
+		p.nextToken()
+	}
+
+	return stmt
 }
 
 func (p *Parser) noPrefixParseFnError(t tk.TokenType) {

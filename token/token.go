@@ -68,6 +68,7 @@ const (
 	NULL = "NULL"
 
 	IMPORT = "IMPORT"
+	FROM = "FROM"
 )
 
 var keywords = map[string]TokenType {
@@ -85,6 +86,7 @@ var keywords = map[string]TokenType {
 	"continue": CONTINUE,
 	"null": NULL,
 	"import": IMPORT,
+	"from": FROM,
 }
 
 func LookupIdent(ident string) TokenType {
