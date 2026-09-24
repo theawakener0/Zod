@@ -1217,6 +1217,83 @@ func TestImportStatement(t *testing.T) {
 
 }
 
+func TestPubLetVisibility(t *testing.T) {
+	l := lx.New("pub let x = 5;")
+	p := New(l)
+	program := p.ParseProgram()
+	checkParseErrors(t, p)
+
+	stmt, ok := program.Statements[0].(*ast.LetStatement)
+	if !ok {
+		t.Fatalf("stmt is not *ast.LetStatement, got %T", program.Statements[0])
+	}
+	if !stmt.Public {
+		t.Errorf("pub let should set Public true")
+	}
+
+	l = lx.New("let x = 5;")
+	p = New(l)
+	program = p.ParseProgram()
+	checkParseErrors(t, p)
+
+	stmt, ok = program.Statements[0].(*ast.LetStatement)
+	if !ok {
+		t.Fatalf("stmt is not *ast.LetStatement, got %T", program.Statements[0])
+	}
+	if stmt.Public {
+		t.Errorf("plain let should set Public false")
+	}
+}
+
+func TestPubAssignCharVisibility(t *testing.T) {
+	l := lx.New("pub x := 5;")
+	p := New(l)
+	program := p.ParseProgram()
+	checkParseErrors(t, p)
+
+	stmt, ok := program.Statements[0].(*ast.AssignStatement)
+	if !ok {
+		t.Fatalf("stmt is not *ast.AssignStatement, got %T", program.Statements[0])
+	}
+	if !stmt.Public {
+		t.Errorf("pub := should set Public true")
+	}
+
+	l = lx.New("x := 5;")
+	p = New(l)
+	program = p.ParseProgram()
+	checkParseErrors(t, p)
+
+	stmt, ok = program.Statements[0].(*ast.AssignStatement)
+	if !ok {
+		t.Fatalf("stmt is not *ast.AssignStatement, got %T", program.Statements[0])
+	}
+	if stmt.Public {
+		t.Errorf("plain := should set Public false")
+	}
+}
+
+func TestPubInvalidUses(t *testing.T) {
+	inputs := []string{
+		"pub x = 5;",
+		"pub x += 1;",
+		"pub x;",
+		"pub 5;",
+		"pub return 5;",
+		`pub import "math.zd"`,
+		`pub from "math.zd" import x`,
+	}
+
+	for _, input := range inputs {
+		l := lx.New(input)
+		p := New(l)
+		p.ParseProgram()
+		if len(p.Errors()) == 0 {
+			t.Errorf("expected parser error for %q, got none", input)
+		}
+	}
+}
+
 func testLetStatement(t *testing.T, s ast.Statement, name string) bool {
 	if s.TokenLiteral() != "let" {
 		t.Errorf("s.TokenLiteral no 'let', got %q", s.TokenLiteral())

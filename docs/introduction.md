@@ -133,6 +133,42 @@ if (r[0]) {
 }
 ```
 
+## Modules & pub
+
+Bindings are private by default. Mark a top-level `let` or `:=` definition with `pub` to export it from a module. Only public bindings can be imported.
+
+```zod
+// pub_lib.zd
+pub let version = 1
+let secret = "hidden"
+
+pub greet := fn(name) { "hello, " + name }
+```
+
+```zod
+// Star import: brings all public bindings into scope.
+from "examples/pub_lib.zd" import *
+println(version)       // 1
+println(greet("world")) // hello, world
+
+// Named import: brings only the listed public bindings into scope.
+from "examples/pub_lib.zd" import greet
+
+// Module import with alias: access public bindings as properties.
+import "examples/pub_lib.zd" as m
+println(m.version)
+println(m.greet("alias"))
+```
+
+Accessing a private binding fails:
+
+```zod
+from "examples/pub_lib.zd" import secret // error: module ... has no public export named secret (secret is private)
+println(m.secret)                        // error: undefined property secret on module m (secret is private)
+```
+
+`pub` only applies to top-level `let` and `:=` definitions. A `pub` inside a block or function body stays local to that scope and is never exported. See `examples/pub_lib.zd` and `examples/modules_pub.zd` for a runnable demo.
+
 ## Next Steps
 
 - Explore runnable examples in `examples/` — start with `hello.zd`, `variables.zd`, and `guess_the_number.zd`.

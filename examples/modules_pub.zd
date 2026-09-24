@@ -1,0 +1,20 @@
+// modules_pub.zd - demo of `pub` visibility and the three import forms.
+// Run from the repo root: go run . examples/modules_pub.zd
+
+// 1. Star import: brings all public bindings into scope.
+from "examples/pub_lib.zd" import *
+println(version)
+println(greet("world"))
+
+// 2. Named import: brings only the listed public bindings into scope.
+from "examples/pub_lib.zd" import greet
+println(greet("named"))
+
+// 3. Module import with alias: access public bindings as properties.
+import "examples/pub_lib.zd" as m
+println(m.version)
+println(m.greet("alias"))
+
+// Private bindings are not accessible:
+//   from "examples/pub_lib.zd" import secret  // error: "secret" is private
+//   println(m.secret)                          // error: "secret" is private

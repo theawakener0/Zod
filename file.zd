@@ -1,4 +1,4 @@
-from "math.zd" import abs
+from "math.zd" import *
 
 x := [5, 2, 4, 1, 3, 7, 2]
 

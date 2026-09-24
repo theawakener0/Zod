@@ -119,6 +119,25 @@ More runnable examples live in [`examples/`](examples/).
 
 Index assignment works on arrays and hashes too: `nums[0] = 10`, `user["age"] += 1`.
 
+### Modules
+
+Bindings are private by default. Prefix a top-level `let` or `:=` with `pub` to export it.
+
+```zod
+// pub_lib.zd
+pub let version = 1
+let secret = "hidden"
+pub greet := fn(name) { "hello, " + name }
+```
+
+```zod
+from "examples/pub_lib.zd" import *      // all public bindings
+from "examples/pub_lib.zd" import greet  // listed public bindings only
+import "examples/pub_lib.zd" as m        // property access: m.version, m.greet("hi")
+```
+
+Importing or accessing a private binding is an error (e.g. `secret is private`). See `docs/introduction.md` (Modules & pub) and `examples/modules_pub.zd` for details.
+
 ## Built-in Functions
 
 | Function              | Description                                    |

@@ -1,0 +1,7 @@
+// pub_lib.zd - shared library for the Modules & pub demo.
+// Only `pub` bindings are importable; the rest stay private.
+pub let version = 1
+let secret = "hidden"
+
+pub greet := fn(name) { "hello, " + name }
+helper := fn() { "helper" }

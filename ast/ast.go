@@ -49,6 +49,7 @@ type LetStatement struct {
 	Token 	tk.Token
 	Name	*Identifier
 	Value 	Expression
+	Public 	bool
 }
 
 func (ls *LetStatement) statementNode() {}
@@ -58,6 +59,9 @@ func (ls *LetStatement) TokenLiteral() string {
 func (ls *LetStatement) String() string {
 	var out bytes.Buffer
 
+	if ls.Public {
+		out.WriteString("pub ")
+	}
 	out.WriteString(ls.TokenLiteral() + " ")
 	out.WriteString(ls.Name.String())
 	out.WriteString(" = ")
@@ -74,6 +78,7 @@ type AssignStatement struct {
 	Token 	tk.Token
 	Left	Expression
 	Value 	Expression
+	Public 	bool
 }
 
 func (as *AssignStatement) statementNode() {}
@@ -83,6 +88,9 @@ func (as *AssignStatement) TokenLiteral() string {
 func (as *AssignStatement) String() string {
 	var out bytes.Buffer
 
+	if as.Public {
+		out.WriteString("pub ")
+	}
 	out.WriteString(as.Left.String())
 	out.WriteString(" " + as.TokenLiteral() + " ")
 
@@ -312,6 +320,7 @@ type FunctionLiteral struct {
 	Parameters	[]*Identifier
 	Body		*BlockStatement
 	Name        string
+	Public      bool
 }
 
 func (fl *FunctionLiteral) expressionNode() {}
@@ -545,6 +554,7 @@ type ImportStatement struct {
 	Alias	*Identifier
 	Names   []*Identifier
 	IsFrom  bool
+	IsStar  bool
 }
 
 func (is *ImportStatement) statementNode() {}
@@ -558,11 +568,16 @@ func (is *ImportStatement) String() string {
 		out.WriteString("from ")
 		out.WriteString(is.Path.String())
 		out.WriteString(" import ")
-		names := []string{}
-		for _, n := range is.Names {
-			names = append(names, n.String())
+
+		if is.IsStar {
+			out.WriteString("*")
+		} else {
+			names := []string{}
+			for _, n := range is.Names {
+				names = append(names, n.String())
+			}
+			out.WriteString(strings.Join(names, ", "))
 		}
-		out.WriteString(strings.Join(names, ", "))
 	} else {
 		out.WriteString("import ")
 		out.WriteString(is.Path.String())

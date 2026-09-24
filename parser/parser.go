@@ -179,31 +179,95 @@ func (p *Parser) parseStatement() ast.Statement {
 		return nil
 	}
 
+	isPublic := false
+	if p.curTokenIs(tk.PUB) {
+		isPublic = true
+		p.nextToken()
+		if p.curTokenIs(tk.PUB) {
+			p.errors = append(p.errors, "double pub is not allowed")
+			return nil
+		}
+		if p.curToken.Type != tk.LET && p.curToken.Type != tk.IDENT {
+			p.errors = append(p.errors, "pub can only be applied to let or := definitions")
+			return nil
+		}
+	}
+
 	switch p.curToken.Type {
 	case tk.LET:
-		return p.parseLetStatement()
+		stmt := p.parseLetStatement()
+		if stmt != nil {
+			stmt.Public = isPublic
+			if fl, ok := stmt.Value.(*ast.FunctionLiteral); ok {
+				fl.Public = isPublic
+			}
+		}
+		return stmt
 	case tk.IDENT:
-		if p.peekTokenIs(tk.ASSIGNCHAR) { 
-			return p.parseAssignCharStatement()
+		if p.peekTokenIs(tk.ASSIGNCHAR) {
+			stmt := p.parseAssignCharStatement()
+			if stmt != nil {
+				stmt.Public = isPublic
+				if fl, ok := stmt.Value.(*ast.FunctionLiteral); ok {
+					fl.Public = isPublic
+				}
+			}
+			return stmt
 		} else if p.peekTokenIs(tk.INCASSIGN) || p.peekTokenIs(tk.DECDASSIGN) ||
 			p.peekTokenIs(tk.MLTASSIGN) || p.peekTokenIs(tk.DIVASSIGN) {
+			if isPublic {
+				p.errors = append(p.errors, "pub can only be applied to let or := definitions")
+				return nil
+			}
 			return p.parseCompoundAssignStatement()
 		} else if p.peekTokenIs(tk.ASSIGN) {
+			if isPublic {
+				p.errors = append(p.errors, "pub can only be applied to let or := definitions")
+				return nil
+			}
 			return p.parseAssignStatement()
 		} else {
+			if isPublic {
+				p.errors = append(p.errors, "pub can only be applied to let or := definitions")
+				return nil
+			}
 			return p.parseExpressionStatement()
 		}
 	case tk.RETURN:
+		if isPublic {
+			p.errors = append(p.errors, "pub can only be applied to let or := definitions")
+			return nil
+		}
 		return p.parseReturnStatement()
 	case tk.BREAK:
+		if isPublic {
+			p.errors = append(p.errors, "pub can only be applied to let or := definitions")
+			return nil
+		}
 		return p.parseBreakStatement()
 	case tk.CONTINUE:
+		if isPublic {
+			p.errors = append(p.errors, "pub can only be applied to let or := definitions")
+			return nil
+		}
 		return p.parseContinueStatement()
 	case tk.IMPORT:
+		if isPublic {
+			p.errors = append(p.errors, "pub can only be applied to let or := definitions")
+			return nil
+		}
 		return p.parseImportStatement()
 	case tk.FROM:
+		if isPublic {
+			p.errors = append(p.errors, "pub can only be applied to let or := definitions")
+			return nil
+		}
 		return p.parseFromImportStatement()
 	default:
+		if isPublic {
+			p.errors = append(p.errors, "pub can only be applied to let or := definitions")
+			return nil
+		}
 		return p.parseExpressionStatement()
 	}
 }
@@ -860,6 +924,17 @@ func (p *Parser) parseFromImportStatement() *ast.ImportStatement {
 		return nil
 	}
 
+	if p.peekTokenIs(tk.ASTERISK) {
+		p.nextToken()
+		stmt.IsStar = true
+
+		if p.peekTokenIs(tk.SEMICOLON) {
+			p.nextToken()
+		}
+
+		return stmt
+	}
+	
 	stmt.Names = []*ast.Identifier{}
 
 	if !p.expectPeek(tk.IDENT) {

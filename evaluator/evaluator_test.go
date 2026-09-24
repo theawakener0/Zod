@@ -4,6 +4,9 @@ import (
 	lx "github.com/theawakener0/Zod/lexer"
 	obj "github.com/theawakener0/Zod/object"
 	ps "github.com/theawakener0/Zod/parser"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -1365,6 +1368,87 @@ func TestHashIndexAssignmentPreservesOrder(t *testing.T) {
 	}
 	if h.Inspect() != "{x: 1, y: 2, z: 3}" {
 		t.Errorf("index assignment order wrong. got=%s", h.Inspect())
+	}
+}
+
+func writePubTestModule(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pubmod.zd")
+	content := "pub let a = 1\nlet b = 2\npub c := 3\nd := 4\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("could not write temp module: %s", err)
+	}
+	return path
+}
+
+func TestPubStarImportOnlyPublics(t *testing.T) {
+	mod := writePubTestModule(t)
+
+	evaluated := testEval(`from "` + mod + `" import *; a;`)
+	testIntegerObject(t, evaluated, 1)
+
+	evaluated = testEval(`from "` + mod + `" import *; c;`)
+	testIntegerObject(t, evaluated, 3)
+
+	evaluated = testEval(`from "` + mod + `" import *; b;`)
+	err, ok := evaluated.(*obj.Error)
+	if !ok {
+		t.Fatalf("expected Error for private b via star import, got %T (%+v)", evaluated, evaluated)
+	}
+	if err.Message != "identifier not found: b" {
+		t.Errorf("wrong error for private b. got=%q", err.Message)
+	}
+
+	evaluated = testEval(`from "` + mod + `" import *; d;`)
+	err, ok = evaluated.(*obj.Error)
+	if !ok {
+		t.Fatalf("expected Error for private d via star import, got %T (%+v)", evaluated, evaluated)
+	}
+	if err.Message != "identifier not found: d" {
+		t.Errorf("wrong error for private d. got=%q", err.Message)
+	}
+}
+
+func TestPubNamedImportPrivateError(t *testing.T) {
+	mod := writePubTestModule(t)
+
+	evaluated := testEval(`from "` + mod + `" import a; a;`)
+	testIntegerObject(t, evaluated, 1)
+
+	evaluated = testEval(`from "` + mod + `" import c; c;`)
+	testIntegerObject(t, evaluated, 3)
+
+	for _, name := range []string{"b", "d"} {
+		evaluated = testEval(`from "` + mod + `" import ` + name + `;`)
+		err, ok := evaluated.(*obj.Error)
+		if !ok {
+			t.Fatalf("expected Error for private named import %s, got %T (%+v)", name, evaluated, evaluated)
+		}
+		if !strings.Contains(err.Message, "private") {
+			t.Errorf("expected error containing private for %s, got=%q", name, err.Message)
+		}
+	}
+}
+
+func TestPubModulePropertyAccess(t *testing.T) {
+	mod := writePubTestModule(t)
+
+	evaluated := testEval(`import "` + mod + `" as m; m.a;`)
+	testIntegerObject(t, evaluated, 1)
+
+	evaluated = testEval(`import "` + mod + `" as m; m.c;`)
+	testIntegerObject(t, evaluated, 3)
+
+	for _, name := range []string{"b", "d"} {
+		evaluated = testEval(`import "` + mod + `" as m; m.` + name + `;`)
+		err, ok := evaluated.(*obj.Error)
+		if !ok {
+			t.Fatalf("expected Error for private property %s, got %T (%+v)", name, evaluated, evaluated)
+		}
+		if !strings.Contains(err.Message, "private") {
+			t.Errorf("expected error containing private for %s, got=%q", name, err.Message)
+		}
 	}
 }
 

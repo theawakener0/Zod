@@ -121,6 +121,9 @@ func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
 			return val
 		}
 		env.Set(n.Name.Value, val)
+		if n.Public {
+			env.SetPublic(n.Name.Value)
+		}
 
 	case *ast.AssignStatement:
 		val := Eval(n.Value, env)
@@ -137,6 +140,9 @@ func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
 		switch n.Token.Literal {
 		case ":=":
 			env.Set(ident.Value, val)
+			if n.Public {
+				env.SetPublic(ident.Value)
+			}
 		case "=":
 			if !env.Assign(ident.Value, val) {
 				return newError("identifier not found: %s", ident.Value)
@@ -1282,12 +1288,21 @@ func evalImport(stmt *ast.ImportStatement, env *obj.Enviroment) obj.Object {
 	}
 
 	if stmt.IsFrom {
-		for _, name := range stmt.Names {
-			val, ok := moduleEnv.Get(name.Value)
-			if !ok {
-				return newError("module %s has no export named %s", path, name.Value)
+		if stmt.IsStar {
+			for name, val := range moduleEnv.GetAllPublic() {
+				env.Set(name, val)
 			}
-			env.Set(name.Value, val)
+		} else {
+			for _, name := range stmt.Names {
+				val, ok := moduleEnv.Get(name.Value)
+				if !ok {
+					return newError("module %s has no export named %s", path, name.Value)
+				}
+				if !moduleEnv.IsPublic(name.Value) {
+					return newError("module %s has no public export named %s (%s is private)", path, name.Value, name.Value)
+				}
+				env.Set(name.Value, val)
+			}
 		}
 	} else {
 		moduleName := path
@@ -1319,6 +1334,9 @@ func evalPropertyExpression(node *ast.PropertyExpression, env *obj.Enviroment) o
 		val, ok := object.Env.Get(node.Property.Value)
 		if !ok {
 			return newError("undefined property %s on module %s", node.Property.Value, object.Name)
+		}
+		if !object.Env.IsPublic(node.Property.Value) {
+			return newError("undefined property %s on module %s (%s is private)", node.Property.Value, object.Name, node.Property.Value)
 		}
 		return val
 	default:
