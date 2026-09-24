@@ -31,7 +31,7 @@ func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
 		return Eval(n.Expression, env)
 
 	case *ast.IntegerLiteral:
-		return &obj.Integer{Value: n.Value}
+		return obj.NewInteger(n.Value)
 
 	case *ast.FloatLiteral:
 		return &obj.Float{Value: n.Value}
@@ -293,13 +293,11 @@ func evalBangOperatorExpression(right obj.Object) obj.Object {
 }
 
 func evalMinusPrefixOperatorExpression(right obj.Object) obj.Object {
-	switch right.Type() {
-	case obj.INTEGER_OBJ:
-		value := right.(*obj.Integer).Value
-		return &obj.Integer{Value: -value}
-	case obj.FLOAT_OBJ:
-		value := right.(*obj.Float).Value
-		return &obj.Float{Value: -value}
+	switch v := right.(type) {
+	case *obj.Integer:
+		return obj.NewInteger(-v.Value)
+	case *obj.Float:
+		return &obj.Float{Value: -v.Value}
 	default:
 		return newError("unknown prefix operator: -%s", right.Type())
 	}
@@ -322,16 +320,16 @@ func evalIntegerInfixExpression(operator string, left, right obj.Object) obj.Obj
 
 	switch operator {
 	case "+":
-		return &obj.Integer{Value: leftValue + rightValue}
+		return obj.NewInteger(leftValue + rightValue)
 	case "-":
-		return &obj.Integer{Value: leftValue - rightValue}
+		return obj.NewInteger(leftValue - rightValue)
 	case "*":
-		return &obj.Integer{Value: leftValue * rightValue}
+		return obj.NewInteger(leftValue * rightValue)
 	case "/":
 		if rightValue == 0 {
 			return newError("division by zero")
 		}
-		return &obj.Integer{Value: leftValue / rightValue}
+		return obj.NewInteger(leftValue / rightValue)
 	case "<":
 		return nattiveBoolToBooleanObject(leftValue < rightValue)
 	case ">":
@@ -350,21 +348,22 @@ func evalIntegerInfixExpression(operator string, left, right obj.Object) obj.Obj
 }
 
 func evalInfixExpression(operator string, left, right obj.Object) obj.Object {
+	lt, rt := left.Type(), right.Type()
 	switch {
-	case left.Type() == obj.INTEGER_OBJ && right.Type() == obj.INTEGER_OBJ:
+	case lt == obj.INTEGER_OBJ && rt == obj.INTEGER_OBJ:
 		return evalIntegerInfixExpression(operator, left, right)
-	case left.Type() == obj.MATRIX_OBJ || right.Type() == obj.MATRIX_OBJ:
+	case lt == obj.MATRIX_OBJ || rt == obj.MATRIX_OBJ:
 		return evalMatrixInfixExpression(operator, left, right)
-	case left.Type() == obj.FLOAT_OBJ || right.Type() == obj.FLOAT_OBJ:
+	case lt == obj.FLOAT_OBJ || rt == obj.FLOAT_OBJ:
 		return evalFloatInfixExpression(operator, left, right)
-	case left.Type() == obj.STRING_OBJ && right.Type() == obj.STRING_OBJ:
+	case lt == obj.STRING_OBJ && rt == obj.STRING_OBJ:
 		return evalStringInfixExpression(operator, left, right)
 	case operator == "==":
 		return nattiveBoolToBooleanObject(left == right)
 	case operator == "!=":
 		return nattiveBoolToBooleanObject(left != right)
 	default:
-		return newError("unknown infix operator: %s %s %s", left.Type(), operator, right.Type())
+		return newError("unknown infix operator: %s %s %s", lt, operator, rt)
 	}
 }
 
@@ -608,7 +607,7 @@ func numericValue(o obj.Object) (float64, bool) {
 
 func resultValue(v float64, isInt bool) obj.Object {
 	if isInt && v == math.Trunc(v) {
-		return &obj.Integer{Value: int64(v)}
+		return obj.NewInteger(int64(v))
 	}
 	return &obj.Float{Value: v}
 }
@@ -761,12 +760,12 @@ func evalForExpression(fe *ast.ForExpression, env *obj.Enviroment) obj.Object {
 		}
 		result := Eval(fe.Body, bodyEnv)
 		if result != nil {
-			switch result.Type() {
-			case obj.RETURN_VALUE_OBJ, obj.ERROR_OBJ:
+			switch result := result.(type) {
+			case *obj.ReturnValue, *obj.Error:
 				return result
-			case obj.BREAK_OBJ:
+			case *obj.Break:
 				return NULL
-			case obj.CONTINUE_OBJ:
+			case *obj.Continue:
 			}
 		}
 
@@ -786,12 +785,12 @@ func evalLoopExpression(le *ast.LoopExpression, env *obj.Enviroment) obj.Object 
 		bodyEnv := obj.NewEnclosedEnviroment(env)
 		result := Eval(le.Body, bodyEnv)
 		if result != nil {
-			switch result.Type() {
-			case obj.RETURN_VALUE_OBJ, obj.ERROR_OBJ:
+			switch result := result.(type) {
+			case *obj.ReturnValue, *obj.Error:
 				return result
-			case obj.BREAK_OBJ:
+			case *obj.Break:
 				return NULL
-			case obj.CONTINUE_OBJ:
+			case *obj.Continue:
 				continue
 			}
 		}
@@ -809,25 +808,25 @@ func evalIncrementDecrement(opt string, right ast.Expression, env *obj.Enviromen
 		return newError("identifier not found: %s", ident.Value)
 	}
 
-		switch val.Type() {
-	case obj.INTEGER_OBJ:
-		intVal := val.(*obj.Integer).Value
-		oldObj := &obj.Integer{Value: intVal}
+	switch v := val.(type) {
+	case *obj.Integer:
+		intVal := v.Value
+		oldObj := obj.NewInteger(intVal)
 		if opt == "++" {
 			intVal++
 		} else {
 			intVal--
 		}
 
-		newObj := &obj.Integer{Value: intVal}
+		newObj := obj.NewInteger(intVal)
 		env.Assign(ident.Value, newObj)
 
 		if isPostfix {
 			return oldObj
 		}
 		return newObj
-	case obj.FLOAT_OBJ:
-		floatVal := val.(*obj.Float).Value
+	case *obj.Float:
+		floatVal := v.Value
 		oldObj := &obj.Float{Value: floatVal}
 		if opt == "++" {
 			floatVal++
@@ -876,9 +875,8 @@ func evalBlockStatement(b *ast.BlockStatement, env *obj.Enviroment) obj.Object {
 		result = Eval(stmt, blockEnv)
 
 		if result != nil {
-			rt := result.Type()
-			if rt == obj.RETURN_VALUE_OBJ || rt == obj.ERROR_OBJ ||
-				rt == obj.BREAK_OBJ || rt == obj.CONTINUE_OBJ {
+			switch result.(type) {
+			case *obj.ReturnValue, *obj.Error, *obj.Break, *obj.Continue:
 				return result
 			}
 		}
@@ -888,14 +886,15 @@ func evalBlockStatement(b *ast.BlockStatement, env *obj.Enviroment) obj.Object {
 }
 
 func newError(format string, args ...any) *obj.Error {
+	if len(args) == 0 && !strings.Contains(format, "%") {
+		return &obj.Error{Message: format}
+	}
 	return &obj.Error{Message: fmt.Sprintf(format, args...)}
 }
 
 func isError(object obj.Object) bool {
-	if object != nil {
-		return object.Type() == obj.ERROR_OBJ
-	}
-	return false
+	_, ok := object.(*obj.Error)
+	return ok
 }
 
 func evalIdentifier(node *ast.Identifier, env *obj.Enviroment) obj.Object {
@@ -912,6 +911,9 @@ func evalIdentifier(node *ast.Identifier, env *obj.Enviroment) obj.Object {
 
 func evalExpressions(exps []ast.Expression, env *obj.Enviroment) []obj.Object {
 	var result []obj.Object
+	if len(exps) > 0 {
+		result = make([]obj.Object, 0, len(exps))
+	}
 
 	for _, exp := range exps {
 		eval := Eval(exp, env)
@@ -997,18 +999,19 @@ func evalStringInfixExpression(operator string, left, right obj.Object) obj.Obje
 }
 
 func evalIndexExpression(left, index obj.Object) obj.Object {
-	if index.Type() != obj.INTEGER_OBJ && (left.Type() == obj.ARRAY_OBJ || left.Type() == obj.MATRIX_OBJ) {
-		return newError("index operator requires integer index, got %s", index.Type())
+	lt, it := left.Type(), index.Type()
+	if it != obj.INTEGER_OBJ && (lt == obj.ARRAY_OBJ || lt == obj.MATRIX_OBJ) {
+		return newError("index operator requires integer index, got %s", it)
 	}
 	switch {
-	case left.Type() == obj.ARRAY_OBJ && index.Type() == obj.INTEGER_OBJ:
+	case lt == obj.ARRAY_OBJ && it == obj.INTEGER_OBJ:
 		return evalArrayIndexExpression(left, index)
-	case left.Type() == obj.MATRIX_OBJ && index.Type() == obj.INTEGER_OBJ:
+	case lt == obj.MATRIX_OBJ && it == obj.INTEGER_OBJ:
 		return evalMatrixIndexExpression(left, index)
-	case left.Type() == obj.HASH_OBJ:
+	case lt == obj.HASH_OBJ:
 		return evalHashIndexExpression(left, index)
 	default:
-		return newError("index operator not supported: %s", left.Type())
+		return newError("index operator not supported: %s", lt)
 	}
 }
 
@@ -1198,7 +1201,7 @@ func evalIndexAssignment(idx *ast.IndexExpression, opt string, val obj.Object, e
 }
 
 func evalHashLiteral(h *ast.HashLiteral, env *obj.Enviroment) obj.Object {
-	pairs := make(map[obj.HashKey]obj.HashPair)
+	pairs := make(map[obj.HashKey]obj.HashPair, len(h.Pairs))
 	order := make([]obj.HashKey, 0, len(h.Pairs))
 
 	for _, p := range h.Pairs {

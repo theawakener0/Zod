@@ -30,8 +30,8 @@ type SymbolTable struct {
 }
 
 func NewSymbolTable() *SymbolTable {
-	s := make(map[string]Symbol)
-	freeSymbols := []Symbol{}
+	s := make(map[string]Symbol, 32)
+	freeSymbols := make([]Symbol, 0, 4)
 	return &SymbolTable{store: s, FreeSymbols: freeSymbols, isFunction: true}
 }
 
@@ -43,11 +43,11 @@ func NewEnclosedSymbolTable(outer *SymbolTable) *SymbolTable {
 }
 
 func NewBlockSymbolTable(outer *SymbolTable) *SymbolTable {
-	s := make(map[string]Symbol)
+	s := make(map[string]Symbol, 8)
 	return &SymbolTable{
 		Outer:          outer,
 		store:          s,
-		FreeSymbols:    []Symbol{},
+		FreeSymbols:    make([]Symbol, 0, 4),
 		numDefinitions: outer.numDefinitions,
 		isFunction:     false,
 	}

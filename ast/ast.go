@@ -2,8 +2,6 @@ package ast
 
 import (
 	"bytes"
-	"fmt"
-	"strings"
 
 	tk "github.com/theawakener0/Zod/token"
 )
@@ -62,7 +60,8 @@ func (ls *LetStatement) String() string {
 	if ls.Public {
 		out.WriteString("pub ")
 	}
-	out.WriteString(ls.TokenLiteral() + " ")
+	out.WriteString(ls.TokenLiteral())
+	out.WriteByte(' ')
 	out.WriteString(ls.Name.String())
 	out.WriteString(" = ")
 
@@ -92,7 +91,9 @@ func (as *AssignStatement) String() string {
 		out.WriteString("pub ")
 	}
 	out.WriteString(as.Left.String())
-	out.WriteString(" " + as.TokenLiteral() + " ")
+	out.WriteByte(' ')
+	out.WriteString(as.TokenLiteral())
+	out.WriteByte(' ')
 
 	if as.Value != nil {
 		out.WriteString(as.Value.String())
@@ -114,7 +115,8 @@ func (rs *ReturnStatement) TokenLiteral() string {
 func (rs *ReturnStatement) String() string {
 	var out bytes.Buffer
 
-	out.WriteString(rs.TokenLiteral() + " ")
+	out.WriteString(rs.TokenLiteral())
+	out.WriteByte(' ')
 	
 	if rs.ReturnValue != nil {
 		out.WriteString(rs.ReturnValue.String())
@@ -203,10 +205,10 @@ func (pe *PrefixExpression) TokenLiteral() string {
 func (pe *PrefixExpression) String() string {
 	var out bytes.Buffer
 
-	out.WriteString("(")
+	out.WriteByte('(')
 	out.WriteString(pe.Opt)
 	out.WriteString(pe.Right.String())
-	out.WriteString(")")
+	out.WriteByte(')')
 
 	return out.String()
 }
@@ -225,15 +227,17 @@ func (ie *InfixExpression) TokenLiteral() string {
 func (ie *InfixExpression) String() string {
 	var out bytes.Buffer
 
-	out.WriteString("(")
+	out.WriteByte('(')
 	if ie.Left != nil {
 		out.WriteString(ie.Left.String())
 	}
-	out.WriteString(" " + ie.Opt + " ")
+	out.WriteByte(' ')
+	out.WriteString(ie.Opt)
+	out.WriteByte(' ')
 	if ie.Right != nil {
 		out.WriteString(ie.Right.String())
 	}
-	out.WriteString(")")
+	out.WriteByte(')')
 
 	return out.String()
 }
@@ -330,17 +334,19 @@ func (fl *FunctionLiteral) TokenLiteral() string {
 func (fl *FunctionLiteral) String() string {
 	var out bytes.Buffer
 
-	params := make([]string, 0, len(fl.Parameters))
-	for _, p := range fl.Parameters {
-		params = append(params, p.String())
-	}
-
 	out.WriteString(fl.TokenLiteral())
 	if fl.Name != "" {
-		out.WriteString(fmt.Sprintf("<%s>", fl.Name))
+		out.WriteByte('<')
+		out.WriteString(fl.Name)
+		out.WriteByte('>')
 	}
-	out.WriteString("(")
-	out.WriteString(strings.Join(params, ", "))
+	out.WriteByte('(')
+	for i, p := range fl.Parameters {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		out.WriteString(p.String())
+	}
 	out.WriteString(") ")
 	out.WriteString(fl.Body.String())
 
@@ -361,15 +367,15 @@ func (ce *CallExpression) TokenLiteral() string {
 func (ce *CallExpression) String() string {
 	var out bytes.Buffer
 
-	args := make([]string, 0, len(ce.Arguments))
-	for _, a := range ce.Arguments {
-		args = append(args, a.String())
-	}
-
 	out.WriteString(ce.Function.String())
-	out.WriteString("(")
-	out.WriteString(strings.Join(args, ", "))
-	out.WriteString(")")
+	out.WriteByte('(')
+	for i, a := range ce.Arguments {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		out.WriteString(a.String())
+	}
+	out.WriteByte(')')
 
 	return out.String()
 }
@@ -403,22 +409,32 @@ func (fe *ForExpression) String() string {
 	var out bytes.Buffer
 
 	out.WriteString("for")
-	out.WriteString("(")
+	out.WriteByte('(')
 	if fe.Init != nil {
-		out.WriteString(strings.TrimSuffix(fe.Init.String(), ";"))
+		writeTrimmedSemicolon(&out, fe.Init.String())
 	}
-	out.WriteString(";")
+	out.WriteByte(';')
 	if fe.Condition != nil {
 		out.WriteString(fe.Condition.String())
 	}
-	out.WriteString(";")
+	out.WriteByte(';')
 	if fe.Update != nil {
-		out.WriteString(strings.TrimSuffix(fe.Update.String(), ";"))
+		writeTrimmedSemicolon(&out, fe.Update.String())
 	}
-	out.WriteString(")")
+	out.WriteByte(')')
 	out.WriteString(fe.Body.String())
 
 	return out.String()
+}
+
+// writeTrimmedSemicolon writes s without a single trailing ';'.
+// It slices the already-allocated string instead of TrimSuffix(String())
+// double-allocating via an extra copy.
+func writeTrimmedSemicolon(out *bytes.Buffer, s string) {
+	if len(s) > 0 && s[len(s)-1] == ';' {
+		s = s[:len(s)-1]
+	}
+	out.WriteString(s)
 }
 
 type PostfixExpression struct {
@@ -434,10 +450,10 @@ func (pe *PostfixExpression) TokenLiteral() string {
 func (pe *PostfixExpression) String() string {
 	var out bytes.Buffer
 
-	out.WriteString("(")
+	out.WriteByte('(')
 	out.WriteString(pe.Left.String())
 	out.WriteString(pe.Opt)
-	out.WriteString(")")
+	out.WriteByte(')')
 
 	return out.String()
 }
@@ -472,14 +488,14 @@ func (al *ArrayLiteral) TokenLiteral() string {
 func (al *ArrayLiteral) String() string {
 	var out bytes.Buffer
 
-	elements := make([]string, 0, len(al.Elements))
-	for _, e := range al.Elements {
-		elements = append(elements, e.String())
+	out.WriteByte('[')
+	for i, e := range al.Elements {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		out.WriteString(e.String())
 	}
-
-	out.WriteString("[")
-	out.WriteString(strings.Join(elements, ", "))
-	out.WriteString("]")
+	out.WriteByte(']')
 
 	return out.String()
 }
@@ -497,9 +513,9 @@ func (ie *IndexExpression) TokenLiteral() string {
 func (ie *IndexExpression) String() string {
 	var out bytes.Buffer
 
-	out.WriteString("(")
+	out.WriteByte('(')
 	out.WriteString(ie.Left.String())
-	out.WriteString("[")
+	out.WriteByte('[')
 	out.WriteString(ie.Index.String())
 	out.WriteString("])")
 
@@ -523,14 +539,24 @@ func (hl *HashLiteral) TokenLiteral() string {
 func (hl *HashLiteral) String() string {
 	var out bytes.Buffer
 
-	pairs := make([]string, 0, len(hl.Pairs))
-	for _, p := range hl.Pairs {
-		pairs = append(pairs, fmt.Sprintf("%s : %s", p.Key, p.Value))
+	out.WriteByte('{')
+	for i, p := range hl.Pairs {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		if p.Key == nil {
+			out.WriteString("%!s(MISSING)")
+		} else {
+			out.WriteString(p.Key.String())
+		}
+		out.WriteString(" : ")
+		if p.Value == nil {
+			out.WriteString("%!s(MISSING)")
+		} else {
+			out.WriteString(p.Value.String())
+		}
 	}
-
-	out.WriteString("{")
-	out.WriteString(strings.Join(pairs, ", "))
-	out.WriteString("}")
+	out.WriteByte('}')
 
 	return out.String()
 }
@@ -572,11 +598,12 @@ func (is *ImportStatement) String() string {
 		if is.IsStar {
 			out.WriteString("*")
 		} else {
-			names := []string{}
-			for _, n := range is.Names {
-				names = append(names, n.String())
+			for i, n := range is.Names {
+				if i > 0 {
+					out.WriteString(", ")
+				}
+				out.WriteString(n.String())
 			}
-			out.WriteString(strings.Join(names, ", "))
 		}
 	} else {
 		out.WriteString("import ")
@@ -604,11 +631,11 @@ func (pe *PropertyExpression) TokenLiteral() string {
 func (pe *PropertyExpression) String() string {
 	var out bytes.Buffer
 
-	out.WriteString("(")
+	out.WriteByte('(')
 	out.WriteString(pe.Object.String())
-	out.WriteString(".")
+	out.WriteByte('.')
 	out.WriteString(pe.Property.String())
-	out.WriteString(")")
+	out.WriteByte(')')
 
 	return out.String()
 }

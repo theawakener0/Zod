@@ -92,6 +92,26 @@ var keywords = map[string]TokenType {
 }
 
 func LookupIdent(ident string) TokenType {
+	// Fast-path switch for common keywords avoids a map hash;
+	// map fallback preserves behavior for the full keyword set.
+	switch ident {
+	case "fn":
+		return FUNCTION
+	case "let":
+		return LET
+	case "true":
+		return TRUE
+	case "false":
+		return FALSE
+	case "if":
+		return IF
+	case "else":
+		return ELSE
+	case "return":
+		return RETURN
+	case "for":
+		return FOR
+	}
 	if tok, ok := keywords[ident]; ok {
 		return tok
 	}

@@ -2,11 +2,16 @@ package compiler
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/theawakener0/Zod/ast"
 	"github.com/theawakener0/Zod/code"
+	"github.com/theawakener0/Zod/lexer"
 	obj "github.com/theawakener0/Zod/object"
+	"github.com/theawakener0/Zod/parser"
 )
 
 type EmittedInstruction struct {
@@ -37,12 +42,20 @@ type Compiler struct {
 	scopesIndex int
 
 	loops []loopContext
+
+	BaseDir    string
+	exports    map[string]int
+	allSymbols map[string]int
 }
 
 type Bytecode struct {
 	Instructions code.Instructions
 	Constant     []obj.Object
+	Exports      map[string]int
+	AllSymbols   map[string]int
 }
+
+func isTopLevel(c *Compiler) bool { return c.scopesIndex == 0 && c.symbolTable.Outer == nil }
 
 func New() *Compiler {
 	mainScope := CompilationScope{
@@ -57,10 +70,12 @@ func New() *Compiler {
 	}
 
 	return &Compiler{
-		constant:    []obj.Object{},
+		constant:    make([]obj.Object, 0, 32),
 		symbolTable: symbolTable,
 		scopes:      []CompilationScope{mainScope},
 		scopesIndex: 0,
+		exports:     map[string]int{},
+		allSymbols:  map[string]int{},
 	}
 }
 
@@ -228,8 +243,39 @@ func (c *Compiler) Compile(node ast.Node) error {
 			return err
 		}
 		c.emitDefine(symbol)
+		if c.allSymbols == nil {
+			c.allSymbols = map[string]int{}
+		}
+		if isTopLevel(c) {
+			c.allSymbols[node.Name.Value] = symbol.Index
+			if node.Public {
+				if c.exports == nil {
+					c.exports = map[string]int{}
+				}
+				c.exports[node.Name.Value] = symbol.Index
+			}
+		}
 	case *ast.AssignStatement:
-		return c.compileAssignStatement(node)
+		if err := c.compileAssignStatement(node); err != nil {
+			return err
+		}
+		if isTopLevel(c) && node.Token.Literal == ":=" {
+			if ident, ok := node.Left.(*ast.Identifier); ok {
+				if sym, ok := c.symbolTable.Resolve(ident.Value); ok {
+					if c.allSymbols == nil {
+						c.allSymbols = map[string]int{}
+					}
+					c.allSymbols[ident.Value] = sym.Index
+					if node.Public {
+						if c.exports == nil {
+							c.exports = map[string]int{}
+						}
+						c.exports[ident.Value] = sym.Index
+					}
+				}
+			}
+		}
+		return nil
 	case *ast.InfixExpression:
 		if node.Opt == "&&" {
 			return c.compileLogicalAnd(node)
@@ -388,14 +434,28 @@ func (c *Compiler) Compile(node ast.Node) error {
 		return c.compileForExpression(node)
 	case *ast.LoopExpression:
 		return c.compileLoopExpression(node)
+	case *ast.ImportStatement:
+		return c.compileImportStatement(node)
+	case *ast.PropertyExpression:
+		return c.compilePropertyExpression(node)
 	}
 	return nil
 }
 
 func (c *Compiler) Bytecode() *Bytecode {
+	exports := map[string]int{}
+	for k, v := range c.exports {
+		exports[k] = v
+	}
+	allSymbols := map[string]int{}
+	for k, v := range c.allSymbols {
+		allSymbols[k] = v
+	}
 	return &Bytecode{
 		Instructions: c.currentInstruction(),
 		Constant:     c.constant,
+		Exports:      exports,
+		AllSymbols:   allSymbols,
 	}
 }
 
@@ -405,10 +465,9 @@ func (c *Compiler) addConstant(obj obj.Object) int {
 }
 
 func (c *Compiler) addInstruction(ins []byte) int {
-	posNewInstruction := len(c.currentInstruction())
-	updatedInstructions := append(c.currentInstruction(), ins...)
-
-	c.scopes[c.scopesIndex].instructions = updatedInstructions
+	cur := c.scopes[c.scopesIndex].instructions
+	posNewInstruction := len(cur)
+	c.scopes[c.scopesIndex].instructions = append(cur, ins...)
 	return posNewInstruction
 }
 
@@ -897,4 +956,196 @@ func NewWithState(s *SymbolTable, constants []obj.Object) *Compiler {
 	compiler.constant = constants
 
 	return compiler
+}
+
+func statExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
+}
+
+func stdlibPath() string {
+	if p := os.Getenv("ZOD_STDLIB"); p != "" {
+		return p
+	}
+	if exe, err := os.Executable(); err == nil {
+		return filepath.Join(filepath.Dir(exe), "stdlib")
+	}
+	return "stdlib"
+}
+
+func ResolveModulePath(baseDir, path string) (string, error) {
+	if filepath.IsAbs(path) {
+		if statExists(path) {
+			return path, nil
+		}
+		if !strings.HasSuffix(path, ".zd") {
+			if statExists(path + ".zd") {
+				return path + ".zd", nil
+			}
+		}
+	} else {
+		if baseDir != "" {
+			cand := filepath.Join(baseDir, path)
+			if statExists(cand) {
+				return cand, nil
+			}
+			if !strings.HasSuffix(path, ".zd") {
+				candExt := filepath.Join(baseDir, path+".zd")
+				if statExists(candExt) {
+					return candExt, nil
+				}
+			}
+		}
+		if abs, err := filepath.Abs(path); err == nil {
+			if statExists(abs) {
+				return abs, nil
+			}
+		}
+		if !strings.HasSuffix(path, ".zd") {
+			if abs, err := filepath.Abs(path + ".zd"); err == nil {
+				if statExists(abs) {
+					return abs, nil
+				}
+			}
+		}
+	}
+	std := stdlibPath()
+	cand := filepath.Join(std, path)
+	if statExists(cand) {
+		if abs, err := filepath.Abs(cand); err == nil {
+			return abs, nil
+		}
+		return cand, nil
+	}
+	if !strings.HasSuffix(path, ".zd") {
+		candExt := filepath.Join(std, path+".zd")
+		if statExists(candExt) {
+			if abs, err := filepath.Abs(candExt); err == nil {
+				return abs, nil
+			}
+			return candExt, nil
+		}
+	}
+	return "", fmt.Errorf("module not found")
+}
+
+func CollectModuleExports(absPath string) ([]string, []string, error) {
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	l := lexer.New(string(data))
+	p := parser.New(l)
+	prog := p.ParseProgram()
+	if len(p.Errors()) > 0 {
+		return nil, nil, fmt.Errorf("%s", strings.Join(p.Errors(), "; "))
+	}
+	var exports []string
+	var all []string
+	if prog == nil {
+		return exports, all, nil
+	}
+	for _, s := range prog.Statements {
+		switch node := s.(type) {
+		case *ast.LetStatement:
+			all = append(all, node.Name.Value)
+			if node.Public {
+				exports = append(exports, node.Name.Value)
+			}
+		case *ast.AssignStatement:
+			if node.Token.Literal == ":=" {
+				if ident, ok := node.Left.(*ast.Identifier); ok {
+					all = append(all, ident.Value)
+					if node.Public {
+						exports = append(exports, ident.Value)
+					}
+				}
+			}
+		}
+	}
+	return exports, all, nil
+}
+
+func (c *Compiler) compileImportStatement(node *ast.ImportStatement) error {
+	if !isTopLevel(c) {
+		return fmt.Errorf("import only supported at top-level in VM")
+	}
+	rawPath := node.Path.Value
+	absPath, resolveErr := ResolveModulePath(c.BaseDir, rawPath)
+	specPath := rawPath
+	if resolveErr == nil {
+		specPath = absPath
+	}
+	if node.IsFrom && node.IsStar {
+		var names []string
+		if resolveErr == nil {
+			if ex, _, cerr := CollectModuleExports(absPath); cerr == nil {
+				names = ex
+			}
+		}
+		specNames := []string{}
+		targets := []int{}
+		for _, n := range names {
+			sym := c.symbolTable.DefineIfNotExists(n)
+			if c.allSymbols == nil {
+				c.allSymbols = map[string]int{}
+			}
+			c.allSymbols[n] = sym.Index
+			specNames = append(specNames, n)
+			targets = append(targets, sym.Index)
+		}
+		spec := &obj.ImportSpec{Path: specPath, Kind: obj.ImportStar, Names: specNames, Targets: targets, AliasIndex: -1}
+		idx := c.addConstant(spec)
+		c.emit(code.OpImport, idx)
+		c.emit(code.OpPop)
+		return nil
+	}
+	if node.IsFrom {
+		names := []string{}
+		targets := []int{}
+		for _, id := range node.Names {
+			sym := c.symbolTable.DefineIfNotExists(id.Value)
+			if c.allSymbols == nil {
+				c.allSymbols = map[string]int{}
+			}
+			c.allSymbols[id.Value] = sym.Index
+			names = append(names, id.Value)
+			targets = append(targets, sym.Index)
+		}
+		spec := &obj.ImportSpec{Path: specPath, Kind: obj.ImportNamed, Names: names, Targets: targets, AliasIndex: -1}
+		idx := c.addConstant(spec)
+		c.emit(code.OpImport, idx)
+		c.emit(code.OpPop)
+		return nil
+	}
+	alias := ""
+	if node.Alias != nil {
+		alias = node.Alias.Value
+	} else {
+		base := filepath.Base(rawPath)
+		alias = strings.TrimSuffix(base, ".zd")
+		if alias == "" {
+			alias = rawPath
+		}
+	}
+	sym := c.symbolTable.DefineIfNotExists(alias)
+	if c.allSymbols == nil {
+		c.allSymbols = map[string]int{}
+	}
+	c.allSymbols[alias] = sym.Index
+	spec := &obj.ImportSpec{Path: specPath, Kind: obj.ImportModule, Names: []string{}, Targets: []int{}, AliasIndex: sym.Index, Alias: alias}
+	idx := c.addConstant(spec)
+	c.emit(code.OpImport, idx)
+	c.emit(code.OpPop)
+	return nil
+}
+
+func (c *Compiler) compilePropertyExpression(node *ast.PropertyExpression) error {
+	if err := c.Compile(node.Object); err != nil {
+		return err
+	}
+	propStr := &obj.String{Value: node.Property.Value}
+	idx := c.addConstant(propStr)
+	c.emit(code.OpGetProp, idx)
+	return nil
 }

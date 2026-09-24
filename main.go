@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/user"
+	"path/filepath"
 
 	"github.com/theawakener0/Zod/repl"
 )
@@ -36,7 +37,7 @@ func main() {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
 			}
-			repl.Execute(string(source), os.Stdout, os.Args[1])
+			repl.Execute(string(source), os.Stdout, os.Args[1], filepath.Dir(os.Args[2]))
 			return
 		}
 
@@ -57,7 +58,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		repl.Execute(string(source), os.Stdout, "--eng=eval")
+		repl.Execute(string(source), os.Stdout, "--eng=eval", filepath.Dir(os.Args[1]))
 		return
 	}
 

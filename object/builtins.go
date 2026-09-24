@@ -29,13 +29,13 @@ var Builtins = []struct {
 
 			switch arg := args[0].(type) {
 			case *String:
-				return &Integer{Value: int64(len(arg.Value))}
+				return NewInteger(int64(len(arg.Value)))
 			case *Array:
-				return &Integer{Value: int64(len(arg.Elements))}
+				return NewInteger(int64(len(arg.Elements)))
 			case *Matrix:
-				return &Integer{Value: int64(arg.Rows)}
+				return NewInteger(int64(arg.Rows))
 			case *Hash:
-				return &Integer{Value: int64(len(arg.Pairs))}
+				return NewInteger(int64(len(arg.Pairs)))
 			default:
 				return newError("argument to `len` not supported. got=%s", args[0].Type())
 			}
@@ -113,16 +113,16 @@ var Builtins = []struct {
 				if err != nil {
 					return newError("could not parse %q as integer", arg.Value)
 				}
-				return &Integer{Value: val}
+				return NewInteger(val)
 			case *Integer:
 				return arg
 			case *Float:
-				return &Integer{Value: int64(arg.Value)}
+				return NewInteger(int64(arg.Value))
 			case *Boolean:
 				if arg.Value {
-					return &Integer{Value: 1}
+					return NewInteger(1)
 				}
-				return &Integer{Value: 0}
+				return NewInteger(0)
 			default:
 				return newError("argument to `int` not supported. got=%s", args[0].Type())
 			}
@@ -165,7 +165,7 @@ var Builtins = []struct {
 			case *String:
 				return arg
 			case *Integer:
-				return &String{Value: fmt.Sprintf("%s", arg.Inspect())}
+				return &String{Value: arg.Inspect()}
 			case *Float:
 				return &String{Value: arg.Inspect()}
 			case *Boolean:
@@ -183,7 +183,7 @@ var Builtins = []struct {
 			if len(args) != 1 {
 				return newError("wrong number of arguments. got=%d, want=1", len(args))
 			}
-			return &String{Value: fmt.Sprintf("%s", args[0].Type())}
+			return &String{Value: string(args[0].Type())}
 		},
 	}},
 	{"first", &Builtin{
@@ -400,7 +400,7 @@ var Builtins = []struct {
 				if arg.Value <= 0 {
 					return newError("argument to `random` must be positive. got=%d", arg.Value)
 				}
-				return &Integer{Value: rand.Int63n(arg.Value)}
+				return NewInteger(rand.Int63n(arg.Value))
 			case *Float:
 				if arg.Value <= 0 {
 					return newError("argument to `random` must be positive. got=%f", arg.Value)
@@ -512,17 +512,17 @@ var Builtins = []struct {
 			case *String:
 				switch arg.Value {
 				case "RED":
-					return &String{Value: fmt.Sprintf("\033[31m%s\033[0m", args[1].Inspect())}
+					return &String{Value: "\033[31m" + args[1].Inspect() + "\033[0m"}
 				case "GREEN":
-					return &String{Value: fmt.Sprintf("\033[32m%s\033[0m", args[1].Inspect())}
+					return &String{Value: "\033[32m" + args[1].Inspect() + "\033[0m"}
 				case "YELLOW":
-					return &String{Value: fmt.Sprintf("\033[33m%s\033[0m", args[1].Inspect())}
+					return &String{Value: "\033[33m" + args[1].Inspect() + "\033[0m"}
 				case "BLUE":
-					return &String{Value: fmt.Sprintf("\033[34m%s\033[0m", args[1].Inspect())}
+					return &String{Value: "\033[34m" + args[1].Inspect() + "\033[0m"}
 				case "MAGENTA":
-					return &String{Value: fmt.Sprintf("\033[35m%s\033[0m", args[1].Inspect())}
+					return &String{Value: "\033[35m" + args[1].Inspect() + "\033[0m"}
 				case "CYAN":
-					return &String{Value: fmt.Sprintf("\033[36m%s\033[0m", args[1].Inspect())}
+					return &String{Value: "\033[36m" + args[1].Inspect() + "\033[0m"}
 				default:
 					return newError("color not supported. got=%s", args[0].Type())
 				}
@@ -612,6 +612,11 @@ func newError(format string, a ...any) *Error {
 }
 
 func GetBuiltinByName(name string) *Builtin {
+	// O(1) map lookup; linear scan kept as fallback for compat
+	// (e.g. if Builtins were appended to after init).
+	if b, ok := builtinIndex[name]; ok {
+		return b
+	}
 	for _, def := range Builtins {
 		if def.Name == name {
 			return def.Builtin
@@ -619,3 +624,11 @@ func GetBuiltinByName(name string) *Builtin {
 	}
 	return nil
 }
+
+var builtinIndex = func() map[string]*Builtin {
+	m := make(map[string]*Builtin, len(Builtins))
+	for _, def := range Builtins {
+		m[def.Name] = def.Builtin
+	}
+	return m
+}()

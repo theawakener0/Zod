@@ -20,12 +20,13 @@ func Start(in io.Reader, out io.Writer, engine string) {
 	scanner := bufio.NewScanner(in)
 	env := obj.NewEnviroment()
 
-	constants := []obj.Object{}
+	constants := make([]obj.Object, 0, 256)
 	globals := make([]obj.Object, vm.GlobalsSize)
 	symbolTable := compiler.NewSymbolTable()
 	for i, v := range obj.Builtins {
 		symbolTable.DefineBuiltin(i, v.Name)
 	}
+	cwd, _ := os.Getwd()
 
 	for {
 		fmt.Printf(PROMPT)
@@ -46,7 +47,7 @@ func Start(in io.Reader, out io.Writer, engine string) {
 		}
 
 		if engine == "--eng=vm" {
-			constants = runVM(line, out, constants, globals, symbolTable)
+			constants = runVM(line, out, constants, globals, symbolTable, cwd)
 			continue
 		}
 
@@ -58,7 +59,7 @@ func Start(in io.Reader, out io.Writer, engine string) {
 	}
 }
 
-func runVM(source string, out io.Writer, constants []obj.Object, globals []obj.Object, symbolTable *compiler.SymbolTable) []obj.Object {
+func runVM(source string, out io.Writer, constants []obj.Object, globals []obj.Object, symbolTable *compiler.SymbolTable, baseDir string) []obj.Object {
 	l := lx.New(source)
 	p := ps.New(l)
 
@@ -69,6 +70,7 @@ func runVM(source string, out io.Writer, constants []obj.Object, globals []obj.O
 	}
 
 	comp := compiler.NewWithState(symbolTable, constants)
+	comp.BaseDir = baseDir
 	err0 := comp.Compile(program)
 	if err0 != nil {
 		fmt.Fprintf(out, "Oh shit here we go again! Compilation failed:\n %s\n", err0)
@@ -93,16 +95,16 @@ func runVM(source string, out io.Writer, constants []obj.Object, globals []obj.O
 	return bytecode.Constant
 }
 
-func Execute(source string, out io.Writer, engine string) {
+func Execute(source string, out io.Writer, engine string, baseDir string) {
 	if engine == "--eng=vm" {
-		constants := []obj.Object{}
+		constants := make([]obj.Object, 0, 256)
 		globals := make([]obj.Object, vm.GlobalsSize)
 		symbolTable := compiler.NewSymbolTable()
 		for i, v := range obj.Builtins {
 			symbolTable.DefineBuiltin(i, v.Name)
 		}
 
-		runVM(source, out, constants, globals, symbolTable)
+		runVM(source, out, constants, globals, symbolTable, baseDir)
 		return
 	}
 	if engine == "--eng=eval" {

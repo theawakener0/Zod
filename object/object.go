@@ -3,7 +3,6 @@ package object
 import (
 	"bytes"
 	"fmt"
-	"hash/fnv"
 	"math"
 	"sort"
 	"strconv"
@@ -34,6 +33,13 @@ const (
 	CLOSURE_OBJ = "CLOSURE"
 	CELL_OBJ = "CELL"
 	MODULE_OBJ = "MODULE"
+	IMPORT_SPEC_OBJ = "IMPORT_SPEC"
+)
+
+const (
+	ImportStar   = 0
+	ImportNamed  = 1
+	ImportModule = 2
 )
 
 type Object interface {
@@ -58,7 +64,7 @@ func (i *Integer) Type() ObjectType {
 	return INTEGER_OBJ
 }
 func (i *Integer) Inspect() string {
-	return fmt.Sprintf("%d", i.Value)
+	return strconv.FormatInt(i.Value, 10)
 }
 func (i *Integer) HashKey() HashKey {
 	return HashKey{Type: i.Type(), Value: uint64(i.Value)}
@@ -96,7 +102,7 @@ func (b *Boolean) Type() ObjectType {
 	return BOOLEAN_OBJ
 }
 func (b *Boolean) Inspect() string {
-	return fmt.Sprintf("%t", b.Value)
+	return strconv.FormatBool(b.Value)
 }
 func (b *Boolean) HashKey() HashKey {
 	var value uint64
@@ -139,7 +145,7 @@ func (e *Error) Type() ObjectType {
 }
 
 func (e *Error) Inspect() string {
-	return fmt.Sprintf("Error: %s", e.Message)
+	return "Error: " + e.Message
 }
 
 type Break struct{}
@@ -199,9 +205,19 @@ func (s *String) Inspect() string {
 	return s.Value
 }
 func (s *String) HashKey() HashKey {
-	hash := fnv.New64a()
-	hash.Write([]byte(s.Value))
-	return HashKey{Type: s.Type(), Value: hash.Sum64()}
+	// Manual FNV-1a 64 over the string bytes. Identical to
+	// fnv.New64a + Write([]byte(s.Value)) but avoids allocating
+	// both the hasher and the []byte copy of the string.
+	const (
+		offset64 = 14695981039346656037
+		prime64  = 1099511628211
+	)
+	h := uint64(offset64)
+	for i := 0; i < len(s.Value); i++ {
+		h ^= uint64(s.Value[i])
+		h *= prime64
+	}
+	return HashKey{Type: s.Type(), Value: h}
 }
 
 type BuiltinFn func(args ...Object) Object
@@ -299,12 +315,12 @@ func (h *Hash) Inspect() string {
 		sort.Strings(rendered)
 		for _, r := range rendered {
 			pair := byRendered[r]
-			pairs = append(pairs, fmt.Sprintf("%s: %s", pair.Key.Inspect(), pair.Value.Inspect()))
+			pairs = append(pairs, pair.Key.Inspect()+": "+pair.Value.Inspect())
 		}
 	} else {
 		for _, key := range h.Order {
 			pair := h.Pairs[key]
-			pairs = append(pairs, fmt.Sprintf("%s: %s", pair.Key.Inspect(), pair.Value.Inspect()))
+			pairs = append(pairs, pair.Key.Inspect()+": "+pair.Value.Inspect())
 		}
 	}
 
@@ -331,6 +347,8 @@ func (cf *CompiledFunction) Inspect() string {
 type Closure struct {
 	Fn 		*CompiledFunction
 	Free 	[]Object
+	Globals []Object
+	Constants []Object
 }
 
 func (cl *Closure) Type() ObjectType {
@@ -374,12 +392,61 @@ func Deref(o Object) Object {
 type Module struct {
 	Name 	string
 	Env 	*Enviroment
+	Globals []Object
+	Exports map[string]int
+	AllSymbols map[string]int
+	Publics map[string]bool
 }
 
 func (m *Module) Type() ObjectType {
 	return MODULE_OBJ
 }
 func (m *Module) Inspect() string {
-	return fmt.Sprintf("module(%s)", m.Name)
+	return "module(" + m.Name + ")"
+}
+
+type ImportSpec struct {
+	Path       string
+	Kind       int
+	Names      []string
+	Targets    []int
+	AliasIndex int
+	Alias      string
+}
+
+func (s *ImportSpec) Type() ObjectType {
+	return IMPORT_SPEC_OBJ
+}
+func (s *ImportSpec) Inspect() string {
+	if s.Alias != "" {
+		return "ImportSpec(" + s.Path + " kind=" + strconv.Itoa(s.Kind) + " alias=" + s.Alias + ")"
+	}
+	return "ImportSpec(" + s.Path + " kind=" + strconv.Itoa(s.Kind) + ")"
+}
+
+// Small-integer cache. Integers are immutable (no code mutates
+// Integer.Value in place; verified across evaluator/vm/compiler),
+// and integer equality is always by value, never pointer identity,
+// so sharing instances for common small values is safe.
+const (
+	smallIntMin = 0
+	smallIntMax = 256
+)
+
+var smallInts [smallIntMax - smallIntMin + 1]*Integer
+
+func init() {
+	for i := range smallInts {
+		smallInts[i] = &Integer{Value: int64(smallIntMin + i)}
+	}
+}
+
+// NewInteger returns a cached *Integer for small values and a fresh
+// one otherwise. Output is indistinguishable from &Integer{Value: v}.
+func NewInteger(v int64) *Integer {
+	if v >= smallIntMin && v <= smallIntMax {
+		return smallInts[v]
+	}
+	return &Integer{Value: v}
 }
 

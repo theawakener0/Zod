@@ -40,6 +40,47 @@ func (l *Lexer) peekChar() byte {
 }
 
 func newToken(tokenType tk.TokenType, ch byte) tk.Token {
+	// Fast path: single-char literals are interned constants (no alloc).
+	// Slicing l.input would also avoid string(byte) alloc, but constants
+	// avoid even the slice header cost for the common case.
+	switch tokenType {
+	case tk.ASSIGN:
+		return tk.Token{Type: tokenType, Literal: "="}
+	case tk.SEMICOLON:
+		return tk.Token{Type: tokenType, Literal: ";"}
+	case tk.LPAREN:
+		return tk.Token{Type: tokenType, Literal: "("}
+	case tk.RPAREN:
+		return tk.Token{Type: tokenType, Literal: ")"}
+	case tk.COMMA:
+		return tk.Token{Type: tokenType, Literal: ","}
+	case tk.PLUS:
+		return tk.Token{Type: tokenType, Literal: "+"}
+	case tk.MINUS:
+		return tk.Token{Type: tokenType, Literal: "-"}
+	case tk.ASTERISK:
+		return tk.Token{Type: tokenType, Literal: "*"}
+	case tk.SLASH:
+		return tk.Token{Type: tokenType, Literal: "/"}
+	case tk.BANG:
+		return tk.Token{Type: tokenType, Literal: "!"}
+	case tk.LT:
+		return tk.Token{Type: tokenType, Literal: "<"}
+	case tk.GT:
+		return tk.Token{Type: tokenType, Literal: ">"}
+	case tk.LBRACE:
+		return tk.Token{Type: tokenType, Literal: "{"}
+	case tk.RBRACE:
+		return tk.Token{Type: tokenType, Literal: "}"}
+	case tk.LBRACKET:
+		return tk.Token{Type: tokenType, Literal: "["}
+	case tk.RBRACKET:
+		return tk.Token{Type: tokenType, Literal: "]"}
+	case tk.COLOMN:
+		return tk.Token{Type: tokenType, Literal: ":"}
+	case tk.DOT:
+		return tk.Token{Type: tokenType, Literal: "."}
+	}
 	return tk.Token{Type: tokenType, Literal: string(ch)}
 }
 
@@ -59,9 +100,8 @@ func (l *Lexer) nextToken() tk.Token {
 	switch l.ch {
 	case '=':
 		if l.peekChar() == '=' {
-			ch := l.ch
 			l.readChar()
-			tok = tk.Token{tk.EQ, string(ch) + string(l.ch)}
+			tok = tk.Token{Type: tk.EQ, Literal: "=="}
 		} else {
 			tok = newToken(tk.ASSIGN, l.ch)
 		}
@@ -75,65 +115,56 @@ func (l *Lexer) nextToken() tk.Token {
 		tok = newToken(tk.COMMA, l.ch)
 	case '+':
 		if l.peekChar() == '=' {
-			ch := l.ch
 			l.readChar()
-			tok = tk.Token{tk.INCASSIGN, string(ch) + string(l.ch)}
+			tok = tk.Token{Type: tk.INCASSIGN, Literal: "+="}
 		} else if l.peekChar() == '+' {
-			ch := l.ch
 			l.readChar()
-			tok = tk.Token{tk.INC, string(ch) + string(l.ch)}
+			tok = tk.Token{Type: tk.INC, Literal: "++"}
 		} else {
 			tok = newToken(tk.PLUS, l.ch)
 		}
 	case '-':
 		if l.peekChar() == '=' {
-			ch := l.ch
 			l.readChar()
-			tok = tk.Token{tk.DECDASSIGN, string(ch) + string(l.ch)}
+			tok = tk.Token{Type: tk.DECDASSIGN, Literal: "-="}
 		} else if l.peekChar() == '-' {
-			ch := l.ch
 			l.readChar()
-			tok = tk.Token{tk.DEC, string(ch) + string(l.ch)}
+			tok = tk.Token{Type: tk.DEC, Literal: "--"}
 		} else {
 			tok = newToken(tk.MINUS, l.ch)
 		}
 	case '*':
 		if l.peekChar() == '=' {
-			ch := l.ch
 			l.readChar()
-			tok = tk.Token{tk.MLTASSIGN, string(ch) + string(l.ch)}
+			tok = tk.Token{Type: tk.MLTASSIGN, Literal: "*="}
 		} else {
 			tok = newToken(tk.ASTERISK, l.ch)
 		}
 	case '/':
 		if l.peekChar() == '=' {
-			ch := l.ch
 			l.readChar()
-			tok = tk.Token{tk.DIVASSIGN, string(ch) + string(l.ch)}
+			tok = tk.Token{Type: tk.DIVASSIGN, Literal: "/="}
 		} else {
 			tok = newToken(tk.SLASH, l.ch)
 		}
 	case '!':
 		if l.peekChar() == '=' {
-			ch := l.ch
 			l.readChar()
-			tok = tk.Token{tk.NOTEQ, string(ch) + string(l.ch)}
+			tok = tk.Token{Type: tk.NOTEQ, Literal: "!="}
 		} else {
 			tok = newToken(tk.BANG, l.ch)
 		}
 	case '<':
 		if l.peekChar() == '=' {
-			ch := l.ch
 			l.readChar()
-			tok = tk.Token{tk.LTEQ, string(ch) + string(l.ch)}
+			tok = tk.Token{Type: tk.LTEQ, Literal: "<="}
 		} else {
 			tok	= newToken(tk.LT, l.ch)
 		}
 	case '>':
 		if l.peekChar() == '=' {
-			ch := l.ch
 			l.readChar()
-			tok = tk.Token{tk.GTEQ, string(ch) + string(l.ch)}
+			tok = tk.Token{Type: tk.GTEQ, Literal: ">="}
 		} else {
 			tok = newToken(tk.GT, l.ch)
 		}
@@ -147,25 +178,22 @@ func (l *Lexer) nextToken() tk.Token {
 		tok = newToken(tk.RBRACKET, l.ch)
 	case ':':
 		if l.peekChar() == '=' {
-			ch := l.ch
 			l.readChar()
-			tok = tk.Token{tk.ASSIGNCHAR, string(ch) + string(l.ch)}
+			tok = tk.Token{Type: tk.ASSIGNCHAR, Literal: ":="}
 		} else {
 			tok = newToken(tk.COLOMN, l.ch)
 		}
 	case '&':
 		if l.peekChar() == '&' {
-			ch := l.ch
 			l.readChar()
-			tok = tk.Token{tk.LAND, string(ch) + string(l.ch)}
+			tok = tk.Token{Type: tk.LAND, Literal: "&&"}
 		} else {
 			tok = newToken(tk.ILLEGAL, l.ch)
 		}
 	case '|':
 		if l.peekChar() == '|' {
-			ch := l.ch
 			l.readChar()
-			tok = tk.Token{tk.LOR, string(ch) + string(l.ch)}
+			tok = tk.Token{Type: tk.LOR, Literal: "||"}
 		} else {
 			tok = newToken(tk.ILLEGAL, l.ch)
 		}
@@ -192,12 +220,16 @@ func (l *Lexer) nextToken() tk.Token {
 			tok.Type = tk.LookupIdent(tok.Literal)
 			return tok
 		} else if isDigit(l.ch) {
-			tok.Literal = l.readNumber()
-			if len(tok.Literal) == 2 && (tok.Literal == "0x" || tok.Literal == "0X" || tok.Literal == "0b" || tok.Literal == "0B" || tok.Literal == "0o" || tok.Literal == "0O") {
-				tok.Type = tk.ILLEGAL
-				return tok
+			lit, isFloat := l.readNumber()
+			tok.Literal = lit
+			if len(lit) == 2 && lit[0] == '0' {
+				switch lit[1] {
+				case 'x', 'X', 'b', 'B', 'o', 'O':
+					tok.Type = tk.ILLEGAL
+					return tok
+				}
 			}
-			if strings.Contains(tok.Literal, ".") {
+			if isFloat {
 				tok.Type = tk.FLOAT
 			} else {
 				tok.Type = tk.INT
@@ -221,7 +253,7 @@ func (l *Lexer) readIdentifier() string {
 	return l.input[position:l.position]
 }
 
-func (l *Lexer) readNumber() string {
+func (l *Lexer) readNumber() (string, bool) {
 	position := l.position
 
 	if l.ch == '0' {
@@ -229,7 +261,6 @@ func (l *Lexer) readNumber() string {
 		if peek == 'x' || peek == 'X' || peek == 'b' || peek == 'B' || peek == 'o' || peek == 'O' {
 			l.readChar()
 			l.readChar()
-			afterPrefix := l.position
 			switch peek {
 			case 'x', 'X':
 				for isHexDigit(l.ch) {
@@ -244,8 +275,7 @@ func (l *Lexer) readNumber() string {
 					l.readChar()
 				}
 			}
-			_ = afterPrefix
-			return l.input[position:l.position]
+			return l.input[position:l.position], false
 		}
 	}
 
@@ -258,9 +288,10 @@ func (l *Lexer) readNumber() string {
 		for isDigit(l.ch) {
 			l.readChar()
 		}
+		return l.input[position:l.position], true
 	}
 
-	return l.input[position:l.position]
+	return l.input[position:l.position], false
 }
 
 func (l *Lexer) readDotNumber() string {
@@ -294,11 +325,16 @@ func (l *Lexer) skipWhitespaceAndComments() bool {
 			crossedNewline = true
 		}
 
-		if !(l.ch == '/' && (l.peekChar() == '/' || l.peekChar() == '*')) {
+		// Hoist peekChar(): single call per iteration instead of 2-3.
+		var peek byte
+		if l.ch == '/' {
+			peek = l.peekChar()
+		}
+		if !(l.ch == '/' && (peek == '/' || peek == '*')) {
 			break
 		}
 
-		if l.peekChar() == '/' {
+		if peek == '/' {
 			for l.ch != '\n' && l.ch != 0 {
 				l.readChar()
 			}
@@ -342,6 +378,7 @@ func (l *Lexer) readString() (string, bool) {
 	l.readChar()
 
 	var sb strings.Builder
+	sb.Grow(32)
 	for l.ch != '"' && l.ch != 0 {
 		if l.ch == '\\' {
 			l.readChar()
@@ -417,8 +454,7 @@ func hexVal(ch byte) (byte, bool) {
 }
 
 func isHexDigit(ch byte) bool {
-	_, ok := hexVal(ch)
-	return ok
+	return '0' <= ch && ch <= '9' || 'a' <= ch && ch <= 'f' || 'A' <= ch && ch <= 'F'
 }
 
 func isDigit(ch byte) bool {

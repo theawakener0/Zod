@@ -49,6 +49,8 @@ const (
 	OpGetLocalCell
 	OpGetFreeCell
 	OpDefineLocal
+	OpImport
+	OpGetProp
 )
 
 type Definition struct {
@@ -209,15 +211,29 @@ var definition = map[Opcode]*Definition{
 		Name:          "OpDefineLocal",
 		OperandWidths: []int{1},
 	},
+	OpImport: {
+		Name:          "OpImport",
+		OperandWidths: []int{2},
+	},
+	OpGetProp: {
+		Name:          "OpGetProp",
+		OperandWidths: []int{2},
+	},
+}
+
+var definitionCache [256]*Definition
+
+func init() {
+	for op, def := range definition {
+		definitionCache[op] = def
+	}
 }
 
 func Lookup(op byte) (*Definition, error) {
-	def, ok := definition[Opcode(op)]
-	if !ok {
-		return nil, fmt.Errorf("opcode %d undifined", op)
+	if def := definitionCache[op]; def != nil {
+		return def, nil
 	}
-
-	return def, nil
+	return nil, fmt.Errorf("opcode %d undifined", op)
 }
 
 func Make(op Opcode, operands ...int) []byte {
@@ -226,8 +242,9 @@ func Make(op Opcode, operands ...int) []byte {
 		return []byte{}
 	}
 
+	widths := def.OperandWidths
 	instructionLen := 1
-	for _, w := range def.OperandWidths {
+	for _, w := range widths {
 		instructionLen += w
 	}
 
@@ -235,13 +252,13 @@ func Make(op Opcode, operands ...int) []byte {
 	instruction[0] = byte(op)
 
 	offset := 1
-	for i, w := range operands {
-		width := def.OperandWidths[i]
-		switch width {
-		case 2:
-			binary.BigEndian.PutUint16(instruction[offset:], uint16(w))
-		case 1:
-			instruction[offset] = byte(w)
+	for i, operand := range operands {
+		width := widths[i]
+		if width == 2 {
+			instruction[offset] = byte(operand >> 8)
+			instruction[offset+1] = byte(operand)
+		} else {
+			instruction[offset] = byte(operand)
 		}
 		offset += width
 	}
@@ -257,6 +274,7 @@ func (ins Instructions) String() string {
 		def, err := Lookup(ins[i])
 		if err != nil {
 			fmt.Fprintf(&out, "ERROR: %s\n", err)
+			i++
 			continue
 		}
 
@@ -271,6 +289,9 @@ func (ins Instructions) String() string {
 }
 
 func ReadOperands(def *Definition, ins Instructions) ([]int, int) {
+	if len(def.OperandWidths) == 0 {
+		return nil, 0
+	}
 	operands := make([]int, len(def.OperandWidths))
 	offset := 0
 

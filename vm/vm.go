@@ -1,13 +1,17 @@
 package vm
 
 import (
-	"encoding/binary"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/theawakener0/Zod/code"
 	"github.com/theawakener0/Zod/compiler"
+	"github.com/theawakener0/Zod/lexer"
 	obj "github.com/theawakener0/Zod/object"
+	"github.com/theawakener0/Zod/parser"
 )
 
 const StackSize = 2048
@@ -17,6 +21,9 @@ const MaxFrames = 1024
 var True = &obj.Boolean{Value: true}
 var False = &obj.Boolean{Value: false}
 var Null = &obj.Null{}
+
+var vmModuleCache = map[string]*obj.Module{}
+var vmLoading = map[string]bool{}
 
 type VM struct {
 	constant []obj.Object
@@ -28,12 +35,15 @@ type VM struct {
 
 	frames     []*Frame
 	frameIndex int
+
+	lastPopped obj.Object
 }
 
 func New(bytecode *compiler.Bytecode) *VM {
+	globals := make([]obj.Object, GlobalsSize)
 	mainFn := &obj.CompiledFunction{Instructions: bytecode.Instructions}
-	mainClosure := &obj.Closure{Fn: mainFn}
-	mainFrame := NewFrame(mainClosure, 0)
+	mainClosure := &obj.Closure{Fn: mainFn, Globals: globals, Constants: bytecode.Constant}
+	mainFrame := NewFrame(mainClosure, 0, globals)
 
 	frames := make([]*Frame, MaxFrames)
 	frames[0] = mainFrame
@@ -44,7 +54,7 @@ func New(bytecode *compiler.Bytecode) *VM {
 		stack: make([]obj.Object, StackSize),
 		sp:    0,
 
-		globals: make([]obj.Object, GlobalsSize),
+		globals: globals,
 
 		frames:     frames,
 		frameIndex: 1,
@@ -59,29 +69,27 @@ func (vm *VM) StackTop() obj.Object {
 }
 
 func (vm *VM) LastPoppedStackElem() obj.Object {
-	return vm.stack[vm.sp]
+	return vm.lastPopped
 }
 
 func (vm *VM) Run() error {
-	var (
-		ip  int
-		ins code.Instructions
-		op  code.Opcode
-	)
+	frame := vm.currentFrame()
+	ins := frame.Instructions()
+	globals := vm.globals
+	constants := vm.constant
 
-	for vm.currentFrame().ip < len(vm.currentFrame().Instructions())-1 {
-		vm.currentFrame().ip++
+	for frame.ip < len(ins)-1 {
+		frame.ip++
 
-		ip = vm.currentFrame().ip
-		ins = vm.currentFrame().Instructions()
-		op = code.Opcode(ins[ip])
+		ip := frame.ip
+		op := code.Opcode(ins[ip])
 
 		switch op {
 		case code.OpConstant:
-			constIndex := binary.BigEndian.Uint16(ins[ip+1:])
-			vm.currentFrame().ip += 2
+			constIndex := int(ins[ip+1])<<8 | int(ins[ip+2])
+			frame.ip += 2
 
-			err := vm.push(vm.constant[constIndex])
+			err := vm.push(constants[constIndex])
 			if err != nil {
 				return err
 			}
@@ -123,15 +131,15 @@ func (vm *VM) Run() error {
 				return err
 			}
 		case code.OpJump:
-			pos := int(binary.BigEndian.Uint16(ins[ip+1:]))
-			vm.currentFrame().ip = pos - 1
+			pos := int(ins[ip+1])<<8 | int(ins[ip+2])
+			frame.ip = pos - 1
 		case code.OpJumpNotTruthy:
-			pos := int(binary.BigEndian.Uint16(ins[ip+1:]))
-			vm.currentFrame().ip += 2
+			pos := int(ins[ip+1])<<8 | int(ins[ip+2])
+			frame.ip += 2
 
 			condition := vm.pop()
 			if !isTruthy(condition) {
-				vm.currentFrame().ip = pos - 1
+				frame.ip = pos - 1
 			}
 		case code.OpNull:
 			err := vm.push(Null)
@@ -139,27 +147,23 @@ func (vm *VM) Run() error {
 				return err
 			}
 		case code.OpSetGlobal:
-			globalIndex := binary.BigEndian.Uint16(ins[ip+1:])
-			vm.currentFrame().ip += 2
+			globalIndex := int(ins[ip+1])<<8 | int(ins[ip+2])
+			frame.ip += 2
 
-			vm.globals[globalIndex] = vm.pop()
+			globals[globalIndex] = vm.pop()
 		case code.OpSetLocal:
 			localIndex := int(ins[ip+1])
-			vm.currentFrame().ip += 1
-
-			frame := vm.currentFrame()
+			frame.ip += 1
 
 			v := vm.pop()
-			if cell, ok := vm.stack[frame.basePointer+int(localIndex)].(*obj.Cell); ok && cell != nil {
+			if cell, ok := vm.stack[frame.basePointer+localIndex].(*obj.Cell); ok && cell != nil {
 				cell.Value = v
 			} else {
-				vm.stack[frame.basePointer+int(localIndex)] = v
+				vm.stack[frame.basePointer+localIndex] = v
 			}
 		case code.OpDefineLocal:
 			localIndex := int(ins[ip+1])
-			vm.currentFrame().ip += 1
-
-			frame := vm.currentFrame()
+			frame.ip += 1
 
 			v := vm.pop()
 			if v == nil {
@@ -167,10 +171,10 @@ func (vm *VM) Run() error {
 			}
 			vm.stack[frame.basePointer+int(localIndex)] = obj.NewCell(v)
 		case code.OpSetFree:
-			freeIndex := code.ReadUnit8(ins[ip+1:])
-			vm.currentFrame().ip += 1
+			freeIndex := ins[ip+1]
+			frame.ip += 1
 
-			currentClosure := vm.currentFrame().cl
+			currentClosure := frame.cl
 			if int(freeIndex) < 0 || int(freeIndex) >= len(currentClosure.Free) {
 				return fmt.Errorf("free variable index out of range: %d", freeIndex)
 			}
@@ -181,8 +185,8 @@ func (vm *VM) Run() error {
 				currentClosure.Free[freeIndex] = v
 			}
 		case code.OpSetIndex:
-			kind := int(code.ReadUnit8(ins[ip+1:]))
-			vm.currentFrame().ip += 1
+			kind := int(ins[ip+1])
+			frame.ip += 1
 
 			if kind >= 10 {
 				err := vm.executeDoubleIndexAssign(kind - 10)
@@ -201,10 +205,10 @@ func (vm *VM) Run() error {
 				return err
 			}
 		case code.OpGetGlobal:
-			globalIndex := binary.BigEndian.Uint16(ins[ip+1:])
-			vm.currentFrame().ip += 2
+			globalIndex := int(ins[ip+1])<<8 | int(ins[ip+2])
+			frame.ip += 2
 
-			val := vm.globals[globalIndex]
+			val := globals[globalIndex]
 			if val == nil {
 				val = Null
 			}
@@ -214,9 +218,7 @@ func (vm *VM) Run() error {
 			}
 		case code.OpGetLocal:
 			localIndex := int(ins[ip+1])
-			vm.currentFrame().ip += 1
-
-			frame := vm.currentFrame()
+			frame.ip += 1
 
 			err := vm.push(obj.Deref(vm.stack[frame.basePointer+int(localIndex)]))
 			if err != nil {
@@ -224,9 +226,7 @@ func (vm *VM) Run() error {
 			}
 		case code.OpGetLocalCell:
 			localIndex := int(ins[ip+1])
-			vm.currentFrame().ip += 1
-
-			frame := vm.currentFrame()
+			frame.ip += 1
 
 			slot := vm.stack[frame.basePointer+int(localIndex)]
 			if cell, ok := slot.(*obj.Cell); ok && cell != nil {
@@ -250,8 +250,8 @@ func (vm *VM) Run() error {
 				}
 			}
 		case code.OpArray:
-			numElements := int(binary.BigEndian.Uint16(ins[ip+1:]))
-			vm.currentFrame().ip += 2
+			numElements := int(ins[ip+1])<<8 | int(ins[ip+2])
+			frame.ip += 2
 
 			array := vm.buildArray(vm.sp-numElements, vm.sp)
 			vm.sp -= numElements
@@ -261,8 +261,8 @@ func (vm *VM) Run() error {
 				return err
 			}
 		case code.OpHash:
-			numElements := int(binary.BigEndian.Uint16(ins[ip+1:]))
-			vm.currentFrame().ip += 2
+			numElements := int(ins[ip+1])<<8 | int(ins[ip+2])
+			frame.ip += 2
 
 			hash, errObj := vm.buildHash(vm.sp-numElements, vm.sp)
 			vm.sp -= numElements
@@ -287,34 +287,58 @@ func (vm *VM) Run() error {
 				return err
 			}
 		case code.OpCall:
-			numArgs := code.ReadUnit8(ins[ip+1:])
-			vm.currentFrame().ip += 1
+			numArgs := ins[ip+1]
+			frame.ip += 1
 
 			err := vm.executeCall(int(numArgs))
 			if err != nil {
 				return err
 			}
+			frame = vm.currentFrame()
+			ins = frame.Instructions()
+			globals = vm.globals
+			constants = vm.constant
 		case code.OpReturnValue:
 			returnValue := vm.pop()
 
-			frame := vm.popFrame()
-			vm.sp = frame.basePointer - 1
+			popped := vm.popFrame()
+			vm.sp = popped.basePointer - 1
+			if vm.frameIndex > 0 {
+				vm.globals = vm.currentFrame().globals
+				if vm.currentFrame().cl != nil && vm.currentFrame().cl.Constants != nil {
+					vm.constant = vm.currentFrame().cl.Constants
+				}
+				frame = vm.currentFrame()
+				ins = frame.Instructions()
+				globals = vm.globals
+				constants = vm.constant
+			}
 
 			err := vm.push(returnValue)
 			if err != nil {
 				return err
 			}
 		case code.OpReturn:
-			frame := vm.popFrame()
-			vm.sp = frame.basePointer - 1
+			popped := vm.popFrame()
+			vm.sp = popped.basePointer - 1
+			if vm.frameIndex > 0 {
+				vm.globals = vm.currentFrame().globals
+				if vm.currentFrame().cl != nil && vm.currentFrame().cl.Constants != nil {
+					vm.constant = vm.currentFrame().cl.Constants
+				}
+				frame = vm.currentFrame()
+				ins = frame.Instructions()
+				globals = vm.globals
+				constants = vm.constant
+			}
 
 			err := vm.push(Null)
 			if err != nil {
 				return err
 			}
 		case code.OpGetBuiltin:
-			builtinIndex := code.ReadUnit8(ins[ip+1:])
-			vm.currentFrame().ip += 1
+			builtinIndex := ins[ip+1]
+			frame.ip += 1
 
 			definition := obj.Builtins[builtinIndex]
 
@@ -323,29 +347,29 @@ func (vm *VM) Run() error {
 				return err
 			}
 		case code.OpClosure:
-			constIndex := binary.BigEndian.Uint16(ins[ip+1:])
-			numFree := code.ReadUnit8(ins[ip+3:])
-			vm.currentFrame().ip += 3
+			constIndex := int(ins[ip+1])<<8 | int(ins[ip+2])
+			numFree := ins[ip+3]
+			frame.ip += 3
 
 			err := vm.pushClosure(int(constIndex), int(numFree))
 			if err != nil {
 				return err
 			}
 		case code.OpGetFree:
-			freeIndex := code.ReadUnit8(ins[ip+1:])
-			vm.currentFrame().ip += 1
+			freeIndex := ins[ip+1]
+			frame.ip += 1
 
-			currentClosure := vm.currentFrame().cl
+			currentClosure := frame.cl
 
 			err := vm.push(obj.Deref(currentClosure.Free[freeIndex]))
 			if err != nil {
 				return err
 			}
 		case code.OpGetFreeCell:
-			freeIndex := code.ReadUnit8(ins[ip+1:])
-			vm.currentFrame().ip += 1
+			freeIndex := ins[ip+1]
+			frame.ip += 1
 
-			currentClosure := vm.currentFrame().cl
+			currentClosure := frame.cl
 			if int(freeIndex) < 0 || int(freeIndex) >= len(currentClosure.Free) {
 				return fmt.Errorf("free variable index out of range: %d", freeIndex)
 			}
@@ -372,7 +396,7 @@ func (vm *VM) Run() error {
 				}
 			}
 		case code.OpCurrentClosure:
-			currentClosure := vm.currentFrame().cl
+			currentClosure := frame.cl
 
 			err := vm.push(currentClosure)
 			if err != nil {
@@ -385,6 +409,39 @@ func (vm *VM) Run() error {
 
 			err := vm.push(vm.stack[vm.sp-1])
 			if err != nil {
+				return err
+			}
+		case code.OpImport:
+			constIndex := int(ins[ip+1])<<8 | int(ins[ip+2])
+			frame.ip += 2
+			spec, ok := constants[constIndex].(*obj.ImportSpec)
+			if !ok {
+				return fmt.Errorf("not an import spec: %+v", constants[constIndex])
+			}
+			res := vm.executeImport(spec)
+			if errObj, ok := res.(*obj.Error); ok {
+				if err := vm.push(errObj); err != nil {
+					return err
+				}
+				return fmt.Errorf("%s", errObj.Message)
+			}
+			if err := vm.push(res); err != nil {
+				return err
+			}
+		case code.OpGetProp:
+			constIndex := int(ins[ip+1])<<8 | int(ins[ip+2])
+			frame.ip += 2
+			propObj := constants[constIndex]
+			propStr, ok := propObj.(*obj.String)
+			if !ok {
+				if err := vm.push(&obj.Error{Message: fmt.Sprintf("invalid property name: %s", propObj.Type())}); err != nil {
+					return err
+				}
+				break
+			}
+			modObj := vm.pop()
+			res := vm.executeGetProp(modObj, propStr.Value)
+			if err := vm.push(res); err != nil {
 				return err
 			}
 		}
@@ -406,8 +463,10 @@ func (vm *VM) push(o obj.Object) error {
 }
 
 func (vm *VM) pop() obj.Object {
-	o := vm.stack[vm.sp-1]
 	vm.sp--
+	o := vm.stack[vm.sp]
+	vm.stack[vm.sp] = nil
+	vm.lastPopped = o
 	return o
 }
 
@@ -1066,19 +1125,23 @@ func (vm *VM) executeSingleIndexAssign(kind int) error {
 	}
 	if errObj, ok := left.(*obj.Error); ok {
 		vm.stack[vm.sp] = errObj
+		vm.lastPopped = errObj
 		return nil
 	}
 	if errObj, ok := index.(*obj.Error); ok {
 		vm.stack[vm.sp] = errObj
+		vm.lastPopped = errObj
 		return nil
 	}
 	if errObj, ok := val.(*obj.Error); ok {
 		vm.stack[vm.sp] = errObj
+		vm.lastPopped = errObj
 		return nil
 	}
 
 	result := vm.singleIndexAssign(left, index, val, kind)
 	vm.stack[vm.sp] = result
+	vm.lastPopped = result
 	return nil
 }
 
@@ -1192,11 +1255,13 @@ func (vm *VM) executeDoubleIndexAssign(kind int) error {
 	for _, o := range []obj.Object{matObj, rowIdxObj, colIdxObj, val} {
 		if errObj, ok := o.(*obj.Error); ok {
 			vm.stack[vm.sp] = errObj
+			vm.lastPopped = errObj
 			return nil
 		}
 	}
 	result := vm.doubleIndexAssign(matObj, rowIdxObj, colIdxObj, val, kind)
 	vm.stack[vm.sp] = result
+	vm.lastPopped = result
 	return nil
 }
 
@@ -1332,9 +1397,19 @@ func (vm *VM) callFunction(cl *obj.Closure, numArgs int) error {
 		return vm.push(&obj.Error{Message: msg})
 	}
 
-	frame := NewFrame(cl, vm.sp-numArgs)
+	home := cl.Globals
+	if home == nil {
+		home = vm.globals
+	}
+	homeConst := cl.Constants
+	if homeConst == nil {
+		homeConst = vm.constant
+	}
+	frame := NewFrame(cl, vm.sp-numArgs, home)
 	vm.pushFrame(frame)
 
+	vm.globals = home
+	vm.constant = homeConst
 	vm.sp = frame.basePointer + cl.Fn.NumLocals
 	for i := numArgs; i < cl.Fn.NumLocals; i++ {
 		vm.stack[frame.basePointer+i] = nil
@@ -1401,7 +1476,7 @@ func (vm *VM) pushClosure(constIndex, numFree int) error {
 	}
 	vm.sp -= numFree
 
-	closure := &obj.Closure{Fn: function, Free: free}
+	closure := &obj.Closure{Fn: function, Free: free, Globals: vm.globals, Constants: vm.constant}
 	return vm.push(closure)
 }
 
@@ -1425,6 +1500,163 @@ func isTruthy(o obj.Object) bool {
 func NewWithGlobalsStore(bytecode *compiler.Bytecode, s []obj.Object) *VM {
 	vm := New(bytecode)
 	vm.globals = s
+	if vm.frameIndex > 0 && len(vm.frames) > 0 && vm.frames[0] != nil {
+		vm.frames[0].globals = s
+		if vm.frames[0].cl != nil {
+			vm.frames[0].cl.Globals = s
+		}
+	}
 
 	return vm
+}
+
+func (vm *VM) executeImport(spec *obj.ImportSpec) obj.Object {
+	mod, loadErr := vm.loadModule(spec.Path)
+	if loadErr != nil {
+		return loadErr
+	}
+	switch spec.Kind {
+	case obj.ImportStar, obj.ImportNamed:
+		for i, name := range spec.Names {
+			if i >= len(spec.Targets) {
+				return &obj.Error{Message: fmt.Sprintf("import target mismatch for %s", name)}
+			}
+			childIdx, ok := mod.Exports[name]
+			if !ok {
+				if mod.AllSymbols != nil {
+					if _, inAll := mod.AllSymbols[name]; inAll {
+						return &obj.Error{Message: fmt.Sprintf("module %s has no public export named %s (%s is private)", spec.Path, name, name)}
+					}
+				}
+				if mod.Env != nil {
+					if _, ok := mod.Env.Get(name); ok {
+						if !mod.Env.IsPublic(name) {
+							return &obj.Error{Message: fmt.Sprintf("module %s has no public export named %s (%s is private)", spec.Path, name, name)}
+						}
+					}
+				}
+				return &obj.Error{Message: fmt.Sprintf("module %s has no export named %s", spec.Path, name)}
+			}
+			var val obj.Object
+			if childIdx >= 0 && childIdx < len(mod.Globals) {
+				val = mod.Globals[childIdx]
+			}
+			if val == nil {
+				val = Null
+			}
+			if spec.Targets[i] >= 0 && spec.Targets[i] < len(vm.globals) {
+				vm.globals[spec.Targets[i]] = val
+			}
+		}
+		return Null
+	case obj.ImportModule:
+		alias := spec.Alias
+		if alias == "" {
+			base := filepath.Base(spec.Path)
+			alias = strings.TrimSuffix(base, ".zd")
+			if alias == "" || alias == "." {
+				alias = spec.Path
+			}
+		}
+		newMod := &obj.Module{Name: alias, Globals: mod.Globals, Exports: mod.Exports, AllSymbols: mod.AllSymbols, Publics: mod.Publics}
+		if spec.AliasIndex >= 0 && spec.AliasIndex < len(vm.globals) {
+			vm.globals[spec.AliasIndex] = newMod
+		}
+		return Null
+	default:
+		return &obj.Error{Message: fmt.Sprintf("unknown import kind %d", spec.Kind)}
+	}
+}
+
+func (vm *VM) loadModule(path string) (*obj.Module, *obj.Error) {
+	if cached, ok := vmModuleCache[path]; ok {
+		return cached, nil
+	}
+	if vmLoading[path] {
+		return nil, &obj.Error{Message: fmt.Sprintf("circular import detected: %s", path)}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, &obj.Error{Message: fmt.Sprintf("module not found: %s", path)}
+		}
+		return nil, &obj.Error{Message: fmt.Sprintf("could not read module %s: %s", path, err)}
+	}
+	l := lexer.New(string(data))
+	p := parser.New(l)
+	prog := p.ParseProgram()
+	if len(p.Errors()) > 0 {
+		return nil, &obj.Error{Message: fmt.Sprintf("parse errors in module %s: %v", path, p.Errors())}
+	}
+	comp := compiler.New()
+	comp.BaseDir = filepath.Dir(path)
+	if err := comp.Compile(prog); err != nil {
+		return nil, &obj.Error{Message: err.Error()}
+	}
+	bc := comp.Bytecode()
+	childGlobals := make([]obj.Object, GlobalsSize)
+	vmLoading[path] = true
+	defer delete(vmLoading, path)
+	childVM := NewWithGlobalsStore(bc, childGlobals)
+	if err := childVM.Run(); err != nil {
+		return nil, &obj.Error{Message: err.Error()}
+	}
+	pubs := map[string]bool{}
+	for k := range bc.Exports {
+		pubs[k] = true
+	}
+	modName := strings.TrimSuffix(filepath.Base(path), ".zd")
+	mod := &obj.Module{Name: modName, Globals: childGlobals, Exports: bc.Exports, AllSymbols: bc.AllSymbols, Publics: pubs}
+	vmModuleCache[path] = mod
+	return mod, nil
+}
+
+func (vm *VM) executeGetProp(modObj obj.Object, prop string) obj.Object {
+	if modObj == nil {
+		modObj = Null
+	}
+	if errObj, ok := modObj.(*obj.Error); ok {
+		return errObj
+	}
+	if mod, ok := modObj.(*obj.Module); ok {
+		if mod.Exports != nil && mod.Globals != nil {
+			if idx, ok := mod.Exports[prop]; ok {
+				var v obj.Object
+				if idx >= 0 && idx < len(mod.Globals) {
+					v = mod.Globals[idx]
+				}
+				if v == nil {
+					v = Null
+				}
+				return v
+			}
+			if mod.AllSymbols != nil {
+				if _, inAll := mod.AllSymbols[prop]; inAll {
+					return &obj.Error{Message: fmt.Sprintf("undefined property %s on module %s (%s is private)", prop, mod.Name, prop)}
+				}
+			}
+			if mod.Env != nil {
+				if val, ok := mod.Env.Get(prop); ok {
+					if !mod.Env.IsPublic(prop) {
+						return &obj.Error{Message: fmt.Sprintf("undefined property %s on module %s (%s is private)", prop, mod.Name, prop)}
+					}
+					return val
+				}
+				return &obj.Error{Message: fmt.Sprintf("undefined property %s on module %s", prop, mod.Name)}
+			}
+			return &obj.Error{Message: fmt.Sprintf("undefined property %s on module %s", prop, mod.Name)}
+		}
+		if mod.Env != nil {
+			val, ok := mod.Env.Get(prop)
+			if !ok {
+				return &obj.Error{Message: fmt.Sprintf("undefined property %s on module %s", prop, mod.Name)}
+			}
+			if !mod.Env.IsPublic(prop) {
+				return &obj.Error{Message: fmt.Sprintf("undefined property %s on module %s (%s is private)", prop, mod.Name, prop)}
+			}
+			return val
+		}
+		return &obj.Error{Message: fmt.Sprintf("undefined property %s on module %s", prop, mod.Name)}
+	}
+	return &obj.Error{Message: fmt.Sprintf("property access not supported on type %s", modObj.Type())}
 }

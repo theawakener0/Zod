@@ -3,7 +3,6 @@ package parser
 import (
 	"fmt"
 	"strconv"
-	"strings"
 
 	"github.com/theawakener0/Zod/ast"
 	lx "github.com/theawakener0/Zod/lexer"
@@ -127,7 +126,7 @@ func (p *Parser) Errors() []string {
 }
 
 func (p *Parser) peekError(tok tk.TokenType) {
-	msg := fmt.Sprintf("expected next token to be %s, got %s instead", tok, p.peekToken.Type)
+	msg := "expected next token to be " + string(tok) + ", got " + string(p.peekToken.Type) + " instead"
 	p.errors = append(p.errors, msg)
 }
 
@@ -136,17 +135,43 @@ func (p *Parser) nextToken() {
 	p.peekToken = p.l.NextToken()
 }
 
+// precedenceOf is the switch fast path shared by peek/curPrecedence and
+// the parseExpression hot loop: zero map hashes on the common operators.
+func precedenceOf(t tk.TokenType) (int, bool) {
+	switch t {
+	case tk.LOR:
+		return OR, true
+	case tk.LAND:
+		return AND, true
+	case tk.EQ, tk.NOTEQ:
+		return EQUALS, true
+	case tk.LT, tk.GT, tk.GTEQ, tk.LTEQ:
+		return LESSGREATER, true
+	case tk.PLUS, tk.MINUS:
+		return SUM, true
+	case tk.SLASH, tk.ASTERISK:
+		return PRODUCT, true
+	case tk.LPAREN, tk.INC, tk.DEC:
+		return CALL, true
+	case tk.LBRACKET:
+		return INDEX, true
+	case tk.DOT:
+		return PROPERTY, true
+	}
+	return LOWEST, false
+}
+
 func (p *Parser) peekPrecedence() int {
-	if p, ok := precedences[p.peekToken.Type]; ok {
-		return p
+	if prec, ok := precedenceOf(p.peekToken.Type); ok {
+		return prec
 	}
 
 	return LOWEST
 }
 
 func (p *Parser) curPrecedence() int {
-	if p, ok := precedences[p.curToken.Type]; ok {
-		return p
+	if prec, ok := precedenceOf(p.curToken.Type); ok {
+		return prec
 	}
 
 	return LOWEST
@@ -154,7 +179,7 @@ func (p *Parser) curPrecedence() int {
 
 func (p *Parser) ParseProgram() *ast.Program {
 	program := &ast.Program{}
-	program.Statements = []ast.Statement{}
+	program.Statements = make([]ast.Statement, 0, 16)
 
 	for p.curToken.Type != tk.EOF {
 		stmt := p.parseStatement()
@@ -451,7 +476,13 @@ func (p *Parser) parseExpression(precedence int) ast.Expression {
 	}
 	leftExpr := prefix()
 
-	for !p.peekTokenIs(tk.SEMICOLON) && precedence < p.peekPrecedence() {
+	// Single precedence lookup per iteration, cached in prec and reused
+	// for the comparison; SEMICOLON short-circuits before the lookup.
+	for p.peekToken.Type != tk.SEMICOLON {
+		prec, ok := precedenceOf(p.peekToken.Type)
+		if !ok || precedence >= prec {
+			break
+		}
 		infix := p.infixParseFn[p.peekToken.Type]
 		if infix == nil {
 			return leftExpr
@@ -476,8 +507,13 @@ func (p *Parser) parseIntegerLiteral() ast.Expression {
 	var value int64
 	var err error
 
-	if len(literal) >= 2 && literal[0] == '0' && strings.Contains("xXbBoO", string(literal[1])) {
-		value, err = strconv.ParseInt(literal, 0, 64)
+	if len(literal) >= 2 && literal[0] == '0' {
+		switch literal[1] {
+		case 'x', 'X', 'b', 'B', 'o', 'O':
+			value, err = strconv.ParseInt(literal, 0, 64)
+		default:
+			value, err = strconv.ParseInt(literal, 10, 64)
+		}
 	} else {
 		value, err = strconv.ParseInt(literal, 10, 64)
 	}
@@ -619,7 +655,7 @@ func (p *Parser) parseIfExpression() ast.Expression {
 
 func (p *Parser) parseBlockStatement() *ast.BlockStatement {
 	block := &ast.BlockStatement{Token: p.curToken}
-	block.Statements = []ast.Statement{}
+	block.Statements = make([]ast.Statement, 0, 8)
 
 	p.nextToken()
 
@@ -738,7 +774,7 @@ func (p *Parser) parseFunctionLiteral() ast.Expression {
 }
 
 func (p *Parser) parseFunctionParameters() []*ast.Identifier {
-	identifiers := []*ast.Identifier{}
+	identifiers := make([]*ast.Identifier, 0, 8)
 
 	if p.peekTokenIs(tk.RPAREN) {
 		p.nextToken()
@@ -792,7 +828,7 @@ func (p *Parser) parseArrayLiteral() ast.Expression {
 }
 
 func (p *Parser) parseExpressionList(endTok tk.TokenType) []ast.Expression {
-	elements := []ast.Expression{}
+	elements := make([]ast.Expression, 0, 8)
 
 	if p.peekTokenIs(endTok) {
 		p.nextToken()
@@ -833,7 +869,7 @@ func (p *Parser) parseIndexExpression(left ast.Expression) ast.Expression {
 
 func (p *Parser) parseHashLiteral() ast.Expression {
 	hash := &ast.HashLiteral{Token: p.curToken}
-	hash.Pairs = []ast.HashLiteralPair{}
+	hash.Pairs = make([]ast.HashLiteralPair, 0, 8)
 
 	p.skipPeekSemicolons()
 	for !p.peekTokenIs(tk.RBRACE) {
@@ -935,7 +971,7 @@ func (p *Parser) parseFromImportStatement() *ast.ImportStatement {
 		return stmt
 	}
 	
-	stmt.Names = []*ast.Identifier{}
+	stmt.Names = make([]*ast.Identifier, 0, 8)
 
 	if !p.expectPeek(tk.IDENT) {
 		return nil
@@ -958,7 +994,7 @@ func (p *Parser) parseFromImportStatement() *ast.ImportStatement {
 }
 
 func (p *Parser) noPrefixParseFnError(t tk.TokenType) {
-	msg := fmt.Sprintf("no prefix parse function for %s found", t)
+	msg := "no prefix parse function for " + string(t) + " found"
 	p.errors = append(p.errors, msg)
 }
 
