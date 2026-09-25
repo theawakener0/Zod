@@ -1,0 +1,15 @@
+// std_bytes_demo.zd - demo of std/bytes (from_str/to_str/len/slice/concat roundtrip).
+// Run from the repo root:
+//   go run . examples/std_bytes_demo.zd
+//   go run . --eng=eval examples/std_bytes_demo.zd
+import "std/bytes" as bytes
+import "std/fmt" as fmt
+
+let b = bytes.from_str("hello")
+fmt.println(bytes.to_str(b))
+fmt.println(bytes.len(b))
+let part = bytes.slice(b, 1, 4)
+fmt.println(bytes.to_str(part))
+let both = bytes.concat(b, bytes.from_str(" world"))
+fmt.println(bytes.to_str(both))
+fmt.println(bytes.len(both))

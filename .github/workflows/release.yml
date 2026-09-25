@@ -62,6 +62,7 @@ jobs:
             -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
             -o "dist/${name}/zod${ext}" .
           cp LICENSE README.md "dist/${name}/"
+          cp -r stdlib "dist/${name}/"
           tar -czf "dist/${name}.tar.gz" -C dist "${name}"
       - name: Generate checksums
         run: |

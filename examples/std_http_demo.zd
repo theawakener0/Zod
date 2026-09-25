@@ -1,0 +1,9 @@
+// std_http_demo.zd - demo of std/http (offline-safe, no external network).
+// Run from the repo root:
+//   go run . examples/std_http_demo.zd
+//   go run . --eng=eval examples/std_http_demo.zd
+import "std/http" as http
+import "std/fmt" as fmt
+
+let r = try(http.get_timeout("http://127.0.0.1:1/", 500))
+fmt.println(r[0])

@@ -1,0 +1,37 @@
+pub reduce := fn(arr, f, init) {
+  let acc = init
+  for (i := 0; i < len(arr); i++) {
+    acc = f(acc, arr[i])
+  }
+  return acc
+}
+
+pub chain := fn(a, b) {
+  let out = __arr_slice(a, 0, len(a))
+  for (i := 0; i < len(b); i++) {
+    out = __arr_push(out, b[i])
+  }
+  return out
+}
+
+pub take := fn(arr, n) {
+  if (n <= 0) {
+    return []
+  }
+  if (n >= len(arr)) {
+    return __arr_slice(arr, 0, len(arr))
+  }
+  return __arr_slice(arr, 0, n)
+}
+
+pub drop := fn(arr, n) {
+  if (n <= 0) {
+    return __arr_slice(arr, 0, len(arr))
+  }
+  if (n >= len(arr)) {
+    return []
+  }
+  return __arr_slice(arr, n, len(arr))
+}
+
+null

@@ -1,0 +1,102 @@
+pub split := fn(s, sep) {
+  return __str_split(s, sep)
+}
+
+pub join := fn(arr, sep) {
+  return __str_join(arr, sep)
+}
+
+pub slice := fn(s, start, end) {
+  return __str_slice(s, start, end)
+}
+
+pub trim := fn(s) {
+  return __trim(s)
+}
+
+pub upper := fn(s) {
+  return __upper(s)
+}
+
+pub lower := fn(s) {
+  return __lower(s)
+}
+
+pub replace := fn(s, old, new) {
+  return __replace(s, old, new)
+}
+
+pub index_of := fn(s, sub) {
+  return __str_index(s, sub)
+}
+
+pub starts_with := fn(s, prefix) {
+  if (prefix == "") {
+    return true
+  }
+  if (len(prefix) > len(s)) {
+    return false
+  }
+  return __str_index(s, prefix) == 0
+}
+
+pub ends_with := fn(s, suffix) {
+  if (suffix == "") {
+    return true
+  }
+  if (len(suffix) > len(s)) {
+    return false
+  }
+  let start = len(s) - len(suffix)
+  return __str_slice(s, start, len(s)) == suffix
+}
+
+pub repeat := fn(s, n) {
+  return __str_repeat(s, n)
+}
+
+pub pad_left := fn(s, width, pad) {
+  if (len(s) >= width) {
+    return s
+  }
+  if (pad == "") {
+    return s
+  }
+  let need = width - len(s)
+  return __str_repeat(pad, need) + s
+}
+
+pub pad_right := fn(s, width, pad) {
+  if (len(s) >= width) {
+    return s
+  }
+  if (pad == "") {
+    return s
+  }
+  let need = width - len(s)
+  return s + __str_repeat(pad, need)
+}
+
+pub contains := fn(s, sub) {
+  return __str_index(s, sub) != -1
+}
+
+pub to_int := fn(s) {
+  return int(s)
+}
+
+pub to_float := fn(s) {
+  return float(s)
+}
+
+pub is_empty := fn(s) {
+  return len(s) == 0
+}
+
+pub has_prefix := fn(s, p) {
+  return __str_starts(s, p)
+}
+
+pub has_suffix := fn(s, p) {
+  return __str_ends(s, p)
+}

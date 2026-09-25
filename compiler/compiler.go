@@ -973,7 +973,88 @@ func stdlibPath() string {
 	return "stdlib"
 }
 
+func stdlibCandidateDirs(baseDir string) []string {
+	var dirs []string
+	if p := os.Getenv("ZOD_STDLIB"); p != "" {
+		dirs = append(dirs, p)
+	}
+	if exe, err := os.Executable(); err == nil {
+		dirs = append(dirs, filepath.Join(filepath.Dir(exe), "stdlib"))
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		dirs = append(dirs, filepath.Join(cwd, "stdlib"))
+	}
+	start := baseDir
+	if start == "" {
+		if cwd, err := os.Getwd(); err == nil {
+			start = cwd
+		}
+	}
+	if start != "" {
+		if abs, err := filepath.Abs(start); err == nil {
+			start = abs
+		}
+		seen := make(map[string]bool, len(dirs)+5)
+		for _, d := range dirs {
+			if abs, err := filepath.Abs(d); err == nil {
+				seen[abs] = true
+			} else {
+				seen[d] = true
+			}
+		}
+		cur := start
+		for i := 0; i < 5; i++ {
+			cand := filepath.Join(cur, "stdlib")
+			absCand := cand
+			if abs, err := filepath.Abs(cand); err == nil {
+				absCand = abs
+			}
+			if !seen[absCand] {
+				dirs = append(dirs, cand)
+				seen[absCand] = true
+			}
+			parent := filepath.Dir(cur)
+			if parent == cur {
+				break
+			}
+			cur = parent
+		}
+	}
+	return dirs
+}
+
+func resolveStdModulePath(rel, baseDir string) (string, bool) {
+	if rel == "" {
+		return "", false
+	}
+	var variants []string
+	if strings.HasSuffix(rel, ".zd") {
+		variants = []string{rel}
+	} else {
+		variants = []string{rel, rel + ".zd"}
+	}
+	for _, dir := range stdlibCandidateDirs(baseDir) {
+		for _, v := range variants {
+			cand := filepath.Join(dir, v)
+			if statExists(cand) {
+				if abs, err := filepath.Abs(cand); err == nil {
+					return abs, true
+				}
+				return cand, true
+			}
+		}
+	}
+	return "", false
+}
+
 func ResolveModulePath(baseDir, path string) (string, error) {
+	if strings.HasPrefix(path, "std/") {
+		rel := strings.TrimPrefix(path, "std/")
+		if abs, ok := resolveStdModulePath(rel, baseDir); ok {
+			return abs, nil
+		}
+		return "", fmt.Errorf("module not found")
+	}
 	if filepath.IsAbs(path) {
 		if statExists(path) {
 			return path, nil
@@ -1086,7 +1167,10 @@ func (c *Compiler) compileImportStatement(node *ast.ImportStatement) error {
 		specNames := []string{}
 		targets := []int{}
 		for _, n := range names {
-			sym := c.symbolTable.DefineIfNotExists(n)
+			// Imports must shadow builtins (e.g. `keys`, `println`).
+			// DefineIfNotExists would keep the BUILTIN symbol and the
+			// VM would silently keep calling the old builtin.
+			sym := c.symbolTable.Define(n)
 			if c.allSymbols == nil {
 				c.allSymbols = map[string]int{}
 			}
@@ -1104,7 +1188,8 @@ func (c *Compiler) compileImportStatement(node *ast.ImportStatement) error {
 		names := []string{}
 		targets := []int{}
 		for _, id := range node.Names {
-			sym := c.symbolTable.DefineIfNotExists(id.Value)
+			// See above: imports shadow builtins.
+			sym := c.symbolTable.Define(id.Value)
 			if c.allSymbols == nil {
 				c.allSymbols = map[string]int{}
 			}
@@ -1128,7 +1213,7 @@ func (c *Compiler) compileImportStatement(node *ast.ImportStatement) error {
 			alias = rawPath
 		}
 	}
-	sym := c.symbolTable.DefineIfNotExists(alias)
+	sym := c.symbolTable.Define(alias)
 	if c.allSymbols == nil {
 		c.allSymbols = map[string]int{}
 	}

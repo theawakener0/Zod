@@ -1,0 +1,15 @@
+pub uuid := fn() {
+  return __uuid()
+}
+
+pub random_bytes := fn(n) {
+  return __random_bytes(n)
+}
+
+pub random_hex := fn(n) {
+  return __hex_encode(__random_bytes(n))
+}
+
+pub sha256 := fn(s) {
+  return __sha256(s)
+}

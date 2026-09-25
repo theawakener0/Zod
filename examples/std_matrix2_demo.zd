@@ -1,0 +1,15 @@
+// std_matrix2_demo.zd - demo of std/matrix det/det3/inv2.
+// Run from the repo root:
+//   go run . examples/std_matrix2_demo.zd
+//   go run . --eng=eval examples/std_matrix2_demo.zd
+import "std/matrix" as m
+import "std/fmt" as fmt
+
+let a = m.new(2, 2, [1, 2, 3, 4])
+fmt.println(m.det(a))
+fmt.println(m.det3(m.eye(3)))
+let b = m.new(2, 2, [4, 7, 2, 6])
+fmt.println(m.inv2(b))
+let r = try(m.inv2(m.new(2, 2, [1, 2, 2, 4])))
+fmt.println(r[0])
+fmt.println(r[1])

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"math"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,6 +26,7 @@ const (
 	CONTINUE_OBJ = "CONTINUE"
 	FUNCTION_OBJ = "FUNCTION"
 	STRING_OBJ = "STRING"
+	BYTES_OBJ = "BYTES"
 	BUILTIN_OBJ = "BUILTIN"
 	ARRAY_OBJ = "ARRAY"
 	HASH_OBJ = "HASH"
@@ -34,6 +36,7 @@ const (
 	CELL_OBJ = "CELL"
 	MODULE_OBJ = "MODULE"
 	IMPORT_SPEC_OBJ = "IMPORT_SPEC"
+	FILE_OBJ = "FILE"
 )
 
 const (
@@ -220,7 +223,35 @@ func (s *String) HashKey() HashKey {
 	return HashKey{Type: s.Type(), Value: h}
 }
 
+type Bytes struct {
+	Value []byte
+}
+
+func (b *Bytes) Type() ObjectType { return BYTES_OBJ }
+func (b *Bytes) Inspect() string { return string(b.Value) }
+func (b *Bytes) HashKey() HashKey {
+	const (
+		offset64 = 14695981039346656037
+		prime64  = 1099511628211
+	)
+	h := uint64(offset64)
+	for i := 0; i < len(b.Value); i++ {
+		h ^= uint64(b.Value[i])
+		h *= prime64
+	}
+	return HashKey{Type: b.Type(), Value: h}
+}
+
 type BuiltinFn func(args ...Object) Object
+
+type File struct {
+	F    *os.File
+	Path string
+	Mode string
+}
+
+func (f *File) Type() ObjectType { return FILE_OBJ }
+func (f *File) Inspect() string { return "FILE(" + f.Path + ")" }
 
 type Builtin struct {
 	Fn BuiltinFn

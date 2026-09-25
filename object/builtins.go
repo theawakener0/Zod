@@ -2,13 +2,23 @@ package object
 
 import (
 	"bufio"
+	crand "crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"math/rand"
+	"net/http"
 	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 var (
@@ -29,6 +39,8 @@ var Builtins = []struct {
 
 			switch arg := args[0].(type) {
 			case *String:
+				return NewInteger(int64(len(arg.Value)))
+			case *Bytes:
 				return NewInteger(int64(len(arg.Value)))
 			case *Array:
 				return NewInteger(int64(len(arg.Elements)))
@@ -173,6 +185,18 @@ var Builtins = []struct {
 					return &String{Value: "true"}
 				}
 				return &String{Value: "false"}
+			case *Bytes:
+				return &String{Value: string(arg.Value)}
+			case *Null:
+				return &String{Value: "null"}
+			case *Array:
+				return &String{Value: arg.Inspect()}
+			case *Hash:
+				return &String{Value: arg.Inspect()}
+			case *Matrix:
+				return &String{Value: arg.Inspect()}
+			case *Error:
+				return &String{Value: arg.Inspect()}
 			default:
 				return newError("argument to `string` not supported. got=%s", args[0].Type())
 			}
@@ -570,9 +594,1283 @@ var Builtins = []struct {
 			return &Float{Value: math.Pi}
 		},
 	}},
+	{"error", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			s, ok := args[0].(*String)
+			if !ok {
+				return newError("argument to `error` must be STRING. got=%s", args[0].Type())
+			}
+			return &Error{Message: s.Value}
+		},
+	}},
+	{"is_error", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			if _, ok := args[0].(*Error); ok {
+				return TRUE
+			}
+			return FALSE
+		},
+	}},
+	{"__panic", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			if s, ok := args[0].(*String); ok {
+				return &Error{Message: s.Value}
+			}
+			if e, ok := args[0].(*Error); ok {
+				return e
+			}
+			return newError("argument to `__panic` must be STRING. got=%s", args[0].Type())
+		},
+	}},
+	{"__print", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			fmt.Print(args[0].Inspect())
+			return NULL
+		},
+	}},
+	{"__eprint", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			fmt.Fprint(os.Stderr, args[0].Inspect())
+			return NULL
+		},
+	}},
+	{"__sprintf", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 2 {
+				return newError("wrong number of arguments. got=%d, want=2", len(args))
+			}
+			format, ok := args[0].(*String)
+			if !ok {
+				return newError("first argument to `__sprintf` must be STRING. got=%s", args[0].Type())
+			}
+			arr, ok := args[1].(*Array)
+			if !ok {
+				return newError("second argument to `__sprintf` must be ARRAY. got=%s", args[1].Type())
+			}
+			valArgs := make([]any, len(arr.Elements))
+			for i, e := range arr.Elements {
+				valArgs[i] = objectToValue(e)
+			}
+			out := fmt.Sprintf(format.Value, valArgs...)
+			if strings.Contains(out, "%!") {
+				return newError("printf format error: verb/type mismatch or missing argument in %q -> %q", format.Value, out)
+			}
+			return &String{Value: out}
+		},
+	}},
+	{"__read_line", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) > 1 {
+				return newError("wrong number of arguments. got=%d, want=0 or 1", len(args))
+			}
+			if len(args) == 1 {
+				fmt.Print(args[0].Inspect())
+			}
+			reader := getStdinReader()
+			text, _ := reader.ReadString('\n')
+			text = strings.TrimSpace(text)
+			return &String{Value: text}
+		},
+	}},
+	{"__str_split", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 2 {
+				return newError("wrong number of arguments. got=%d, want=2", len(args))
+			}
+			s, ok := args[0].(*String)
+			if !ok {
+				return newError("first argument to `__str_split` must be STRING. got=%s", args[0].Type())
+			}
+			sep, ok := args[1].(*String)
+			if !ok {
+				return newError("second argument to `__str_split` must be STRING. got=%s", args[1].Type())
+			}
+			parts := strings.Split(s.Value, sep.Value)
+			elems := make([]Object, len(parts))
+			for i, p := range parts {
+				elems[i] = &String{Value: p}
+			}
+			return &Array{Elements: elems}
+		},
+	}},
+	{"__str_join", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 2 {
+				return newError("wrong number of arguments. got=%d, want=2", len(args))
+			}
+			arr, ok := args[0].(*Array)
+			if !ok {
+				return newError("first argument to `__str_join` must be ARRAY. got=%s", args[0].Type())
+			}
+			sep, ok := args[1].(*String)
+			if !ok {
+				return newError("second argument to `__str_join` must be STRING. got=%s", args[1].Type())
+			}
+			parts := make([]string, len(arr.Elements))
+			for i, e := range arr.Elements {
+				if s, ok := e.(*String); ok {
+					parts[i] = s.Value
+				} else {
+					parts[i] = e.Inspect()
+				}
+			}
+			return &String{Value: strings.Join(parts, sep.Value)}
+		},
+	}},
+	{"__str_index", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 2 {
+				return newError("wrong number of arguments. got=%d, want=2", len(args))
+			}
+			s, ok := args[0].(*String)
+			if !ok {
+				return newError("first argument to `__str_index` must be STRING. got=%s", args[0].Type())
+			}
+			sub, ok := args[1].(*String)
+			if !ok {
+				return newError("second argument to `__str_index` must be STRING. got=%s", args[1].Type())
+			}
+			return NewInteger(int64(strings.Index(s.Value, sub.Value)))
+		},
+	}},
+	{"__str_slice", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 3 {
+				return newError("wrong number of arguments. got=%d, want=3", len(args))
+			}
+			s, ok := args[0].(*String)
+			if !ok {
+				return newError("first argument to `__str_slice` must be STRING. got=%s", args[0].Type())
+			}
+			start, ok := args[1].(*Integer)
+			if !ok {
+				return newError("second argument to `__str_slice` must be INTEGER. got=%s", args[1].Type())
+			}
+			end, ok := args[2].(*Integer)
+			if !ok {
+				return newError("third argument to `__str_slice` must be INTEGER. got=%s", args[2].Type())
+			}
+			if start.Value < 0 || end.Value < 0 {
+				return newError("string slice indices must be non-negative. got=%d, %d", start.Value, end.Value)
+			}
+			l := int64(len(s.Value))
+			st := start.Value
+			en := end.Value
+			if st > l {
+				st = l
+			}
+			if en > l {
+				en = l
+			}
+			if st > en {
+				return newError("string slice start after end. got=%d > %d", st, en)
+			}
+			return &String{Value: s.Value[int(st):int(en)]}
+		},
+	}},
+	{"__ord", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			s, ok := args[0].(*String)
+			if !ok {
+				return newError("argument to `__ord` must be STRING. got=%s", args[0].Type())
+			}
+			if s.Value == "" {
+				return newError("argument to `__ord` must be non-empty string")
+			}
+			r, _ := utf8.DecodeRuneInString(s.Value)
+			return NewInteger(int64(r))
+		},
+	}},
+	{"__chr", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			n, ok := args[0].(*Integer)
+			if !ok {
+				return newError("argument to `__chr` must be INTEGER. got=%s", args[0].Type())
+			}
+			if n.Value < 0 || n.Value > 0x10FFFF {
+				return newError("argument to `__chr` out of range. got=%d", n.Value)
+			}
+			return &String{Value: string(rune(n.Value))}
+		},
+	}},
+	{"__trim", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			s, ok := args[0].(*String)
+			if !ok {
+				return newError("argument to `__trim` must be STRING. got=%s", args[0].Type())
+			}
+			return &String{Value: strings.TrimSpace(s.Value)}
+		},
+	}},
+	{"__upper", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			s, ok := args[0].(*String)
+			if !ok {
+				return newError("argument to `__upper` must be STRING. got=%s", args[0].Type())
+			}
+			return &String{Value: strings.ToUpper(s.Value)}
+		},
+	}},
+	{"__lower", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			s, ok := args[0].(*String)
+			if !ok {
+				return newError("argument to `__lower` must be STRING. got=%s", args[0].Type())
+			}
+			return &String{Value: strings.ToLower(s.Value)}
+		},
+	}},
+	{"__replace", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 3 {
+				return newError("wrong number of arguments. got=%d, want=3", len(args))
+			}
+			s, ok := args[0].(*String)
+			if !ok {
+				return newError("first argument to `__replace` must be STRING. got=%s", args[0].Type())
+			}
+			old, ok := args[1].(*String)
+			if !ok {
+				return newError("second argument to `__replace` must be STRING. got=%s", args[1].Type())
+			}
+			newS, ok := args[2].(*String)
+			if !ok {
+				return newError("third argument to `__replace` must be STRING. got=%s", args[2].Type())
+			}
+			return &String{Value: strings.ReplaceAll(s.Value, old.Value, newS.Value)}
+		},
+	}},
+	{"__str_repeat", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 2 {
+				return newError("wrong number of arguments. got=%d, want=2", len(args))
+			}
+			s, ok := args[0].(*String)
+			if !ok {
+				return newError("first argument to `__str_repeat` must be STRING. got=%s", args[0].Type())
+			}
+			n, ok := args[1].(*Integer)
+			if !ok {
+				return newError("second argument to `__str_repeat` must be INTEGER. got=%s", args[1].Type())
+			}
+			if n.Value < 0 {
+				return newError("repeat count must be non-negative. got=%d", n.Value)
+			}
+			const maxRepeat int64 = 10000000
+			if int64(len(s.Value))*n.Value > maxRepeat {
+				return newError("repeat result too large")
+			}
+			return &String{Value: strings.Repeat(s.Value, int(n.Value))}
+		},
+	}},
+	{"__arr_slice", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 3 {
+				return newError("wrong number of arguments. got=%d, want=3", len(args))
+			}
+			arr, ok := args[0].(*Array)
+			if !ok {
+				return newError("first argument to `__arr_slice` must be ARRAY. got=%s", args[0].Type())
+			}
+			start, ok := args[1].(*Integer)
+			if !ok {
+				return newError("second argument to `__arr_slice` must be INTEGER. got=%s", args[1].Type())
+			}
+			end, ok := args[2].(*Integer)
+			if !ok {
+				return newError("third argument to `__arr_slice` must be INTEGER. got=%s", args[2].Type())
+			}
+			if start.Value < 0 || end.Value < 0 {
+				return newError("array slice indices must be non-negative. got=%d, %d", start.Value, end.Value)
+			}
+			l := int64(len(arr.Elements))
+			st := start.Value
+			en := end.Value
+			if st > l {
+				st = l
+			}
+			if en > l {
+				en = l
+			}
+			if st > en {
+				return newError("array slice start after end. got=%d > %d", st, en)
+			}
+			newElems := make([]Object, en-st)
+			copy(newElems, arr.Elements[int(st):int(en)])
+			return &Array{Elements: newElems}
+		},
+	}},
+	{"__arr_sort", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			arr, ok := args[0].(*Array)
+			if !ok {
+				return newError("argument to `__arr_sort` must be ARRAY. got=%s", args[0].Type())
+			}
+			n := len(arr.Elements)
+			newElems := make([]Object, n)
+			copy(newElems, arr.Elements)
+			if n <= 1 {
+				return &Array{Elements: newElems}
+			}
+			hasNum := false
+			hasStr := false
+			hasOther := false
+			for _, e := range newElems {
+				switch e.(type) {
+				case *Integer, *Float:
+					hasNum = true
+				case *String:
+					hasStr = true
+				default:
+					hasOther = true
+				}
+			}
+			if hasOther || (hasNum && hasStr) {
+				return newError("cannot sort mixed or unsupported array types")
+			}
+			if hasNum {
+				sort.Slice(newElems, func(i, j int) bool {
+					return toFloatVal(newElems[i]) < toFloatVal(newElems[j])
+				})
+			} else if hasStr {
+				sort.Slice(newElems, func(i, j int) bool {
+					return newElems[i].(*String).Value < newElems[j].(*String).Value
+				})
+			} else {
+				return newError("cannot sort array of type %s", newElems[0].Type())
+			}
+			return &Array{Elements: newElems}
+		},
+	}},
+	{"__arr_join", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 2 {
+				return newError("wrong number of arguments. got=%d, want=2", len(args))
+			}
+			arr, ok := args[0].(*Array)
+			if !ok {
+				return newError("first argument to `__arr_join` must be ARRAY. got=%s", args[0].Type())
+			}
+			sep, ok := args[1].(*String)
+			if !ok {
+				return newError("second argument to `__arr_join` must be STRING. got=%s", args[1].Type())
+			}
+			parts := make([]string, len(arr.Elements))
+			for i, e := range arr.Elements {
+				parts[i] = e.Inspect()
+			}
+			return &String{Value: strings.Join(parts, sep.Value)}
+		},
+	}},
+	{"__bytes", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			switch v := args[0].(type) {
+			case *String:
+				cp := make([]byte, len(v.Value))
+				copy(cp, v.Value)
+				return &Bytes{Value: cp}
+			case *Bytes:
+				cp := make([]byte, len(v.Value))
+				copy(cp, v.Value)
+				return &Bytes{Value: cp}
+			default:
+				return newError("argument to `__bytes` must be STRING. got=%s", args[0].Type())
+			}
+		},
+	}},
+	{"__bytes_to_str", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			b, ok := args[0].(*Bytes)
+			if !ok {
+				return newError("argument to `__bytes_to_str` must be BYTES. got=%s", args[0].Type())
+			}
+			return &String{Value: string(b.Value)}
+		},
+	}},
+	{"__bytes_len", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			b, ok := args[0].(*Bytes)
+			if !ok {
+				return newError("argument to `__bytes_len` must be BYTES. got=%s", args[0].Type())
+			}
+			return NewInteger(int64(len(b.Value)))
+		},
+	}},
+	{"__args", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 0 {
+				return newError("wrong number of arguments. got=%d, want=0", len(args))
+			}
+			cli := os.Args[1:]
+			elems := make([]Object, len(cli))
+			for i, a := range cli {
+				elems[i] = &String{Value: a}
+			}
+			return &Array{Elements: elems}
+		},
+	}},
+	{"__env_get", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			k, ok := args[0].(*String)
+			if !ok {
+				return newError("argument to `__env_get` must be STRING. got=%s", args[0].Type())
+			}
+			if v, ok := os.LookupEnv(k.Value); ok {
+				return &String{Value: v}
+			}
+			return NULL
+		},
+	}},
+	{"__env_set", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 2 {
+				return newError("wrong number of arguments. got=%d, want=2", len(args))
+			}
+			k, ok := args[0].(*String)
+			if !ok {
+				return newError("first argument to `__env_set` must be STRING. got=%s", args[0].Type())
+			}
+			v, ok := args[1].(*String)
+			if !ok {
+				return newError("second argument to `__env_set` must be STRING. got=%s", args[1].Type())
+			}
+			if err := os.Setenv(k.Value, v.Value); err != nil {
+				return newError("could not set env %q: %s", k.Value, err.Error())
+			}
+			return NULL
+		},
+	}},
+	{"__exit", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			n, ok := args[0].(*Integer)
+			if !ok {
+				return newError("argument to `__exit` must be INTEGER. got=%s", args[0].Type())
+			}
+			os.Exit(int(n.Value))
+			return NULL
+		},
+	}},
+	{"__cwd", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 0 {
+				return newError("wrong number of arguments. got=%d, want=0", len(args))
+			}
+			dir, err := os.Getwd()
+			if err != nil {
+				return newError("could not get cwd: %s", err.Error())
+			}
+			return &String{Value: dir}
+		},
+	}},
+	{"__read_file", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			p, ok := args[0].(*String)
+			if !ok {
+				return newError("argument to `__read_file` must be STRING. got=%s", args[0].Type())
+			}
+			clean := filepath.Clean(p.Value)
+			data, err := os.ReadFile(clean)
+			if err != nil {
+				return newError("could not read file %q: %s", p.Value, err.Error())
+			}
+			return &String{Value: string(data)}
+		},
+	}},
+	{"__write_file", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 2 {
+				return newError("wrong number of arguments. got=%d, want=2", len(args))
+			}
+			p, ok := args[0].(*String)
+			if !ok {
+				return newError("first argument to `__write_file` must be STRING. got=%s", args[0].Type())
+			}
+			s, ok := args[1].(*String)
+			if !ok {
+				return newError("second argument to `__write_file` must be STRING. got=%s", args[1].Type())
+			}
+			clean := filepath.Clean(p.Value)
+			if err := os.WriteFile(clean, []byte(s.Value), 0644); err != nil {
+				return newError("could not write file %q: %s", p.Value, err.Error())
+			}
+			return NULL
+		},
+	}},
+	{"__append_file", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 2 {
+				return newError("wrong number of arguments. got=%d, want=2", len(args))
+			}
+			p, ok := args[0].(*String)
+			if !ok {
+				return newError("first argument to `__append_file` must be STRING. got=%s", args[0].Type())
+			}
+			s, ok := args[1].(*String)
+			if !ok {
+				return newError("second argument to `__append_file` must be STRING. got=%s", args[1].Type())
+			}
+			clean := filepath.Clean(p.Value)
+			f, err := os.OpenFile(clean, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			if err != nil {
+				return newError("could not open file %q: %s", p.Value, err.Error())
+			}
+			defer f.Close()
+			if _, err := f.WriteString(s.Value); err != nil {
+				return newError("could not append file %q: %s", p.Value, err.Error())
+			}
+			return NULL
+		},
+	}},
+	{"__ls", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			p, ok := args[0].(*String)
+			if !ok {
+				return newError("argument to `__ls` must be STRING. got=%s", args[0].Type())
+			}
+			clean := filepath.Clean(p.Value)
+			entries, err := os.ReadDir(clean)
+			if err != nil {
+				return newError("could not list dir %q: %s", p.Value, err.Error())
+			}
+			elems := make([]Object, len(entries))
+			for i, e := range entries {
+				elems[i] = &String{Value: e.Name()}
+			}
+			return &Array{Elements: elems}
+		},
+	}},
+	{"__stat", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			p, ok := args[0].(*String)
+			if !ok {
+				return newError("argument to `__stat` must be STRING. got=%s", args[0].Type())
+			}
+			clean := filepath.Clean(p.Value)
+			info, err := os.Stat(clean)
+			if err != nil {
+				return newError("could not stat %q: %s", p.Value, err.Error())
+			}
+			return makeStatHash(info)
+		},
+	}},
+	{"__mkdir", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			p, ok := args[0].(*String)
+			if !ok {
+				return newError("argument to `__mkdir` must be STRING. got=%s", args[0].Type())
+			}
+			clean := filepath.Clean(p.Value)
+			if err := os.MkdirAll(clean, 0755); err != nil {
+				return newError("could not mkdir %q: %s", p.Value, err.Error())
+			}
+			return NULL
+		},
+	}},
+	{"__rm", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			p, ok := args[0].(*String)
+			if !ok {
+				return newError("argument to `__rm` must be STRING. got=%s", args[0].Type())
+			}
+			clean := filepath.Clean(p.Value)
+			if err := os.RemoveAll(clean); err != nil {
+				return newError("could not remove %q: %s", p.Value, err.Error())
+			}
+			return NULL
+		},
+	}},
+	{"__exists", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			p, ok := args[0].(*String)
+			if !ok {
+				return newError("argument to `__exists` must be STRING. got=%s", args[0].Type())
+			}
+			clean := filepath.Clean(p.Value)
+			if _, err := os.Stat(clean); err == nil {
+				return TRUE
+			}
+			return FALSE
+		},
+	}},
+	{"__now_ms", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 0 {
+				return newError("wrong number of arguments. got=%d, want=0", len(args))
+			}
+			return NewInteger(time.Now().UnixMilli())
+		},
+	}},
+	{"__now_ns", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 0 {
+				return newError("wrong number of arguments. got=%d, want=0", len(args))
+			}
+			return NewInteger(time.Now().UnixNano())
+		},
+	}},
+	{"__sleep_ms", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			n, ok := args[0].(*Integer)
+			if !ok {
+				return newError("argument to `__sleep_ms` must be INTEGER. got=%s", args[0].Type())
+			}
+			time.Sleep(time.Duration(n.Value) * time.Millisecond)
+			return NULL
+		},
+	}},
+	{"__json_parse", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			s, ok := args[0].(*String)
+			if !ok {
+				return newError("argument to `__json_parse` must be STRING. got=%s", args[0].Type())
+			}
+			var v any
+			if err := json.Unmarshal([]byte(s.Value), &v); err != nil {
+				return newError("could not parse JSON: %s", err.Error())
+			}
+			return jsonToObject(v)
+		},
+	}},
+	{"__json_stringify", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			goVal, err := objectToJSON(args[0])
+			if err != nil {
+				return newError("could not stringify JSON: %s", err.Error())
+			}
+			data, err := json.Marshal(goVal)
+			if err != nil {
+				return newError("could not stringify JSON: %s", err.Error())
+			}
+			return &String{Value: string(data)}
+		},
+	}},
+	{"__b64_encode", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			switch v := args[0].(type) {
+			case *String:
+				return &String{Value: base64.StdEncoding.EncodeToString([]byte(v.Value))}
+			case *Bytes:
+				return &String{Value: base64.StdEncoding.EncodeToString(v.Value)}
+			default:
+				return newError("argument to `__b64_encode` must be STRING. got=%s", args[0].Type())
+			}
+		},
+	}},
+	{"__b64_decode", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			s, ok := args[0].(*String)
+			if !ok {
+				return newError("argument to `__b64_decode` must be STRING. got=%s", args[0].Type())
+			}
+			data, err := base64.StdEncoding.DecodeString(strings.TrimSpace(s.Value))
+			if err != nil {
+				return newError("could not decode base64: %s", err.Error())
+			}
+			return &String{Value: string(data)}
+		},
+	}},
+	{"__hex_encode", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			switch v := args[0].(type) {
+			case *String:
+				return &String{Value: hex.EncodeToString([]byte(v.Value))}
+			case *Bytes:
+				return &String{Value: hex.EncodeToString(v.Value)}
+			default:
+				return newError("argument to `__hex_encode` must be STRING. got=%s", args[0].Type())
+			}
+		},
+	}},
+	{"__sha256", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			var data []byte
+			switch v := args[0].(type) {
+			case *String:
+				data = []byte(v.Value)
+			case *Bytes:
+				data = v.Value
+			default:
+				return newError("argument to `__sha256` must be STRING. got=%s", args[0].Type())
+			}
+			sum := sha256.Sum256(data)
+			return &String{Value: hex.EncodeToString(sum[:])}
+		},
+	}},
+	{"__seed_rand", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			n, ok := args[0].(*Integer)
+			if !ok {
+				return newError("argument to `__seed_rand` must be INTEGER. got=%s", args[0].Type())
+			}
+			rand.Seed(n.Value)
+			return NULL
+		},
+	}},
+	{"__rand_float", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 0 {
+				return newError("wrong number of arguments. got=%d, want=0", len(args))
+			}
+			return &Float{Value: rand.Float64()}
+		},
+	}},
+	{"__rand_int", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			n, ok := args[0].(*Integer)
+			if !ok {
+				return newError("argument to `__rand_int` must be INTEGER. got=%s", args[0].Type())
+			}
+			if n.Value <= 0 {
+				return newError("argument to `__rand_int` must be positive. got=%d", n.Value)
+			}
+			return NewInteger(rand.Int63n(n.Value))
+		},
+	}},
+	{"__arr_push", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 2 {
+				return newError("wrong number of arguments. got=%d, want=2", len(args))
+			}
+			arr, ok := args[0].(*Array)
+			if !ok {
+				return newError("first argument to `__arr_push` must be ARRAY. got=%s", args[0].Type())
+			}
+			newElems := make([]Object, len(arr.Elements)+1)
+			copy(newElems, arr.Elements)
+			newElems[len(arr.Elements)] = args[1]
+			return &Array{Elements: newElems}
+		},
+	}},
+	{"__hash_keys", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			h, ok := args[0].(*Hash)
+			if !ok {
+				return newError("argument to `__hash_keys` must be HASH. got=%s", args[0].Type())
+			}
+			keys := make([]Object, 0, len(h.Pairs))
+			for _, k := range h.Order {
+				keys = append(keys, h.Pairs[k].Key)
+			}
+			return &Array{Elements: keys}
+		},
+	}},
+	{"__hash_vals", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			h, ok := args[0].(*Hash)
+			if !ok {
+				return newError("argument to `__hash_vals` must be HASH. got=%s", args[0].Type())
+			}
+			vals := make([]Object, 0, len(h.Pairs))
+			for _, k := range h.Order {
+				vals = append(vals, h.Pairs[k].Value)
+			}
+			return &Array{Elements: vals}
+		},
+	}},
+	{"__arr_pop", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			arr, ok := args[0].(*Array)
+			if !ok {
+				return newError("argument to `__arr_pop` must be ARRAY. got=%s", args[0].Type())
+			}
+			if len(arr.Elements) == 0 {
+				return &Array{Elements: []Object{}}
+			}
+			newElems := make([]Object, len(arr.Elements)-1)
+			copy(newElems, arr.Elements[:len(arr.Elements)-1])
+			return &Array{Elements: newElems}
+		},
+	}},
+	{"__hash_has", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 2 {
+				return newError("wrong number of arguments. got=%d, want=2", len(args))
+			}
+			h, ok := args[0].(*Hash)
+			if !ok {
+				return newError("first argument to `__hash_has` must be HASH. got=%s", args[0].Type())
+			}
+			key, ok := args[1].(Hashable)
+			if !ok {
+				return newError("unusable as hash key: %s", args[1].Type())
+			}
+			if _, ok := h.Pairs[key.HashKey()]; ok {
+				return TRUE
+			}
+			return FALSE
+		},
+	}},
+	{"__hash_del", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 2 {
+				return newError("wrong number of arguments. got=%d, want=2", len(args))
+			}
+			h, ok := args[0].(*Hash)
+			if !ok {
+				return newError("first argument to `__hash_del` must be HASH. got=%s", args[0].Type())
+			}
+			key, ok := args[1].(Hashable)
+			if !ok {
+				return newError("unusable as hash key: %s", args[1].Type())
+			}
+			newPairs := make(map[HashKey]HashPair, len(h.Pairs))
+			newOrder := make([]HashKey, 0, len(h.Order))
+			for k, v := range h.Pairs {
+				newPairs[k] = v
+			}
+			hashKey := key.HashKey()
+			delete(newPairs, hashKey)
+			for _, k := range h.Order {
+				if k != hashKey {
+					newOrder = append(newOrder, k)
+				}
+			}
+			return &Hash{Pairs: newPairs, Order: newOrder}
+		},
+	}},
+	{"__str_starts", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 2 {
+				return newError("wrong number of arguments. got=%d, want=2", len(args))
+			}
+			s, ok := args[0].(*String)
+			if !ok {
+				return newError("first argument to `__str_starts` must be STRING. got=%s", args[0].Type())
+			}
+			prefix, ok := args[1].(*String)
+			if !ok {
+				return newError("second argument to `__str_starts` must be STRING. got=%s", args[1].Type())
+			}
+			if strings.HasPrefix(s.Value, prefix.Value) {
+				return TRUE
+			}
+			return FALSE
+		},
+	}},
+	{"__str_ends", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 2 {
+				return newError("wrong number of arguments. got=%d, want=2", len(args))
+			}
+			s, ok := args[0].(*String)
+			if !ok {
+				return newError("first argument to `__str_ends` must be STRING. got=%s", args[0].Type())
+			}
+			suffix, ok := args[1].(*String)
+			if !ok {
+				return newError("second argument to `__str_ends` must be STRING. got=%s", args[1].Type())
+			}
+			if strings.HasSuffix(s.Value, suffix.Value) {
+				return TRUE
+			}
+			return FALSE
+		},
+	}},
+	{"__bytes_slice", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 3 {
+				return newError("wrong number of arguments. got=%d, want=3", len(args))
+			}
+			b, ok := args[0].(*Bytes)
+			if !ok {
+				return newError("first argument to `__bytes_slice` must be BYTES. got=%s", args[0].Type())
+			}
+			start, ok := args[1].(*Integer)
+			if !ok {
+				return newError("second argument to `__bytes_slice` must be INTEGER. got=%s", args[1].Type())
+			}
+			end, ok := args[2].(*Integer)
+			if !ok {
+				return newError("third argument to `__bytes_slice` must be INTEGER. got=%s", args[2].Type())
+			}
+			if start.Value < 0 || end.Value < 0 {
+				return newError("bytes slice indices must be non-negative. got=%d, %d", start.Value, end.Value)
+			}
+			l := int64(len(b.Value))
+			st := start.Value
+			en := end.Value
+			if st > l {
+				st = l
+			}
+			if en > l {
+				en = l
+			}
+			if st > en {
+				return newError("bytes slice start after end. got=%d > %d", st, en)
+			}
+			cp := make([]byte, en-st)
+			copy(cp, b.Value[int(st):int(en)])
+			return &Bytes{Value: cp}
+		},
+	}},
+	{"__bytes_concat", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 2 {
+				return newError("wrong number of arguments. got=%d, want=2", len(args))
+			}
+			a, ok := args[0].(*Bytes)
+			if !ok {
+				return newError("first argument to `__bytes_concat` must be BYTES. got=%s", args[0].Type())
+			}
+			b, ok := args[1].(*Bytes)
+			if !ok {
+				return newError("second argument to `__bytes_concat` must be BYTES. got=%s", args[1].Type())
+			}
+			cp := make([]byte, len(a.Value)+len(b.Value))
+			copy(cp, a.Value)
+			copy(cp[len(a.Value):], b.Value)
+			return &Bytes{Value: cp}
+		},
+	}},
+	{"__env_list", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 0 {
+				return newError("wrong number of arguments. got=%d, want=0", len(args))
+			}
+			env := os.Environ()
+			sort.Strings(env)
+			elems := make([]Object, len(env))
+			for i, kv := range env {
+				elems[i] = &String{Value: kv}
+			}
+			return &Array{Elements: elems}
+		},
+	}},
+	{"__uuid", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 0 {
+				return newError("wrong number of arguments. got=%d, want=0", len(args))
+			}
+			b := make([]byte, 16)
+			if _, err := crand.Read(b); err != nil {
+				return newError("could not generate uuid: %s", err.Error())
+			}
+			b[6] = (b[6] & 0x0f) | 0x40
+			b[8] = (b[8] & 0x3f) | 0x80
+			s := hex.EncodeToString(b[0:4]) + "-" + hex.EncodeToString(b[4:6]) + "-" + hex.EncodeToString(b[6:8]) + "-" + hex.EncodeToString(b[8:10]) + "-" + hex.EncodeToString(b[10:16])
+			return &String{Value: s}
+		},
+	}},
+	{"__random_bytes", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			n, ok := args[0].(*Integer)
+			if !ok {
+				return newError("argument to `__random_bytes` must be INTEGER. got=%s", args[0].Type())
+			}
+			if n.Value < 0 {
+				return newError("argument to `__random_bytes` must be non-negative. got=%d", n.Value)
+			}
+			if n.Value > 1048576 {
+				return newError("argument to `__random_bytes` too large. got=%d, want <= 1048576", n.Value)
+			}
+			buf := make([]byte, int(n.Value))
+			if _, err := crand.Read(buf); err != nil {
+				return newError("could not generate random bytes: %s", err.Error())
+			}
+			cp := make([]byte, len(buf))
+			copy(cp, buf)
+			return &Bytes{Value: cp}
+		},
+	}},
+	{"__file_open", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 2 {
+				return newError("wrong number of arguments. got=%d, want=2", len(args))
+			}
+			p, ok := args[0].(*String)
+			if !ok {
+				return newError("first argument to `__file_open` must be STRING. got=%s", args[0].Type())
+			}
+			m, ok := args[1].(*String)
+			if !ok {
+				return newError("second argument to `__file_open` must be STRING. got=%s", args[1].Type())
+			}
+			if m.Value != "r" && m.Value != "w" && m.Value != "a" {
+				return newError("second argument to `__file_open` must be one of \"r\", \"w\", \"a\". got=%q", m.Value)
+			}
+			clean := filepath.Clean(p.Value)
+			var f *os.File
+			var err error
+			switch m.Value {
+			case "r":
+				f, err = os.Open(clean)
+			case "w":
+				f, err = os.Create(clean)
+			case "a":
+				f, err = os.OpenFile(clean, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			}
+			if err != nil {
+				return newError("could not open file %q: %s", p.Value, err.Error())
+			}
+			return &File{F: f, Path: clean, Mode: m.Value}
+		},
+	}},
+	{"__file_read", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 2 {
+				return newError("wrong number of arguments. got=%d, want=2", len(args))
+			}
+			f, ok := args[0].(*File)
+			if !ok {
+				return newError("first argument to `__file_read` must be FILE. got=%s", args[0].Type())
+			}
+			n, ok := args[1].(*Integer)
+			if !ok {
+				return newError("second argument to `__file_read` must be INTEGER. got=%s", args[1].Type())
+			}
+			if n.Value < 0 {
+				return newError("second argument to `__file_read` must be non-negative. got=%d", n.Value)
+			}
+			if n.Value > 1048576 {
+				return newError("second argument to `__file_read` too large. got=%d, want <= 1048576", n.Value)
+			}
+			if f.F == nil {
+				return newError("could not read file %q: file is closed", f.Path)
+			}
+			if n.Value == 0 {
+				return &String{Value: ""}
+			}
+			buf := make([]byte, int(n.Value))
+			m, err := io.ReadFull(f.F, buf)
+			if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+				return newError("could not read file %q: %s", f.Path, err.Error())
+			}
+			return &String{Value: string(buf[:m])}
+		},
+	}},
+	{"__file_write", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 2 {
+				return newError("wrong number of arguments. got=%d, want=2", len(args))
+			}
+			f, ok := args[0].(*File)
+			if !ok {
+				return newError("first argument to `__file_write` must be FILE. got=%s", args[0].Type())
+			}
+			s, ok := args[1].(*String)
+			if !ok {
+				return newError("second argument to `__file_write` must be STRING. got=%s", args[1].Type())
+			}
+			if f.F == nil {
+				return newError("could not write file %q: file is closed", f.Path)
+			}
+			n, err := f.F.WriteString(s.Value)
+			if err != nil {
+				return newError("could not write file %q: %s", f.Path, err.Error())
+			}
+			return NewInteger(int64(n))
+		},
+	}},
+	{"__file_close", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			f, ok := args[0].(*File)
+			if !ok {
+				return newError("argument to `__file_close` must be FILE. got=%s", args[0].Type())
+			}
+			if f.F == nil {
+				return newError("could not close file %q: file is already closed", f.Path)
+			}
+			err := f.F.Close()
+			f.F = nil
+			if err != nil {
+				return newError("could not close file %q: %s", f.Path, err.Error())
+			}
+			return NULL
+		},
+	}},
+	{"__http_get", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 2 {
+				return newError("wrong number of arguments. got=%d, want=2", len(args))
+			}
+			u, ok := args[0].(*String)
+			if !ok {
+				return newError("first argument to `__http_get` must be STRING. got=%s", args[0].Type())
+			}
+			ms, ok := args[1].(*Integer)
+			if !ok {
+				return newError("second argument to `__http_get` must be INTEGER. got=%s", args[1].Type())
+			}
+			if ms.Value < 1 || ms.Value > 60000 {
+				return newError("second argument to `__http_get` must be between 1 and 60000. got=%d", ms.Value)
+			}
+			client := &http.Client{Timeout: time.Duration(ms.Value) * time.Millisecond}
+			resp, err := client.Get(u.Value)
+			if err != nil {
+				return newError("http get %q failed: %s", u.Value, err.Error())
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+				return newError("http get %q failed with status %s", u.Value, resp.Status)
+			}
+			if resp.ContentLength > maxHTTPBody {
+				return newError("http response body too large")
+			}
+			data, err := io.ReadAll(io.LimitReader(resp.Body, maxHTTPBody+1))
+			if err != nil {
+				return newError("http get %q failed: %s", u.Value, err.Error())
+			}
+			if int64(len(data)) > maxHTTPBody {
+				return newError("http response body too large")
+			}
+			return &String{Value: string(data)}
+		},
+	}},
+	{"__http_post", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 3 {
+				return newError("wrong number of arguments. got=%d, want=3", len(args))
+			}
+			u, ok := args[0].(*String)
+			if !ok {
+				return newError("first argument to `__http_post` must be STRING. got=%s", args[0].Type())
+			}
+			body, ok := args[1].(*String)
+			if !ok {
+				return newError("second argument to `__http_post` must be STRING. got=%s", args[1].Type())
+			}
+			ms, ok := args[2].(*Integer)
+			if !ok {
+				return newError("third argument to `__http_post` must be INTEGER. got=%s", args[2].Type())
+			}
+			if ms.Value < 1 || ms.Value > 60000 {
+				return newError("third argument to `__http_post` must be between 1 and 60000. got=%d", ms.Value)
+			}
+			client := &http.Client{Timeout: time.Duration(ms.Value) * time.Millisecond}
+			resp, err := client.Post(u.Value, "text/plain", strings.NewReader(body.Value))
+			if err != nil {
+				return newError("http post %q failed: %s", u.Value, err.Error())
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+				return newError("http post %q failed with status %s", u.Value, resp.Status)
+			}
+			if resp.ContentLength > maxHTTPBody {
+				return newError("http response body too large")
+			}
+			data, err := io.ReadAll(io.LimitReader(resp.Body, maxHTTPBody+1))
+			if err != nil {
+				return newError("http post %q failed: %s", u.Value, err.Error())
+			}
+			if int64(len(data)) > maxHTTPBody {
+				return newError("http response body too large")
+			}
+			return &String{Value: string(data)}
+		},
+	}},
 }
 
 var stdinReader *bufio.Reader
+
+const maxHTTPBody = 5 * 1024 * 1024
 
 func getStdinReader() *bufio.Reader {
 	if stdinReader == nil {
@@ -605,6 +1903,134 @@ func objectToValue(object Object) any {
 		return val.Inspect()
 	}
 
+}
+
+func toFloatVal(o Object) float64 {
+	switch v := o.(type) {
+	case *Integer:
+		return float64(v.Value)
+	case *Float:
+		return v.Value
+	}
+	return 0
+}
+
+func makeStatHash(info os.FileInfo) *Hash {
+	pairs := make(map[HashKey]HashPair, 5)
+	order := make([]HashKey, 0, 5)
+	add := func(k string, v Object) {
+		ko := &String{Value: k}
+		hk := ko.HashKey()
+		pairs[hk] = HashPair{Key: ko, Value: v}
+		order = append(order, hk)
+	}
+	var isDir Object = FALSE
+	if info.IsDir() {
+		isDir = TRUE
+	}
+	add("size", NewInteger(info.Size()))
+	add("is_dir", isDir)
+	add("mode", &String{Value: info.Mode().String()})
+	add("name", &String{Value: info.Name()})
+	add("mtime", NewInteger(info.ModTime().Unix()))
+	return &Hash{Pairs: pairs, Order: order}
+}
+
+func jsonToObject(v any) Object {
+	switch val := v.(type) {
+	case nil:
+		return NULL
+	case bool:
+		if val {
+			return TRUE
+		}
+		return FALSE
+	case string:
+		return &String{Value: val}
+	case float64:
+		if math.Trunc(val) == val {
+			iv := int64(val)
+			if float64(iv) == val {
+				return NewInteger(iv)
+			}
+		}
+		return &Float{Value: val}
+	case []any:
+		elems := make([]Object, len(val))
+		for i, e := range val {
+			elems[i] = jsonToObject(e)
+		}
+		return &Array{Elements: elems}
+	case map[string]any:
+		keys := make([]string, 0, len(val))
+		for k := range val {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		pairs := make(map[HashKey]HashPair, len(val))
+		order := make([]HashKey, 0, len(val))
+		for _, k := range keys {
+			ko := &String{Value: k}
+			hk := ko.HashKey()
+			pairs[hk] = HashPair{Key: ko, Value: jsonToObject(val[k])}
+			order = append(order, hk)
+		}
+		return &Hash{Pairs: pairs, Order: order}
+	default:
+		return newError("unsupported JSON value type %T", v)
+	}
+}
+
+func objectToJSON(o Object) (any, error) {
+	switch v := o.(type) {
+	case *Integer:
+		return v.Value, nil
+	case *Float:
+		return v.Value, nil
+	case *String:
+		return v.Value, nil
+	case *Boolean:
+		return v.Value, nil
+	case *Null:
+		return nil, nil
+	case *Bytes:
+		return string(v.Value), nil
+	case *Array:
+		arr := make([]any, len(v.Elements))
+		for i, e := range v.Elements {
+			jv, err := objectToJSON(e)
+			if err != nil {
+				return nil, err
+			}
+			arr[i] = jv
+		}
+		return arr, nil
+	case *Hash:
+		m := make(map[string]any, len(v.Pairs))
+		if len(v.Order) == 0 && len(v.Pairs) > 0 {
+			for _, pair := range v.Pairs {
+				keyStr := pair.Key.Inspect()
+				jv, err := objectToJSON(pair.Value)
+				if err != nil {
+					return nil, err
+				}
+				m[keyStr] = jv
+			}
+		} else {
+			for _, hk := range v.Order {
+				pair := v.Pairs[hk]
+				keyStr := pair.Key.Inspect()
+				jv, err := objectToJSON(pair.Value)
+				if err != nil {
+					return nil, err
+				}
+				m[keyStr] = jv
+			}
+		}
+		return m, nil
+	default:
+		return nil, fmt.Errorf("unsupported type for JSON: %s", o.Type())
+	}
 }
 
 func newError(format string, a ...any) *Error {

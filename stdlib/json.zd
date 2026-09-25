@@ -1,0 +1,15 @@
+pub parse := fn(s) {
+  return __json_parse(s)
+}
+
+pub stringify := fn(v) {
+  return __json_stringify(v)
+}
+
+pub read := fn(path) {
+  return __json_parse(__read_file(path))
+}
+
+pub write := fn(path, v) {
+  return __write_file(path, __json_stringify(v))
+}

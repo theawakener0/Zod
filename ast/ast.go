@@ -427,9 +427,6 @@ func (fe *ForExpression) String() string {
 	return out.String()
 }
 
-// writeTrimmedSemicolon writes s without a single trailing ';'.
-// It slices the already-allocated string instead of TrimSuffix(String())
-// double-allocating via an extra copy.
 func writeTrimmedSemicolon(out *bytes.Buffer, s string) {
 	if len(s) > 0 && s[len(s)-1] == ';' {
 		s = s[:len(s)-1]

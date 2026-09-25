@@ -1,0 +1,13 @@
+// std_err_demo.zd - demo of error values (string/type/is_error/try).
+// Run from the repo root:
+//   go run . examples/std_err_demo.zd
+//   go run . --eng=eval examples/std_err_demo.zd
+import "std/fmt" as fmt
+
+fmt.println(string(error("boom")))
+fmt.println(type(error("boom")))
+fmt.println(is_error(error("boom")))
+fmt.println(is_error("boom"))
+let r = try(error("boom"))
+fmt.println(r[0])
+fmt.println(r[1])

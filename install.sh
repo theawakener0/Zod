@@ -67,6 +67,11 @@ else
 fi
 
 install -m 0755 "${binary}" "${dest_dir}/zod"
+if [ -d "${tmp}/zod_${os}_${arch}/stdlib" ]; then
+  rm -rf "${dest_dir}/stdlib"
+  cp -r "${tmp}/zod_${os}_${arch}/stdlib" "${dest_dir}/stdlib"
+  echo "Installed stdlib to ${dest_dir}/stdlib"
+fi
 echo "Installed zod to ${dest_dir}/zod"
 
 case ":${PATH}:" in

@@ -1,0 +1,19 @@
+pub from_str := fn(s) {
+  return __bytes(s)
+}
+
+pub to_str := fn(b) {
+  return __bytes_to_str(b)
+}
+
+pub len := fn(b) {
+  return __bytes_len(b)
+}
+
+pub slice := fn(b, a, c) {
+  return __bytes_slice(b, a, c)
+}
+
+pub concat := fn(a, b) {
+  return __bytes_concat(a, b)
+}

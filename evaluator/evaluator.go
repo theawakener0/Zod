@@ -215,7 +215,9 @@ func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
 		}
 		args := evalExpressions(n.Arguments, env)
 		if len(args) == 1 && isError(args[0]) {
-			return args[0]
+			if !builtinAcceptsError(fn) {
+				return args[0]
+			}
 		}
 
 		return applyFunction(fn, args)
@@ -897,6 +899,19 @@ func isError(object obj.Object) bool {
 	return ok
 }
 
+func builtinAcceptsError(fn obj.Object) bool {
+	bi, ok := fn.(*obj.Builtin)
+	if !ok {
+		return false
+	}
+	for _, name := range []string{"string", "type", "is_error", "__print", "__eprint", "__panic"} {
+		if b := GetBuiltinByName(name); b != nil && bi == b {
+			return true
+		}
+	}
+	return false
+}
+
 func evalIdentifier(node *ast.Identifier, env *obj.Enviroment) obj.Object {
 	if val, ok := env.Get(node.Value); ok {
 		return val
@@ -1283,7 +1298,9 @@ func evalImport(stmt *ast.ImportStatement, env *obj.Enviroment) obj.Object {
 
 		moduleEnv = obj.NewEnviroment()
 
+		moduleDirStack = append(moduleDirStack, filepath.Dir(resolved))
 		result := Eval(program, moduleEnv)
+		moduleDirStack = moduleDirStack[:len(moduleDirStack)-1]
 		if isError(result) {
 			return result
 		}
@@ -1347,7 +1364,121 @@ func evalPropertyExpression(node *ast.PropertyExpression, env *obj.Enviroment) o
 	} 
 }
 
+func stdlibPath() string {
+	if p := os.Getenv("ZOD_STDLIB"); p != "" {
+		return p
+	}
+
+	if exe, err := os.Executable(); err == nil {
+		return filepath.Join(filepath.Dir(exe), "stdlib")
+	}
+
+	return "stdlib"
+}
+
+var moduleDirStack []string
+
+func currentModuleBaseDir() string {
+	if len(moduleDirStack) > 0 {
+		return moduleDirStack[len(moduleDirStack)-1]
+	}
+	return ""
+}
+
+func stdlibCandidateDirs(baseDir string) []string {
+	var dirs []string
+	if p := os.Getenv("ZOD_STDLIB"); p != "" {
+		dirs = append(dirs, p)
+	}
+	if exe, err := os.Executable(); err == nil {
+		dirs = append(dirs, filepath.Join(filepath.Dir(exe), "stdlib"))
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		dirs = append(dirs, filepath.Join(cwd, "stdlib"))
+	}
+	start := baseDir
+	if start == "" {
+		if cwd, err := os.Getwd(); err == nil {
+			start = cwd
+		}
+	}
+	if start != "" {
+		if abs, err := filepath.Abs(start); err == nil {
+			start = abs
+		}
+		seen := make(map[string]bool, len(dirs)+5)
+		for _, d := range dirs {
+			if abs, err := filepath.Abs(d); err == nil {
+				seen[abs] = true
+			} else {
+				seen[d] = true
+			}
+		}
+		cur := start
+		for i := 0; i < 5; i++ {
+			cand := filepath.Join(cur, "stdlib")
+			absCand := cand
+			if abs, err := filepath.Abs(cand); err == nil {
+				absCand = abs
+			}
+			if !seen[absCand] {
+				dirs = append(dirs, cand)
+				seen[absCand] = true
+			}
+			parent := filepath.Dir(cur)
+			if parent == cur {
+				break
+			}
+			cur = parent
+		}
+	}
+	return dirs
+}
+
+func resolveStdModulePath(rel, baseDir string) (string, bool) {
+	if rel == "" {
+		return "", false
+	}
+	var variants []string
+	if strings.HasSuffix(rel, ".zd") {
+		variants = []string{rel}
+	} else {
+		variants = []string{rel, rel + ".zd"}
+	}
+	for _, dir := range stdlibCandidateDirs(baseDir) {
+		for _, v := range variants {
+			cand := filepath.Join(dir, v)
+			if _, err := os.Stat(cand); err == nil {
+				if abs, err := filepath.Abs(cand); err == nil {
+					return abs, true
+				}
+				return cand, true
+			}
+		}
+	}
+	return "", false
+}
+
 func resolveModulePath(path string) (string, error) {
+	if strings.HasPrefix(path, "std/") {
+		rel := strings.TrimPrefix(path, "std/")
+		if abs, ok := resolveStdModulePath(rel, currentModuleBaseDir()); ok {
+			return abs, nil
+		}
+		return "", fmt.Errorf("module not found")
+	}
+	if base := currentModuleBaseDir(); base != "" {
+		cand := filepath.Join(base, path)
+		if _, err := os.Stat(cand); err == nil {
+			return cand, nil
+		}
+		if !strings.HasSuffix(path, ".zd") {
+			candExt := filepath.Join(base, path+".zd")
+			if _, err := os.Stat(candExt); err == nil {
+				return candExt, nil
+			}
+		}
+	}
 	if abs, err := filepath.Abs(path); err == nil {
 		if _, err := os.Stat(abs); err == nil {
 			return abs, nil
@@ -1378,16 +1509,4 @@ func resolveModulePath(path string) (string, error) {
 	}
 
 	return "", fmt.Errorf("module not found")
-}
-
-func stdlibPath() string {
-	if p := os.Getenv("ZOD_STDLIB"); p != "" {
-		return p
-	}
-
-	if exe, err := os.Executable(); err == nil {
-		return filepath.Join(filepath.Dir(exe), "stdlib")
-	}
-
-	return "stdlib"
 }

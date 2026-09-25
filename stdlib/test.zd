@@ -1,0 +1,20 @@
+pub assert := fn(cond) {
+  if (cond) {
+    return true
+  }
+  return error("assertion failed")
+}
+
+pub assert_eq := fn(a, b) {
+  if (__json_stringify(a) == __json_stringify(b)) {
+    return true
+  }
+  return error("assert_eq failed")
+}
+
+pub assert_true := fn(x) {
+  if (x) {
+    return true
+  }
+  return error("assert_true failed")
+}

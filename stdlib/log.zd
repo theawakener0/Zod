@@ -1,0 +1,17 @@
+from "std/fmt" import println
+
+pub info := fn(msg) {
+  println("[INFO] " + string(msg))
+}
+
+pub warn := fn(msg) {
+  println("[WARN] " + string(msg))
+}
+
+pub error := fn(msg) {
+  println("[ERROR] " + string(msg))
+}
+
+pub debug := fn(msg) {
+  println("[DEBUG] " + string(msg))
+}

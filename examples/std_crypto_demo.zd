@@ -1,0 +1,10 @@
+// std_crypto_demo.zd - demo of std/crypto (uuid/random_hex/sha256 lengths).
+// Run from the repo root:
+//   go run . examples/std_crypto_demo.zd
+//   go run . --eng=eval examples/std_crypto_demo.zd
+import "std/crypto" as crypto
+import "std/fmt" as fmt
+
+fmt.println(len(crypto.uuid()))
+fmt.println(len(crypto.random_hex(8)))
+fmt.println(len(crypto.sha256("hi")))

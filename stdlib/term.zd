@@ -1,0 +1,31 @@
+pub color := fn(name, s) {
+  let v = string(s)
+  if (name == "RED") {
+    return "\x1b[31m" + v + "\x1b[0m"
+  }
+  if (name == "GREEN") {
+    return "\x1b[32m" + v + "\x1b[0m"
+  }
+  if (name == "YELLOW") {
+    return "\x1b[33m" + v + "\x1b[0m"
+  }
+  if (name == "BLUE") {
+    return "\x1b[34m" + v + "\x1b[0m"
+  }
+  if (name == "MAGENTA") {
+    return "\x1b[35m" + v + "\x1b[0m"
+  }
+  if (name == "CYAN") {
+    return "\x1b[36m" + v + "\x1b[0m"
+  }
+  return v
+}
+
+pub input := fn(prompt) {
+  __print(string(prompt))
+  return __read_line()
+}
+
+pub clear := fn() {
+  __print("\x1b[2J\x1b[H")
+}

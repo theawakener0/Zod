@@ -1,6 +1,6 @@
 # Introduction
 
-Zod is a small, interpreted, dynamically-typed language for joyful programming from 2D terminal games to tiny machine-learning experiments.
+Zod is a small (let's say it's a medium sized), interpreted, dynamically typed with a first-class functions, closures, arrays, hashes, and more.
 
 > [!CAUTION]
 > Zod is pre-1.0 and under active development — APIs may change. Not yet recommended for production.
@@ -102,6 +102,114 @@ Zod is designed to be small, simple, and easy to use. It is not a general-purpos
 > `try(expr)` is a special form, not a built-in, and is documented separately below. It requires exactly one argument.
 
 For complete signatures, see `evaluator/builtins.go`.
+
+## Standard Library
+
+New code should prefer the standard library in `stdlib/` (20 modules: `fmt`, `str`, `array`, `hash`, `math`, `matrix`, `rand`, `time`, `os`, `fs`, `path`, `io`, `term`, `json`, `sort`, `bytes`, `log`, `test`, `crypto`, `iter`) over the legacy core built-ins above. Import a module by path with an alias, then call its `pub` functions as properties:
+
+```zod
+import "std/fmt" as fmt
+fmt.println("Hello, World!")
+```
+
+Individual names can be imported too:
+
+```zod
+from "std/fmt" import println
+println("via from-import")
+```
+
+### How `std/` is resolved
+
+A `"std/..."` path is looked up in this order: `$ZOD_STDLIB` if set, `stdlib/` next to the executable, `./stdlib` in the working directory, then `stdlib/` in parent directories of the script. Running from the project root uses `./stdlib`.
+
+### Example: strings and arrays
+
+```zod
+import "std/str" as str
+import "std/array" as array
+import "std/fmt" as fmt
+
+fmt.println(str.upper("hello"))                    // HELLO
+fmt.println(str.join(["a", "b"], ","))             // a,b
+fmt.println(array.map([1, 2, 3], fn(x) { x * 2 })) // [2, 4, 6]
+```
+
+### Example: files and JSON
+
+```zod
+import "std/json" as json
+import "std/fs" as fs
+import "std/fmt" as fmt
+
+fs.write_file("hello.json", json.stringify({"name": "Zod"}))
+let h = json.parse(fs.read_file("hello.json"))
+fmt.println(h["name"]) // Zod
+```
+
+### Example: aliases avoid collisions
+
+Several modules export the same name (`join` in `str`/`array`/`path`, `contains` in `str`/`array`/`hash`). Always import with an alias and call through it:
+
+```zod
+import "std/str" as str
+import "std/path" as path
+import "std/fmt" as fmt
+
+fmt.println(str.join(["a", "b"], "-")) // a-b
+fmt.println(path.join("a", "b"))       // a/b
+```
+
+An imported name also shadows a same-named core built-in (e.g. `array.push` vs `push`) on both the eval and VM engines.
+
+### Example: bytes and error values
+
+```zod
+import "std/bytes" as bytes
+import "std/fmt" as fmt
+
+let b = bytes.from_str("hello")
+fmt.println(bytes.len(b))                  // 5
+fmt.println(bytes.to_str(bytes.slice(b, 1, 4))) // ell
+
+// string() formats errors too: nested string(error()) works on both engines.
+fmt.println(string(error("boom")))         // Error: boom
+fmt.println(type(error("boom")))           // ERROR
+fmt.println(is_error(error("boom")))       // true
+```
+
+Capture errors with `try()` instead of binding them directly — a bare `let e = error("x")` halts evaluation by design:
+
+```zod
+let r = try(error("x"))
+fmt.println(r[0]) // false
+fmt.println(r[1]) // x
+```
+
+### Example: crypto (deterministic lengths)
+
+```zod
+import "std/crypto" as crypto
+println(len(crypto.uuid())) // 36
+```
+
+### API conventions
+
+- Functional vs mutate: `array.*` returns new arrays and never mutates its
+  input; `hash.set` mutates in place and returns the same hash (documented
+  as-is, do not rely on a copy).
+- Printing: `fmt.println(x)` takes a single argument; the legacy variadic
+  `println(...)` prints each argument on its own line and is kept for
+  compatibility.
+- Imports: prefer `import "std/x" as x` and call through the alias; avoid
+  star-imports because names like `join` (`str`/`array`/`path`) and
+  `contains` (`str`/`array`/`hash`) collide.
+- Example:
+  ```zod
+  import "std/str" as str
+  import "std/fmt" as fmt
+  fmt.println(str.join(["a", "b"], "-"))
+  ```
 
 ## Peek: Matrices
 

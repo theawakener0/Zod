@@ -1,0 +1,14 @@
+from "std/fs" import read_file
+
+pub read_stdin := fn() {
+  return __read_line()
+}
+
+pub write_stdout := fn(s) {
+  return __print(string(s))
+}
+
+pub read_lines := fn(path) {
+  let data = read_file(path)
+  return __str_split(data, "\n")
+}

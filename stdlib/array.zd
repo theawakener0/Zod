@@ -1,0 +1,139 @@
+pub slice := fn(arr, start, end) {
+  return __arr_slice(arr, start, end)
+}
+
+pub first := fn(arr) {
+  return arr[0]
+}
+
+pub last := fn(arr) {
+  return arr[len(arr) - 1]
+}
+
+pub push := fn(arr, v) {
+  return __arr_push(arr, v)
+}
+
+pub pop := fn(arr) {
+  if (len(arr) == 0) {
+    return []
+  }
+  return __arr_slice(arr, 0, len(arr) - 1)
+}
+
+pub pop_last := fn(arr) {
+  return __arr_pop(arr)
+}
+
+pub make := fn(n, fill) {
+  let out = []
+  for (i := 0; i < n; i++) {
+    out = __arr_push(out, fill)
+  }
+  return out
+}
+
+pub range := fn(start, end) {
+  let out = []
+  for (i := start; i < end; i++) {
+    out = __arr_push(out, i)
+  }
+  return out
+}
+
+pub reverse := fn(arr) {
+  let out = []
+  for (i := len(arr) - 1; i >= 0; i--) {
+    out = __arr_push(out, arr[i])
+  }
+  return out
+}
+
+pub map := fn(arr, f) {
+  let out = []
+  for (i := 0; i < len(arr); i++) {
+    out = __arr_push(out, f(arr[i]))
+  }
+  return out
+}
+
+pub filter := fn(arr, f) {
+  let out = []
+  for (i := 0; i < len(arr); i++) {
+    if (f(arr[i])) {
+      out = __arr_push(out, arr[i])
+    }
+  }
+  return out
+}
+
+pub find := fn(arr, f) {
+  for (i := 0; i < len(arr); i++) {
+    if (f(arr[i])) {
+      return arr[i]
+    }
+  }
+  return null
+}
+
+pub any := fn(arr, f) {
+  for (i := 0; i < len(arr); i++) {
+    if (f(arr[i])) {
+      return true
+    }
+  }
+  return false
+}
+
+pub all := fn(arr, f) {
+  for (i := 0; i < len(arr); i++) {
+    if (!f(arr[i])) {
+      return false
+    }
+  }
+  return true
+}
+
+pub zip := fn(a, b) {
+  let n = len(a)
+  if (len(b) < n) {
+    n = len(b)
+  }
+  let out = []
+  for (i := 0; i < n; i++) {
+    out = __arr_push(out, [a[i], b[i]])
+  }
+  return out
+}
+
+pub flatten := fn(arr) {
+  let out = []
+  for (i := 0; i < len(arr); i++) {
+    let x = arr[i]
+    if (type(x) == "ARRAY") {
+      for (j := 0; j < len(x); j++) {
+        out = __arr_push(out, x[j])
+      }
+    } else {
+      out = __arr_push(out, x)
+    }
+  }
+  return out
+}
+
+pub join := fn(arr, sep) {
+  return __arr_join(arr, sep)
+}
+
+pub sort := fn(arr) {
+  return __arr_sort(arr)
+}
+
+pub contains := fn(arr, v) {
+  for (i := 0; i < len(arr); i++) {
+    if (arr[i] == v) {
+      return true
+    }
+  }
+  return false
+}

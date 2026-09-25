@@ -1,0 +1,11 @@
+pub get := fn(url) {
+  return __http_get(url, 10000)
+}
+
+pub get_timeout := fn(url, ms) {
+  return __http_get(url, ms)
+}
+
+pub post := fn(url, body) {
+  return __http_post(url, body, 10000)
+}

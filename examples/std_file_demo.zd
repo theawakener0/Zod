@@ -1,0 +1,15 @@
+import "std/fs" as fs
+import "std/fmt" as fmt
+
+let p = "/tmp/zod_file_demo.txt"
+let f = fs.fopen(p, "w")
+fs.fwrite(f, "hello")
+fs.fclose(f)
+let g = fs.fopen(p, "r")
+let content = fs.fread(g, 5)
+fs.fclose(g)
+fmt.println(content)
+let r = try(fs.fopen("/tmp/zod_file_demo_missing.txt", "r"))
+fmt.println(r[0])
+fmt.println(r[1])
+fs.rm(p)

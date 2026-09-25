@@ -1,0 +1,161 @@
+pub pi := 3.141592653589793
+pub e := 2.718281828459045
+pub tau := 6.283185307179586
+
+pub abs := fn(x) {
+  if (x < 0) {
+    return -x
+  }
+  return x
+}
+
+pub min := fn(a, b) {
+  if (a < b) {
+    return a
+  }
+  return b
+}
+
+pub max := fn(a, b) {
+  if (a > b) {
+    return a
+  }
+  return b
+}
+
+pub clamp := fn(x, lo, hi) {
+  if (x < lo) {
+    return lo
+  }
+  if (x > hi) {
+    return hi
+  }
+  return x
+}
+
+pub floor := fn(x) {
+  let i = int(x)
+  if (x < 0) {
+    if (x != i) {
+      return i - 1
+    }
+  }
+  return i
+}
+
+pub ceil := fn(x) {
+  let i = int(x)
+  if (x > 0) {
+    if (x != i) {
+      return i + 1
+    }
+  }
+  return i
+}
+
+pub round := fn(x) {
+  if (x >= 0) {
+    return int(x + 0.5)
+  }
+  return -int(-x + 0.5)
+}
+
+pub exp := fn(x) {
+  let xf = float(x)
+  let term = 1.0
+  let sum = 1.0
+  for (n := 1; n < 30; n++) {
+    term = term * xf / n
+    sum = sum + term
+  }
+  return sum
+}
+
+pub log := fn(x) {
+  let xf = float(x)
+  if (xf <= 0.0) {
+    return error("log of non-positive")
+  }
+  if (xf == 1.0) {
+    return 0.0
+  }
+  let y = (xf - 1.0) / (xf + 1.0)
+  let y2 = y * y
+  let term = y
+  let sum = y
+  for (n := 1; n < 25; n++) {
+    term = term * y2
+    sum = sum + term / (2 * n + 1)
+  }
+  return 2.0 * sum
+}
+
+pub sqrt := fn(x) {
+  let xf = float(x)
+  if (xf < 0.0) {
+    return error("sqrt of negative")
+  }
+  if (xf == 0.0) {
+    return 0.0
+  }
+  let g = xf
+  if (g < 1.0) {
+    g = 1.0
+  }
+  for (i := 0; i < 25; i++) {
+    g = (g + xf / g) / 2.0
+  }
+  return g
+}
+
+pub pow := fn(base, ex) {
+  let b = float(base)
+  let ef = float(ex)
+  let ei = int(ef)
+  if (float(ei) != ef) {
+    return exp(ef * log(b))
+  }
+  if (ei == 0) {
+    return 1.0
+  }
+  let n = ei
+  if (n < 0) {
+    n = -n
+  }
+  let result = 1.0
+  for (i := 0; i < n; i++) {
+    result = result * b
+  }
+  if (ei < 0) {
+    return 1.0 / result
+  }
+  return result
+}
+
+pub sin := fn(x) {
+  let xf = float(x)
+  let q = floor(xf / tau)
+  let r = xf - q * tau
+  if (r > pi) {
+    r = r - tau
+  }
+  if (r < -pi) {
+    r = r + tau
+  }
+  let term = r
+  let sum = r
+  let r2 = r * r
+  for (n := 1; n < 12; n++) {
+    term = -term * r2 / ((2 * n) * (2 * n + 1))
+    sum = sum + term
+  }
+  return sum
+}
+
+pub cos := fn(x) {
+  return sin(float(x) + pi / 2.0)
+}
+
+pub tan := fn(x) {
+  return sin(x) / cos(x)
+}

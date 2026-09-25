@@ -1,0 +1,61 @@
+pub get := fn(h, k) {
+  return h[k]
+}
+
+pub set := fn(h, k, v) {
+  h[k] = v
+  return h
+}
+
+pub contains := fn(h, k) {
+  return h[k] != null
+}
+
+pub has := fn(h, k) {
+  return __hash_has(h, k)
+}
+
+pub del := fn(h, k) {
+  return __hash_del(h, k)
+}
+
+pub from_pairs := fn(pairs) {
+  let h = {}
+  for (i := 0; i < len(pairs); i++) {
+    let p = pairs[i]
+    h[p[0]] = p[1]
+  }
+  return h
+}
+
+pub keys := fn(h) {
+  return __hash_keys(h)
+}
+
+pub vals := fn(h) {
+  return __hash_vals(h)
+}
+
+pub merge := fn(a, b) {
+  let out = {}
+  let ka = __hash_keys(a)
+  for (i := 0; i < len(ka); i++) {
+    out[ka[i]] = a[ka[i]]
+  }
+  let kb = __hash_keys(b)
+  for (i := 0; i < len(kb); i++) {
+    out[kb[i]] = b[kb[i]]
+  }
+  return out
+}
+
+pub remove := fn(h, k) {
+  let out = {}
+  let ks = __hash_keys(h)
+  for (i := 0; i < len(ks); i++) {
+    if (ks[i] != k) {
+      out[ks[i]] = h[ks[i]]
+    }
+  }
+  return out
+}

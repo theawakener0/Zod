@@ -1,0 +1,30 @@
+pub seed := fn(s) {
+  __seed_rand(s)
+}
+
+pub float := fn() {
+  return __rand_float()
+}
+
+pub int := fn(n) {
+  return __rand_int(n)
+}
+
+pub range := fn(lo, hi) {
+  return lo + __rand_int(hi - lo)
+}
+
+pub choice := fn(arr) {
+  return arr[__rand_int(len(arr))]
+}
+
+pub shuffle := fn(arr) {
+  let out = __arr_slice(arr, 0, len(arr))
+  for (i := len(out) - 1; i > 0; i--) {
+    let j = __rand_int(i + 1)
+    let t = out[i]
+    out[i] = out[j]
+    out[j] = t
+  }
+  return out
+}

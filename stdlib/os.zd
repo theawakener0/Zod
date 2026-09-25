@@ -1,0 +1,23 @@
+pub args := fn() {
+  return __args()
+}
+
+pub env_get := fn(k) {
+  return __env_get(k)
+}
+
+pub env_set := fn(k, v) {
+  return __env_set(k, v)
+}
+
+pub exit := fn(code) {
+  return __exit(code)
+}
+
+pub cwd := fn() {
+  return __cwd()
+}
+
+pub env_list := fn() {
+  return __env_list()
+}

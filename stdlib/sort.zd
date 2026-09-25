@@ -1,0 +1,28 @@
+pub sorted := fn(arr) {
+  return __arr_sort(arr)
+}
+
+pub sort_by := fn(arr, cmp) {
+  if (len(arr) <= 1) {
+    return __arr_slice(arr, 0, len(arr))
+  }
+  let out = __arr_slice(arr, 0, len(arr))
+  for (i := 1; i < len(out); i++) {
+    let key = out[i]
+    let j = i - 1
+    for (j >= 0) {
+      let c = cmp(out[j], key)
+      if (type(c) != "INTEGER") {
+        return error("sort_by comparator must return integer")
+      }
+      if (c > 0) {
+        out[j + 1] = out[j]
+        j = j - 1
+      } else {
+        break
+      }
+    }
+    out[j + 1] = key
+  }
+  return out
+}

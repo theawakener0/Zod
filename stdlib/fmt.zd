@@ -1,0 +1,19 @@
+pub print := fn(x) {
+  __print(string(x))
+}
+
+pub println := fn(x) {
+  __print(string(x) + "\n")
+}
+
+pub eprint := fn(x) {
+  __eprint(string(x))
+}
+
+pub sprintf := fn(fmtStr, args) {
+  __sprintf(fmtStr, args)
+}
+
+pub printf := fn(fmtStr, args) {
+  __print(__sprintf(fmtStr, args))
+}

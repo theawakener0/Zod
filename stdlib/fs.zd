@@ -1,0 +1,47 @@
+pub read_file := fn(path) {
+  return __read_file(path)
+}
+
+pub write_file := fn(path, data) {
+  return __write_file(path, data)
+}
+
+pub append_file := fn(path, data) {
+  return __append_file(path, data)
+}
+
+pub exists := fn(path) {
+  return __exists(path)
+}
+
+pub ls := fn(path) {
+  return __ls(path)
+}
+
+pub mkdir := fn(path) {
+  return __mkdir(path)
+}
+
+pub rm := fn(path) {
+  return __rm(path)
+}
+
+pub stat := fn(path) {
+  return __stat(path)
+}
+
+pub fopen := fn(p, mode) {
+  return __file_open(p, mode)
+}
+
+pub fread := fn(f, n) {
+  return __file_read(f, n)
+}
+
+pub fwrite := fn(f, s) {
+  return __file_write(f, s)
+}
+
+pub fclose := fn(f) {
+  return __file_close(f)
+}

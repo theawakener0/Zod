@@ -1,0 +1,12 @@
+// std_iter_demo.zd - demo of std/iter (reduce/chain/take/drop).
+// Run from the repo root:
+//   go run . examples/std_iter_demo.zd
+//   go run . --eng=eval examples/std_iter_demo.zd
+import "std/iter" as iter
+import "std/fmt" as fmt
+
+let sum = iter.reduce([1, 2, 3, 4], fn(acc, x) { acc + x }, 0)
+fmt.println(sum)
+fmt.println(iter.chain([1, 2], [3, 4]))
+fmt.println(iter.take([1, 2, 3, 4, 5], 3))
+fmt.println(iter.drop([1, 2, 3, 4, 5], 2))

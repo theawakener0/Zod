@@ -1,0 +1,91 @@
+pub new := fn(r, c, data) {
+  return matrix(r, c, data)
+}
+
+pub eye := fn(n) {
+  let out = []
+  for (i := 0; i < n; i++) {
+    for (j := 0; j < n; j++) {
+      if (i == j) {
+        out = __arr_push(out, 1)
+      } else {
+        out = __arr_push(out, 0)
+      }
+    }
+  }
+  return matrix(n, n, out)
+}
+
+pub zeros := fn(r, c) {
+  let out = []
+  for (i := 0; i < r * c; i++) {
+    out = __arr_push(out, 0)
+  }
+  return matrix(r, c, out)
+}
+
+pub ones := fn(r, c) {
+  let out = []
+  for (i := 0; i < r * c; i++) {
+    out = __arr_push(out, 1)
+  }
+  return matrix(r, c, out)
+}
+
+pub rows := fn(m) {
+  return len(m)
+}
+
+pub row := fn(m, i) {
+  return m[i]
+}
+
+pub get := fn(m, i, j) {
+  return m[i][j]
+}
+
+pub transpose := fn(m) {
+  let r = len(m)
+  let c = len(m[0])
+  let out = []
+  for (j := 0; j < c; j++) {
+    for (i := 0; i < r; i++) {
+      out = __arr_push(out, m[i][j])
+    }
+  }
+  return matrix(c, r, out)
+}
+
+pub mul := fn(a, b) {
+  return a * b
+}
+
+pub det2 := fn(m) {
+  return m[0][0] * m[1][1] - m[0][1] * m[1][0]
+}
+
+pub det3 := fn(m) {
+  return m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+}
+
+pub det := fn(m) {
+  let n = len(m)
+  if (n == 1) {
+    return m[0][0]
+  }
+  if (n == 2) {
+    return det2(m)
+  }
+  if (n == 3) {
+    return det3(m)
+  }
+  return error("det only supports 1x1-3x3")
+}
+
+pub inv2 := fn(m) {
+  let d = det2(m)
+  if (d == 0) {
+    return error("singular matrix")
+  }
+  return (1.0 / d) * matrix(2, 2, [m[1][1], -m[0][1], -m[1][0], m[0][0]])
+}

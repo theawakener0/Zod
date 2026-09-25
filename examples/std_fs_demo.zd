@@ -1,0 +1,20 @@
+// std_fs_demo.zd - demo of fs/path/os/time (writes only to /tmp).
+// Run from the repo root:
+//   go run . examples/std_fs_demo.zd
+//   go run . --eng=eval examples/std_fs_demo.zd
+import "std/fmt" as fmt
+import "std/fs" as fs
+import "std/path" as path
+import "std/os" as os
+import "std/time" as time
+
+let file = path.join("/tmp", "zod_fs_demo.txt")
+let start = time.now_ms()
+fs.write_file(file, "hello fs")
+fmt.println(fs.read_file(file))
+fmt.println(fs.exists(file))
+fmt.println(path.join("a", "b"))
+fmt.println(os.cwd())
+fmt.println(time.now_ms() - start)
+fs.rm(file)
+fmt.println(fs.exists(file))

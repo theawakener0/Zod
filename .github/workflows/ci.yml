@@ -27,3 +27,8 @@ jobs:
         run: go build ./...
       - name: Test
         run: go test ./...
+      - name: Stdlib smoke (eval + vm)
+        run: go run . examples/std_demo.zd && go run . --eng=vm examples/std_demo.zd && go run . examples/std_bytes_demo.zd && go run . --eng=vm examples/std_bytes_demo.zd && go run . examples/std_err_demo.zd && go run . --eng=vm examples/std_err_demo.zd
+      - name: Stdlib fs smoke (non-Windows)
+        if: runner.os != 'Windows'
+        run: go run . examples/std_fs_demo.zd && go run . --eng=vm examples/std_fs_demo.zd

@@ -1,0 +1,28 @@
+// std_demo.zd - demo of the new stdlib (fmt/str/array/hash/math/json).
+// Run from the repo root:
+//   go run . examples/std_demo.zd
+//   go run . --eng=eval examples/std_demo.zd
+import "std/fmt" as fmt
+import "std/str" as str
+import "std/array" as arr
+import "std/hash" as hash
+import "std/math" as math
+import "std/json" as json
+
+let parts = str.split("a,b,c", ",")
+fmt.println(parts)
+fmt.println(str.join(parts, "-"))
+
+let nums = [3, 1, 2]
+fmt.println(arr.sort(nums))
+
+let h = {"b": 2, "a": 1}
+fmt.println(hash.keys(h))
+fmt.println(hash.vals(h))
+
+fmt.println(math.sqrt(16))
+
+let obj = {"name": "zod", "n": 1}
+let s = json.stringify(obj)
+fmt.println(s)
+fmt.println(json.parse(s))

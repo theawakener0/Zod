@@ -1,0 +1,15 @@
+pub sleep := fn(ms) {
+  __sleep_ms(ms)
+}
+
+pub now_ms := fn() {
+  return __now_ms()
+}
+
+pub now_s := fn() {
+  return __now_ms() / 1000
+}
+
+pub elapsed_note := fn(start) {
+  return __now_ms() - start
+}

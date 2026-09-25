@@ -21,7 +21,7 @@ const Banner = `
                                             ▀▀▀  
 `
 
-var version = "v0.4.5"
+var version = "v0.6.0"
 
 func main() {
 	if len(os.Args) > 1 && (os.Args[1] == "-v" || os.Args[1] == "--version") {
@@ -30,7 +30,7 @@ func main() {
 	}
 
 
-	if len(os.Args) > 1 && os.Args[1] == "--eng=vm" {
+	if len(os.Args) > 1 && os.Args[1] == "--eng=eval" {
 		if len(os.Args) > 2 {
 			source, err := os.ReadFile(os.Args[2])
 			if err != nil {
@@ -58,7 +58,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		repl.Execute(string(source), os.Stdout, "--eng=eval", filepath.Dir(os.Args[1]))
+		repl.Execute(string(source), os.Stdout, "--eng=vm", filepath.Dir(os.Args[1]))
 		return
 	}
 
@@ -70,6 +70,6 @@ func main() {
 	fmt.Printf("\x1b[0;34m%s\x1b[0m\n", Banner)
 	fmt.Printf("\nHello %s! Type the command here.\n", user.Username)
 
-	repl.Start(os.Stdin, os.Stdout, "--eng=eval")
+	repl.Start(os.Stdin, os.Stdout, "--eng=vm")
 
 }
