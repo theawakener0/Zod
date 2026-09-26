@@ -34,7 +34,7 @@ Install Zod with the install script:
 curl -fsSL https://raw.githubusercontent.com/theawakener0/Zod/main/install.sh | sh
 ```
 
-Or with Go (requires Go 1.22+):
+Or with Go (requires Go 1.27+):
 
 ```sh
 go install github.com/theawakener0/Zod@latest

@@ -21,12 +21,15 @@ jobs:
           go-version-file: go.mod
       - name: Vet
         run: go vet -composites=false ./...
-      - name: Build
+      - name: Build (native)
+        run: go build ./...
+      - name: Build (cross GOARCH check)
         env:
+          CGO_ENABLED: 0
           GOARCH: ${{ matrix.arch }}
         run: go build ./...
-      - name: Test
-        run: go test ./...
+      - name: Test (native, no cross-arch env)
+        run: go test -count=1 ./...
       - name: Stdlib smoke (eval + vm)
         run: go run . examples/std_demo.zd && go run . --eng=vm examples/std_demo.zd && go run . examples/std_bytes_demo.zd && go run . --eng=vm examples/std_bytes_demo.zd && go run . examples/std_err_demo.zd && go run . --eng=vm examples/std_err_demo.zd
       - name: Stdlib fs smoke (non-Windows)

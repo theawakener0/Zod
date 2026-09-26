@@ -22,7 +22,7 @@ curl -fsSL https://raw.githubusercontent.com/theawakener0/Zod/main/install.sh | 
 go install github.com/theawakener0/Zod@latest
 ```
 
-Requires [Go](https://go.dev/dl/) 1.22 or newer and installs the `Zod` executable into your Go bin directory.
+Requires [Go](https://go.dev/dl/) 1.27 or newer and installs the `Zod` executable into your Go bin directory.
 
 ## Demo
 
@@ -46,7 +46,7 @@ Requires [Go](https://go.dev/dl/) 1.22 or newer and installs the `Zod` executabl
 
 ### Prerequisites
 
-- [Go](https://go.dev/dl/) 1.22 or newer
+- [Go](https://go.dev/dl/) 1.27 or newer
 
 ### Build
 
