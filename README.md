@@ -152,7 +152,7 @@ Importing or accessing a private binding is an error (e.g. `secret is private`).
 
 ## Standard Library (preferred)
 
-New code should use the standard library in [`stdlib/`](stdlib/) (20 modules) instead of the legacy core built-ins below. Each module is imported by path with an alias:
+New code should use the standard library in [`stdlib/`](stdlib/) (21 modules) instead of the legacy core built-ins below. Each module is imported by path with an alias:
 
 ```zod
 import "std/fmt" as fmt
@@ -162,19 +162,20 @@ fmt.println("Hello, World!")
 | Module   | Import example              | Key exports                                                              |
 | -------- | --------------------------- | ------------------------------------------------------------------------ |
 | `fmt`    | `import "std/fmt" as fmt`   | `print`, `println`, `eprint`, `printf`, `sprintf`                        |
-| `str`    | `import "std/str" as str`   | `split`, `join`, `trim`, `upper`, `lower`, `replace`, `contains`, `has_prefix`, `has_suffix`, `to_int`, `to_float` |
-| `array`  | `import "std/array" as array` | `first`, `last`, `push`, `pop`, `pop_last`, `map`, `filter`, `find`, `any`, `all`, `reverse`, `flatten`, `join`, `sort`, `slice`, `range`, `make` |
+| `str`    | `import "std/str" as str`   | `split`, `join`, `slice`, `trim`, `upper`, `lower`, `replace`, `index_of`, `starts_with`, `ends_with`, `repeat`, `pad_left`, `pad_right`, `contains`, `to_int`, `to_float`, `is_empty`, `has_prefix`, `has_suffix` |
+| `array`  | `import "std/array" as array` | `first`, `last`, `push`, `pop`, `pop_last`, `map`, `filter`, `find`, `any`, `all`, `reverse`, `flatten`, `join`, `sort`, `slice`, `range`, `make`, `zip`, `contains` |
 | `hash`   | `import "std/hash" as hash` | `get`, `set`, `contains`, `has`, `del`, `keys`, `vals`, `merge`, `remove`, `from_pairs` |
 | `math`   | `import "std/math" as math` | `pi`, `e`, `tau`, `abs`, `min`, `max`, `clamp`, `floor`, `ceil`, `round`, `exp`, `log`, `sqrt`, `pow`, `sin`, `cos`, `tan` |
-| `matrix` | `import "std/matrix" as matrix` | `new`, `eye`, `zeros`, `ones`, `rows`, `row`, `get`, `transpose`, `mul`, `det2`      |
+| `matrix` | `import "std/matrix" as matrix` | `new`, `eye`, `zeros`, `ones`, `rows`, `row`, `get`, `transpose`, `mul`, `det2`, `det3`, `det`, `inv2`, `inv` |
 | `rand`   | `import "std/rand" as rand` | `seed`, `float`, `int`, `range`, `choice`, `shuffle`                     |
 | `time`   | `import "std/time" as time` | `sleep`, `now_ms`, `now_s`, `elapsed_note`                               |
 | `os`     | `import "std/os" as os`     | `args`, `env_get`, `env_set`, `env_list`, `exit`, `cwd`                              |
-| `fs`     | `import "std/fs" as fs`     | `read_file`, `write_file`, `append_file`, `exists`, `ls`, `mkdir`, `rm`, `stat` (includes `mtime` unix field) |
+| `fs`     | `import "std/fs" as fs`     | `read_file`, `write_file`, `append_file`, `exists`, `ls`, `mkdir`, `rm`, `stat` (includes `mtime` unix field), `fopen`, `fread`, `fwrite`, `fclose` |
 | `path`   | `import "std/path" as path` | `join`, `basename`, `dirname`, `ext`                                     |
 | `io`     | `import "std/io" as io`     | `read_stdin`, `write_stdout`, `read_lines`                               |
 | `term`   | `import "std/term" as term` | `color`, `input`, `clear`                                                |
 | `json`   | `import "std/json" as json` | `parse`, `stringify`, `read`, `write`                                    |
+| `http`   | `import "std/http" as http` | `get`, `get_timeout`, `post` (offline-safe demo; `get`/`post` use 10s timeout) |
 | `sort`   | `import "std/sort" as sort` | `sorted`, `sort_by` (comparator must return int)                         |
 | `bytes`  | `import "std/bytes" as bytes` | `from_str`, `to_str`, `len`, `slice`, `concat`                         |
 | `log`    | `import "std/log" as log`   | `info`, `warn`, `error`, `debug`                                         |

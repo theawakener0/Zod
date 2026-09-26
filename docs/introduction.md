@@ -105,7 +105,7 @@ For complete signatures, see `evaluator/builtins.go`.
 
 ## Standard Library
 
-New code should prefer the standard library in `stdlib/` (20 modules: `fmt`, `str`, `array`, `hash`, `math`, `matrix`, `rand`, `time`, `os`, `fs`, `path`, `io`, `term`, `json`, `sort`, `bytes`, `log`, `test`, `crypto`, `iter`) over the legacy core built-ins above. Import a module by path with an alias, then call its `pub` functions as properties:
+New code should prefer the standard library in `stdlib/` (21 modules: `fmt`, `str`, `array`, `hash`, `math`, `matrix`, `rand`, `time`, `os`, `fs`, `path`, `io`, `term`, `json`, `http`, `sort`, `bytes`, `log`, `test`, `crypto`, `iter`) over the legacy core built-ins above. Import a module by path with an alias, then call its `pub` functions as properties:
 
 ```zod
 import "std/fmt" as fmt
@@ -191,7 +191,38 @@ fmt.println(r[1]) // x
 ```zod
 import "std/crypto" as crypto
 println(len(crypto.uuid())) // 36
+println(len(crypto.random_hex(8))) // 16
+println(len(crypto.sha256("hi"))) // 64
 ```
+
+### Example: iter
+
+```zod
+import "std/iter" as iter
+import "std/fmt" as fmt
+
+let sum = iter.reduce([1, 2, 3, 4], fn(acc, x) { acc + x }, 0)
+fmt.println(sum) // 10
+fmt.println(iter.chain([1, 2], [3, 4])) // [1, 2, 3, 4]
+fmt.println(iter.take([1, 2, 3, 4, 5], 3)) // [1, 2, 3]
+fmt.println(iter.drop([1, 2, 3, 4, 5], 2)) // [3, 4, 5]
+```
+
+See `examples/std_iter_demo.zd` (run with `go run . examples/std_iter_demo.zd` and `go run . --eng=eval examples/std_iter_demo.zd`).
+
+### Example: http (offline-safe)
+
+No external network required — safe for CI. The demo below targets an unroutable loopback port and captures the expected connection error with `try()`:
+
+```zod
+import "std/http" as http
+import "std/fmt" as fmt
+
+let r = try(http.get_timeout("http://127.0.0.1:1/", 500))
+fmt.println(r[0]) // false (connection refused)
+```
+
+`std/http` exports `get(url)`, `get_timeout(url, ms)`, and `post(url, body)` backed by `__http_get`/`__http_post`. `get`/`post` use a 10s timeout. See `examples/std_http_demo.zd`.
 
 ### API conventions
 
@@ -223,6 +254,26 @@ println(len(a))  // 2
 ```
 
 Matrices support element-wise `+` and `-` (same dimensions), scalar `+`, `-`, `*`, `/`, and matrix multiplication with `*` (columns of the left matrix must equal rows of the right, otherwise an error is returned).
+
+The `std/matrix` module wraps this with `new`, `eye`, `zeros`, `ones`, `rows`, `row`, `get`, `transpose`, `mul`, `det2`, `det3`, `det`, `inv2`, `inv`. `det` is the general NxN determinant (`det2`/`det3` are specialized 2x2/3x3 helpers); `inv` is the general NxN inverse (`inv2` is the specialized 2x2 helper). A singular matrix is an error — capture it with `try()`:
+
+```zod
+import "std/matrix" as m
+import "std/fmt" as fmt
+
+let a = m.new(2, 2, [1, 2, 3, 4])
+fmt.println(m.mul(a, m.eye(2))) // [[1, 2], [3, 4]]
+fmt.println(m.det(a))           // -2
+fmt.println(m.det3(m.eye(3)))   // 1
+fmt.println(m.inv2(m.new(2, 2, [4, 7, 2, 6]))) // [[0.6, -0.7], [-0.2, 0.4]]
+let r = try(m.inv2(m.new(2, 2, [1, 2, 2, 4])))
+fmt.println(r[0]) // false (singular matrix)
+fmt.println(r[1]) // singular matrix
+let r2 = try(m.inv(m.new(2, 2, [1, 2, 2, 4])))
+fmt.println(r2[0]) // false (singular matrix)
+```
+
+See `examples/std_matrix_demo.zd` and `examples/std_matrix2_demo.zd` (run each with `go run . <file>` and `go run . --eng=eval <file>`).
 
 ## Peek: Error Handling with try()
 

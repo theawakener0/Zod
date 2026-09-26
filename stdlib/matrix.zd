@@ -70,6 +70,14 @@ pub det3 := fn(m) {
 
 pub det := fn(m) {
   let n = len(m)
+  if (n == 0) {
+    return error("det requires square matrix")
+  }
+  for (i := 0; i < n; i++) {
+    if (len(m[i]) != n) {
+      return error("det requires square matrix")
+    }
+  }
   if (n == 1) {
     return m[0][0]
   }
@@ -79,7 +87,56 @@ pub det := fn(m) {
   if (n == 3) {
     return det3(m)
   }
-  return error("det only supports 1x1-3x3")
+  let a = []
+  for (i := 0; i < n; i++) {
+    let row = []
+    for (j := 0; j < n; j++) {
+      row = __arr_push(row, 1.0 * m[i][j])
+    }
+    a = __arr_push(a, row)
+  }
+  let swaps = 0
+  let prev = 1.0
+  for (k := 0; k < n - 1; k++) {
+    let piv = k
+    let best = a[k][k]
+    if (best < 0) {
+      best = -best
+    }
+    for (i := k + 1; i < n; i++) {
+      let v = a[i][k]
+      if (v < 0) {
+        v = -v
+      }
+      if (v > best) {
+        best = v
+        piv = i
+      }
+    }
+    if (best == 0) {
+      return 0
+    }
+    if (piv != k) {
+      let tmp = a[k]
+      a[k] = a[piv]
+      a[piv] = tmp
+      swaps = swaps + 1
+    }
+    for (i := k + 1; i < n; i++) {
+      for (j := k + 1; j < n; j++) {
+        a[i][j] = (a[i][j] * a[k][k] - a[i][k] * a[k][j]) / prev
+      }
+    }
+    for (i := k + 1; i < n; i++) {
+      a[i][k] = 0.0
+    }
+    prev = a[k][k]
+  }
+  let d = a[n - 1][n - 1]
+  if (swaps - (swaps / 2) * 2 == 1) {
+    d = -d
+  }
+  return d
 }
 
 pub inv2 := fn(m) {
@@ -88,4 +145,90 @@ pub inv2 := fn(m) {
     return error("singular matrix")
   }
   return (1.0 / d) * matrix(2, 2, [m[1][1], -m[0][1], -m[1][0], m[0][0]])
+}
+
+pub inv := fn(m) {
+  let n = len(m)
+  if (n == 0) {
+    return error("inv requires square matrix")
+  }
+  for (i := 0; i < n; i++) {
+    if (len(m[i]) != n) {
+      return error("inv requires square matrix")
+    }
+  }
+  if (n == 1) {
+    if (m[0][0] == 0) {
+      return error("singular matrix")
+    }
+    return matrix(1, 1, [1.0 / m[0][0]])
+  }
+  if (n == 2) {
+    return inv2(m)
+  }
+  let w = 2 * n
+  let a = []
+  for (i := 0; i < n; i++) {
+    let row = []
+    for (j := 0; j < n; j++) {
+      row = __arr_push(row, 1.0 * m[i][j])
+    }
+    for (j := 0; j < n; j++) {
+      if (i == j) {
+        row = __arr_push(row, 1.0)
+      } else {
+        row = __arr_push(row, 0.0)
+      }
+    }
+    a = __arr_push(a, row)
+  }
+  for (k := 0; k < n; k++) {
+    let piv = k
+    let best = a[k][k]
+    if (best < 0) {
+      best = -best
+    }
+    for (i := k + 1; i < n; i++) {
+      let v = a[i][k]
+      if (v < 0) {
+        v = -v
+      }
+      if (v > best) {
+        best = v
+        piv = i
+      }
+    }
+    if (best == 0) {
+      return error("singular matrix")
+    }
+    // Near-zero pivot from float rounding means singular (e.g. 3x3 [1..9]).
+    // Bareiss det stays exact, but Gauss-Jordan accumulates error, so use epsilon here.
+    if (best < 0.000000000001) {
+      return error("singular matrix")
+    }
+    if (piv != k) {
+      let tmp = a[k]
+      a[k] = a[piv]
+      a[piv] = tmp
+    }
+    let pivot = a[k][k]
+    for (j := 0; j < w; j++) {
+      a[k][j] = a[k][j] / pivot
+    }
+    for (i := 0; i < n; i++) {
+      if (i != k) {
+        let factor = a[i][k]
+        for (j := 0; j < w; j++) {
+          a[i][j] = a[i][j] - factor * a[k][j]
+        }
+      }
+    }
+  }
+  let flat = []
+  for (i := 0; i < n; i++) {
+    for (j := 0; j < n; j++) {
+      flat = __arr_push(flat, a[i][n + j])
+    }
+  }
+  return matrix(n, n, flat)
 }
