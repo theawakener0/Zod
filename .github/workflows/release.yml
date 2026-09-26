@@ -24,7 +24,7 @@ jobs:
       - name: Test
         run: go test ./...
 
-  release:
+  build:
     needs: test
     runs-on: ubuntu-latest
     strategy:
@@ -64,8 +64,25 @@ jobs:
           cp LICENSE README.md "dist/${name}/"
           cp -r stdlib "dist/${name}/"
           tar -czf "dist/${name}.tar.gz" -C dist "${name}"
+      - name: Upload tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: zod_${{ matrix.os }}_${{ matrix.arch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all tarballs
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
       - name: Generate checksums
         run: |
+          set -euo pipefail
           cd dist
           sha256sum *.tar.gz > checksums.txt
           cat checksums.txt
