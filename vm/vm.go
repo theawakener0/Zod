@@ -93,7 +93,7 @@ func (vm *VM) Run() error {
 			if err != nil {
 				return err
 			}
-		case code.OpAdd, code.OpSub, code.OpMul, code.OpDiv:
+		case code.OpAdd, code.OpSub, code.OpMul, code.OpDiv, code.OpMod:
 			right := vm.pop()
 			left := vm.pop()
 
@@ -283,6 +283,15 @@ func (vm *VM) Run() error {
 			left := vm.pop()
 
 			err := vm.executeIndexExpression(left, index)
+			if err != nil {
+				return err
+			}
+		case code.OpMatrixCell:
+			colIdx := vm.pop()
+			rowIdx := vm.pop()
+			matObj := vm.pop()
+
+			err := vm.executeMatrixCell(matObj, rowIdx, colIdx)
 			if err != nil {
 				return err
 			}
@@ -517,6 +526,8 @@ func opToString(op code.Opcode) string {
 		return "*"
 	case code.OpDiv:
 		return "/"
+	case code.OpMod:
+		return "%"
 	default:
 		return "?"
 	}
@@ -554,6 +565,11 @@ func executeBinaryOperation(op code.Opcode, left, right obj.Object) obj.Object {
 				return &obj.Error{Message: "division by zero"}
 			}
 			return &obj.Integer{Value: leftVal / rightVal}
+		case code.OpMod:
+			if rightVal == 0 {
+				return &obj.Error{Message: "modulo by zero"}
+			}
+			return &obj.Integer{Value: leftVal % rightVal}
 		}
 	}
 	if left.Type() == obj.STRING_OBJ && right.Type() == obj.STRING_OBJ {
@@ -584,6 +600,11 @@ func executeBinaryOperation(op code.Opcode, left, right obj.Object) obj.Object {
 			return &obj.Error{Message: "division by zero"}
 		}
 		return &obj.Float{Value: leftVal / rightVal}
+	case code.OpMod:
+		if rightVal == 0 {
+			return &obj.Error{Message: "modulo by zero"}
+		}
+		return &obj.Float{Value: math.Mod(leftVal, rightVal)}
 	}
 
 	return &obj.Error{Message: fmt.Sprintf("unknown operation: %d", op)}
@@ -594,7 +615,7 @@ func evalMatrixInfix(operator string, left, right obj.Object) obj.Object {
 	rightM, rightIsM := right.(*obj.Matrix)
 
 	switch operator {
-	case "+", "-", "*", "/":
+	case "+", "-", "*", "/", "%":
 		if leftIsM && rightIsM {
 			return evalMatrixMatrixInfix(operator, leftM, rightM)
 		}
@@ -692,6 +713,34 @@ func evalMatrixMatrixInfix(operator string, a, b *obj.Matrix) obj.Object {
 		return &obj.Matrix{Rows: a.Rows, Cols: b.Cols, Data: data}
 	case "/":
 		return &obj.Error{Message: "matrix division not supported: use scalar division"}
+	case "%":
+		if a.Rows != b.Rows || a.Cols != b.Cols {
+			return &obj.Error{Message: fmt.Sprintf("matrix dimension mismatch for %s: %dx%d vs %dx%d", operator, a.Rows, a.Cols, b.Rows, b.Cols)}
+		}
+		if !matrixIsAllInteger(a) || !matrixIsAllInteger(b) {
+			return &obj.Error{Message: "modulo requires integers"}
+		}
+		data := make([][]obj.Object, a.Rows)
+		for i := 0; i < a.Rows; i++ {
+			row := make([]obj.Object, a.Cols)
+			for j := 0; j < a.Cols; j++ {
+				av, ok := numericValue(a.Data[i][j])
+				if !ok {
+					return &obj.Error{Message: fmt.Sprintf("matrix element not numeric, got %s", a.Data[i][j].Type())}
+				}
+				bv, ok := numericValue(b.Data[i][j])
+				if !ok {
+					return &obj.Error{Message: fmt.Sprintf("matrix element not numeric, got %s", b.Data[i][j].Type())}
+				}
+				if bv == 0 {
+					return &obj.Error{Message: "modulo by zero"}
+				}
+				v := float64(int64(av) % int64(bv))
+				row[j] = resultValue(v, true)
+			}
+			data[i] = row
+		}
+		return &obj.Matrix{Rows: a.Rows, Cols: a.Cols, Data: data}
 	default:
 		return &obj.Error{Message: fmt.Sprintf("unknown infix operator: %s %s %s", a.Type(), operator, b.Type())}
 	}
@@ -724,6 +773,14 @@ func evalMatrixScalarInfix(operator string, m *obj.Matrix, scalar obj.Object) ob
 					return &obj.Error{Message: "division by zero"}
 				}
 				v = mv / sv
+			case "%":
+				if !matrixIsAllInteger(m) || !scalarIsInteger(scalar) {
+					return &obj.Error{Message: "modulo requires integers"}
+				}
+				if sv == 0 {
+					return &obj.Error{Message: "modulo by zero"}
+				}
+				v = float64(int64(mv) % int64(sv))
 			}
 			row[j] = resultValue(v, allInt)
 		}
@@ -759,6 +816,14 @@ func evalScalarMatrixInfix(operator string, scalar obj.Object, m *obj.Matrix) ob
 					return &obj.Error{Message: "division by zero"}
 				}
 				v = sv / mv
+			case "%":
+				if !scalarIsInteger(scalar) || !matrixIsAllInteger(m) {
+					return &obj.Error{Message: "modulo requires integers"}
+				}
+				if mv == 0 {
+					return &obj.Error{Message: "modulo by zero"}
+				}
+				v = float64(int64(sv) % int64(mv))
 			}
 			row[j] = resultValue(v, allInt)
 		}
@@ -1110,6 +1175,52 @@ func (vm *VM) executeIndexExpression(left, index obj.Object) error {
 	}
 }
 
+func (vm *VM) executeMatrixCell(matObj, rowIdxObj, colIdxObj obj.Object) error {
+	if matObj == nil {
+		matObj = Null
+	}
+	if rowIdxObj == nil {
+		rowIdxObj = Null
+	}
+	if colIdxObj == nil {
+		colIdxObj = Null
+	}
+	if errObj, ok := matObj.(*obj.Error); ok {
+		return vm.push(errObj)
+	}
+	if errObj, ok := rowIdxObj.(*obj.Error); ok {
+		return vm.push(errObj)
+	}
+	if errObj, ok := colIdxObj.(*obj.Error); ok {
+		return vm.push(errObj)
+	}
+	if mat, ok := matObj.(*obj.Matrix); ok {
+		rowIdx, ok := rowIdxObj.(*obj.Integer)
+		if !ok {
+			return vm.push(&obj.Error{Message: fmt.Sprintf("index operator requires integer index, got %s", rowIdxObj.Type())})
+		}
+		colIdx, ok := colIdxObj.(*obj.Integer)
+		if !ok {
+			return vm.push(&obj.Error{Message: fmt.Sprintf("index operator requires integer index, got %s", colIdxObj.Type())})
+		}
+		if rowIdx.Value < 0 || rowIdx.Value >= int64(mat.Rows) || rowIdx.Value >= int64(len(mat.Data)) {
+			return vm.push(Null)
+		}
+		row := mat.Data[rowIdx.Value]
+		if colIdx.Value < 0 || colIdx.Value >= int64(mat.Cols) || colIdx.Value >= int64(len(row)) {
+			return vm.push(Null)
+		}
+		return vm.push(row[colIdx.Value])
+	}
+	// Generic double index (arrays of arrays, hashes, ...): emulate two
+	// nested OpIndex so semantics stay identical to the old bytecode.
+	if err := vm.executeIndexExpression(matObj, rowIdxObj); err != nil {
+		return err
+	}
+	tmp := vm.pop()
+	return vm.executeIndexExpression(tmp, colIdxObj)
+}
+
 func (vm *VM) executeSingleIndexAssign(kind int) error {
 	val := vm.pop()
 	index := vm.pop()
@@ -1156,6 +1267,8 @@ func (vm *VM) singleIndexAssign(left, index, val obj.Object, kind int) obj.Objec
 		opStr = "*"
 	case 4:
 		opStr = "/"
+	case 5:
+		opStr = "%"
 	}
 	if hash, ok := left.(*obj.Hash); ok {
 		key, ok := index.(obj.Hashable)
@@ -1340,6 +1453,8 @@ func kindToOpcode(kind int) code.Opcode {
 		return code.OpMul
 	case 4:
 		return code.OpDiv
+	case 5:
+		return code.OpMod
 	default:
 		return code.OpAdd
 	}
@@ -1355,6 +1470,8 @@ func kindToOpString(kind int) string {
 		return "*="
 	case 4:
 		return "/="
+	case 5:
+		return "%="
 	default:
 		return "="
 	}

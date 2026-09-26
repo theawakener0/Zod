@@ -20,6 +20,7 @@ var (
 )
 
 var callDepth int
+
 const maxCallDepth = 10000
 
 func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
@@ -35,13 +36,13 @@ func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
 
 	case *ast.FloatLiteral:
 		return &obj.Float{Value: n.Value}
-	
+
 	case *ast.Boolean:
 		return nattiveBoolToBooleanObject(n.Value)
 
 	case *ast.NullLiteral:
 		return NULL
-	
+
 	case *ast.PrefixExpression:
 		if n.Opt == "++" || n.Opt == "--" {
 			return evalIncrementDecrement(n.Opt, n.Right, env, false)
@@ -61,7 +62,7 @@ func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
 			return left
 		}
 		return newError("unknown postfix operator: %s%s", left.Type(), n.Opt)
-	
+
 	case *ast.InfixExpression:
 		if n.Opt == "&&" {
 			left := Eval(n.Left, env)
@@ -95,10 +96,10 @@ func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
 		}
 
 		return evalInfixExpression(n.Opt, left, right)
-	
+
 	case *ast.BlockStatement:
 		return evalBlockStatement(n, env)
-	
+
 	case *ast.IfExpression:
 		return evalIfExpression(n, env)
 
@@ -195,6 +196,18 @@ func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
 			if !env.Assign(ident.Value, result) {
 				return newError("identifier not found: %s", ident.Value)
 			}
+		case "%=":
+			curr := Eval(ident, env)
+			if isError(curr) {
+				return curr
+			}
+			result := evalInfixExpression("%", curr, val)
+			if isError(result) {
+				return result
+			}
+			if !env.Assign(ident.Value, result) {
+				return newError("identifier not found: %s", ident.Value)
+			}
 		}
 
 	case *ast.Identifier:
@@ -237,6 +250,15 @@ func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
 		}
 		return &obj.Array{Elements: elements}
 	case *ast.IndexExpression:
+		// Fast path: m[i][j] reads on a matrix fetch the cell directly,
+		// avoiding the per-cell row-copy allocation of
+		// evalMatrixIndexExpression. Single m[i] still returns a copied
+		// Array (see evalMatrixIndexExpression), so `let r = m[0]; r[0] = 9`
+		// keeps working without mutating the matrix.
+		if inner, ok := n.Left.(*ast.IndexExpression); ok {
+			return evalNestedIndexExpression(inner, n.Index, env)
+		}
+
 		left := Eval(n.Left, env)
 		if isError(left) {
 			return left
@@ -251,7 +273,7 @@ func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
 	case *ast.HashLiteral:
 		return evalHashLiteral(n, env)
 	case *ast.ImportStatement:
-		return evalImport(n ,env)
+		return evalImport(n, env)
 	case *ast.PropertyExpression:
 		return evalPropertyExpression(n, env)
 	}
@@ -332,6 +354,11 @@ func evalIntegerInfixExpression(operator string, left, right obj.Object) obj.Obj
 			return newError("division by zero")
 		}
 		return obj.NewInteger(leftValue / rightValue)
+	case "%":
+		if rightValue == 0 {
+			return newError("modulo by zero")
+		}
+		return obj.NewInteger(leftValue % rightValue)
 	case "<":
 		return nattiveBoolToBooleanObject(leftValue < rightValue)
 	case ">":
@@ -395,7 +422,7 @@ func evalMatrixInfixExpression(operator string, left, right obj.Object) obj.Obje
 	}
 
 	switch operator {
-	case "+", "-", "*", "/":
+	case "+", "-", "*", "/", "%":
 		if leftIsM && rightIsM {
 			return evalMatrixMatrixInfix(operator, leftM, rightM)
 		}
@@ -506,6 +533,34 @@ func evalMatrixMatrixInfix(operator string, a, b *obj.Matrix) obj.Object {
 		return &obj.Matrix{Rows: a.Rows, Cols: b.Cols, Data: data}
 	case "/":
 		return newError("matrix division not supported: use scalar division")
+	case "%":
+		if a.Rows != b.Rows || a.Cols != b.Cols {
+			return newError("matrix dimension mismatch for %s: %dx%d vs %dx%d", operator, a.Rows, a.Cols, b.Rows, b.Cols)
+		}
+		if !matrixIsAllInteger(a) || !matrixIsAllInteger(b) {
+			return newError("modulo requires integers")
+		}
+		data := make([][]obj.Object, a.Rows)
+		for i := 0; i < a.Rows; i++ {
+			row := make([]obj.Object, a.Cols)
+			for j := 0; j < a.Cols; j++ {
+				av, ok := numericValue(a.Data[i][j])
+				if !ok {
+					return newError("matrix element not numeric, got %s", a.Data[i][j].Type())
+				}
+				bv, ok := numericValue(b.Data[i][j])
+				if !ok {
+					return newError("matrix element not numeric, got %s", b.Data[i][j].Type())
+				}
+				if bv == 0 {
+					return newError("modulo by zero")
+				}
+				v := float64(int64(av) % int64(bv))
+				row[j] = resultValue(v, true)
+			}
+			data[i] = row
+		}
+		return &obj.Matrix{Rows: a.Rows, Cols: a.Cols, Data: data}
 	default:
 		return newError("unknown infix operator: %s %s %s", a.Type(), operator, b.Type())
 	}
@@ -546,6 +601,14 @@ func evalMatrixScalarInfix(operator string, m *obj.Matrix, scalar obj.Object) ob
 					return newError("division by zero")
 				}
 				v = mv / sv
+			case "%":
+				if !matrixIsAllInteger(m) || !scalarIsInteger(scalar) {
+					return newError("modulo requires integers")
+				}
+				if sv == 0 {
+					return newError("modulo by zero")
+				}
+				v = float64(int64(mv) % int64(sv))
 			}
 			row[j] = resultValue(v, allInt)
 		}
@@ -589,6 +652,14 @@ func evalScalarMatrixInfix(operator string, scalar obj.Object, m *obj.Matrix) ob
 					return newError("division by zero")
 				}
 				v = sv / mv
+			case "%":
+				if !scalarIsInteger(scalar) || !matrixIsAllInteger(m) {
+					return newError("modulo requires integers")
+				}
+				if mv == 0 {
+					return newError("modulo by zero")
+				}
+				v = float64(int64(sv) % int64(mv))
 			}
 			row[j] = resultValue(v, allInt)
 		}
@@ -665,6 +736,11 @@ func evalFloatInfixExpression(operator string, left, right obj.Object) obj.Objec
 			return newError("division by zero")
 		}
 		return &obj.Float{Value: leftValue / rightValue}
+	case "%":
+		if rightValue == 0 {
+			return newError("modulo by zero")
+		}
+		return &obj.Float{Value: math.Mod(leftValue, rightValue)}
 	case "<":
 		return nattiveBoolToBooleanObject(leftValue < rightValue)
 	case ">":
@@ -853,7 +929,7 @@ func evalProgram(p *ast.Program, env *obj.Enviroment) obj.Object {
 
 	for _, stmt := range p.Statements {
 		result = Eval(stmt, env)
-		
+
 		switch result := result.(type) {
 		case *obj.ReturnValue:
 			return result.Value
@@ -1030,6 +1106,52 @@ func evalIndexExpression(left, index obj.Object) obj.Object {
 	}
 }
 
+func evalNestedIndexExpression(inner *ast.IndexExpression, outerIndex ast.Expression, env *obj.Enviroment) obj.Object {
+	base := Eval(inner.Left, env)
+	if isError(base) {
+		return base
+	}
+	if mat, ok := base.(*obj.Matrix); ok {
+		rowObj := Eval(inner.Index, env)
+		if isError(rowObj) {
+			return rowObj
+		}
+		colObj := Eval(outerIndex, env)
+		if isError(colObj) {
+			return colObj
+		}
+		row, ok := rowObj.(*obj.Integer)
+		if !ok {
+			return newError("index operator requires integer index, got %s", rowObj.Type())
+		}
+		col, ok := colObj.(*obj.Integer)
+		if !ok {
+			return newError("index operator requires integer index, got %s", colObj.Type())
+		}
+		if row.Value < 0 || row.Value >= int64(mat.Rows) || row.Value >= int64(len(mat.Data)) {
+			return NULL
+		}
+		dataRow := mat.Data[row.Value]
+		if col.Value < 0 || col.Value >= int64(mat.Cols) || col.Value >= int64(len(dataRow)) {
+			return NULL
+		}
+		return dataRow[col.Value]
+	}
+	rowIdx := Eval(inner.Index, env)
+	if isError(rowIdx) {
+		return rowIdx
+	}
+	left := evalIndexExpression(base, rowIdx)
+	if isError(left) {
+		return left
+	}
+	colIdx := Eval(outerIndex, env)
+	if isError(colIdx) {
+		return colIdx
+	}
+	return evalIndexExpression(left, colIdx)
+}
+
 func evalMatrixIndexExpression(matrix, index obj.Object) obj.Object {
 	matrixObj := matrix.(*obj.Matrix)
 	idx := index.(*obj.Integer).Value
@@ -1081,7 +1203,7 @@ func evalIndexAssignment(idx *ast.IndexExpression, opt string, val obj.Object, e
 				hash.Order = append(hash.Order, hashKey)
 			}
 			hash.Pairs[hashKey] = obj.HashPair{Key: index, Value: val}
-		case "+=", "-=", "*=", "/=":
+		case "+=", "-=", "*=", "/=", "%=":
 			pair, ok := hash.Pairs[hashKey]
 			if !ok {
 				return newError("key not found: %s", index.Inspect())
@@ -1163,7 +1285,7 @@ func evalIndexAssignment(idx *ast.IndexExpression, opt string, val obj.Object, e
 			switch opt {
 			case "=":
 				mat.Data[rowIdx.Value][colIdx.Value] = val
-			case "+=", "-=", "*=", "/=":
+			case "+=", "-=", "*=", "/=", "%=":
 				curr := mat.Data[rowIdx.Value][colIdx.Value]
 				result := evalInfixExpression(string(opt[0]), curr, val)
 				if isError(result) {
@@ -1200,7 +1322,7 @@ func evalIndexAssignment(idx *ast.IndexExpression, opt string, val obj.Object, e
 	switch opt {
 	case "=":
 		array.Elements[i.Value] = val
-	case "+=", "-=", "*=", "/=":
+	case "+=", "-=", "*=", "/=", "%=":
 		curr := array.Elements[i.Value]
 		result := evalInfixExpression(string(opt[0]), curr, val)
 		if isError(result) {
@@ -1242,7 +1364,7 @@ func evalHashLiteral(h *ast.HashLiteral, env *obj.Enviroment) obj.Object {
 		}
 		pairs[hashed] = obj.HashPair{Key: key, Value: val}
 	}
-	
+
 	return &obj.Hash{Pairs: pairs, Order: order}
 }
 
@@ -1264,7 +1386,7 @@ func evalHashIndexExpression(hash, index obj.Object) obj.Object {
 
 func evalImport(stmt *ast.ImportStatement, env *obj.Enviroment) obj.Object {
 	path := stmt.Path.Value
-	
+
 	resolved, err := resolveModulePath(path)
 	if err != nil {
 		return newError("module not found: %s", path)
@@ -1361,7 +1483,7 @@ func evalPropertyExpression(node *ast.PropertyExpression, env *obj.Enviroment) o
 		return val
 	default:
 		return newError("property access not supported on type %s", left.Type())
-	} 
+	}
 }
 
 func stdlibPath() string {
@@ -1497,7 +1619,7 @@ func resolveModulePath(path string) (string, error) {
 	stdlib := stdlibPath()
 	candidate := []string{
 		filepath.Join(stdlib, path),
-		filepath.Join(stdlib, path + ".zd"),
+		filepath.Join(stdlib, path+".zd"),
 	}
 
 	for _, c := range candidate {

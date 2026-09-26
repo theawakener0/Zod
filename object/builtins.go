@@ -17,8 +17,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode/utf8"
+	"unsafe"
 )
 
 var (
@@ -1866,11 +1868,186 @@ var Builtins = []struct {
 			return &String{Value: string(data)}
 		},
 	}},
+	{"__term_width", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 0 {
+				return newError("wrong number of arguments. got=%d, want=0", len(args))
+			}
+			if n := termWinsizeDim(true); n > 0 {
+				return NewInteger(int64(n))
+			}
+			if v := os.Getenv("COLUMNS"); v != "" {
+				if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+					return NewInteger(int64(n))
+				}
+			}
+			return newError("could not determine terminal width: not a TTY")
+		},
+	}},
+	{"__term_height", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 0 {
+				return newError("wrong number of arguments. got=%d, want=0", len(args))
+			}
+			if n := termWinsizeDim(false); n > 0 {
+				return NewInteger(int64(n))
+			}
+			if v := os.Getenv("LINES"); v != "" {
+				if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+					return NewInteger(int64(n))
+				}
+			}
+			return newError("could not determine terminal height: not a TTY")
+		},
+	}},
+	// NOTE: __read_key and __has_input read the raw stdin fd directly,
+	// bypassing getStdinReader()'s buffered bufio.Reader, so buffered line
+	// input and raw key polling never share (or deadlock on) one buffer.
+	{"__read_key", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 0 {
+				return newError("wrong number of arguments. got=%d, want=0", len(args))
+			}
+			fd := int(os.Stdin.Fd())
+			var orig [termiosSize]byte
+			if !termGetAttr(uintptr(fd), &orig) {
+				// Not a TTY (e.g. piped stdin in tests): plain single-byte read.
+				var b [1]byte
+				n, err := syscall.Read(fd, b[:])
+				if err != nil {
+					return newError("could not read key: %s", err.Error())
+				}
+				if n == 0 {
+					return newError("could not read key: EOF")
+				}
+				return &String{Value: string(b[:n])}
+			}
+			raw := orig
+			termSetLflag(&raw, termGetLflag(&raw)&^(termICANON|termECHO))
+			raw[termVMIN] = 1
+			raw[termVTIME] = 0
+			if !termSetAttr(uintptr(fd), &raw) {
+				return newError("could not set terminal to raw mode")
+			}
+			defer termSetAttr(uintptr(fd), &orig)
+			var b [1]byte
+			n, err := syscall.Read(fd, b[:])
+			if err != nil {
+				return newError("could not read key: %s", err.Error())
+			}
+			if n == 0 {
+				return newError("could not read key: EOF")
+			}
+			if b[0] != 0x1B {
+				return &String{Value: string(b[:1])}
+			}
+			// ESC: allow 0.1s per follow-up byte for escape sequences; read up to 2 more.
+			timed := raw
+			timed[termVMIN] = 0
+			timed[termVTIME] = 1
+			termSetAttr(uintptr(fd), &timed)
+			seq := []byte{b[0]}
+			for i := 0; i < 2; i++ {
+				var eb [1]byte
+				m, err := syscall.Read(fd, eb[:])
+				if err != nil || m == 0 {
+					break
+				}
+				seq = append(seq, eb[0])
+			}
+			return &String{Value: string(seq)}
+		},
+	}},
+	{"__has_input", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 0 {
+				return newError("wrong number of arguments. got=%d, want=0", len(args))
+			}
+			fd := int(os.Stdin.Fd())
+			var rfds syscall.FdSet
+			rfds.Bits[fd/64] |= int64(1) << (uint(fd) % 64)
+			tv := syscall.Timeval{Sec: 0, Usec: 0}
+			n, err := syscall.Select(fd+1, &rfds, nil, nil, &tv)
+			if err != nil {
+				return newError("could not poll stdin: %s", err.Error())
+			}
+			if n > 0 {
+				return TRUE
+			}
+			return FALSE
+		},
+	}},
 }
 
 var stdinReader *bufio.Reader
 
 const maxHTTPBody = 5 * 1024 * 1024
+
+// Terminal helpers (Linux only; no new dependencies).
+// termios is manipulated as a raw byte buffer to avoid C struct padding
+// mismatches. Linux layout: Lflag u32 LE at byte 12, line discipline at 16,
+// Cc[0..31] at bytes 17..48 with VTIME=Cc[5] and VMIN=Cc[6].
+const (
+	termiosSize = 64
+	termLflag   = 12
+	termVTIME   = 22
+	termVMIN    = 23
+	termICANON  = 0x0002
+	termECHO    = 0x0008
+)
+
+type termWinsize struct {
+	Row    uint16
+	Col    uint16
+	Xpixel uint16
+	Ypixel uint16
+}
+
+func termWinsizeTry(fd uintptr) (termWinsize, bool) {
+	var ws termWinsize
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, uintptr(syscall.TIOCGWINSZ), uintptr(unsafe.Pointer(&ws)))
+	if errno != 0 {
+		return ws, false
+	}
+	return ws, true
+}
+
+// termWinsizeDim returns terminal cols (width=true) or rows via ioctl on
+// stdout then stdin, or 0 when unavailable.
+func termWinsizeDim(width bool) int {
+	for _, f := range []uintptr{os.Stdout.Fd(), os.Stdin.Fd()} {
+		if ws, ok := termWinsizeTry(f); ok {
+			if width && ws.Col > 0 {
+				return int(ws.Col)
+			}
+			if !width && ws.Row > 0 {
+				return int(ws.Row)
+			}
+		}
+	}
+	return 0
+}
+
+func termGetLflag(b *[termiosSize]byte) uint32 {
+	return uint32(b[termLflag]) | uint32(b[termLflag+1])<<8 | uint32(b[termLflag+2])<<16 | uint32(b[termLflag+3])<<24
+}
+
+func termSetLflag(b *[termiosSize]byte, v uint32) {
+	b[termLflag] = byte(v)
+	b[termLflag+1] = byte(v >> 8)
+	b[termLflag+2] = byte(v >> 16)
+	b[termLflag+3] = byte(v >> 24)
+}
+
+func termGetAttr(fd uintptr, buf *[termiosSize]byte) bool {
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, uintptr(syscall.TCGETS), uintptr(unsafe.Pointer(buf)))
+	return errno == 0
+}
+
+func termSetAttr(fd uintptr, buf *[termiosSize]byte) bool {
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, uintptr(syscall.TCSETS), uintptr(unsafe.Pointer(buf)))
+	return errno == 0
+}
 
 func getStdinReader() *bufio.Reader {
 	if stdinReader == nil {

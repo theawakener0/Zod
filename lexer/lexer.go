@@ -7,11 +7,11 @@ import (
 )
 
 type Lexer struct {
-	input			string
-	position		int
-	readPosition	int
-	ch 				byte
-	lastToken		tk.TokenType
+	input        string
+	position     int
+	readPosition int
+	ch           byte
+	lastToken    tk.TokenType
 }
 
 func New(input string) *Lexer {
@@ -62,6 +62,8 @@ func newToken(tokenType tk.TokenType, ch byte) tk.Token {
 		return tk.Token{Type: tokenType, Literal: "*"}
 	case tk.SLASH:
 		return tk.Token{Type: tokenType, Literal: "/"}
+	case tk.MOD:
+		return tk.Token{Type: tokenType, Literal: "%"}
 	case tk.BANG:
 		return tk.Token{Type: tokenType, Literal: "!"}
 	case tk.LT:
@@ -147,6 +149,13 @@ func (l *Lexer) nextToken() tk.Token {
 		} else {
 			tok = newToken(tk.SLASH, l.ch)
 		}
+	case '%':
+		if l.peekChar() == '=' {
+			l.readChar()
+			tok = tk.Token{Type: tk.MODASSIGN, Literal: "%="}
+		} else {
+			tok = newToken(tk.MOD, l.ch)
+		}
 	case '!':
 		if l.peekChar() == '=' {
 			l.readChar()
@@ -159,7 +168,7 @@ func (l *Lexer) nextToken() tk.Token {
 			l.readChar()
 			tok = tk.Token{Type: tk.LTEQ, Literal: "<="}
 		} else {
-			tok	= newToken(tk.LT, l.ch)
+			tok = newToken(tk.LT, l.ch)
 		}
 	case '>':
 		if l.peekChar() == '=' {

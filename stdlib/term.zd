@@ -29,3 +29,23 @@ pub input := fn(prompt) {
 pub clear := fn() {
   __print("\x1b[2J\x1b[H")
 }
+
+pub width := fn() {
+  return __term_width()
+}
+
+pub height := fn() {
+  return __term_height()
+}
+
+pub size := fn() {
+  return [__term_width(), __term_height()]
+}
+
+pub read_key := fn() {
+  return __read_key()
+}
+
+pub has_input := fn() {
+  return __has_input()
+}

@@ -53,7 +53,7 @@ Zod is designed to be small, simple, and easy to use. It is not a general-purpos
 - Recoverable errors with `try(expr)` returning `[ok, value]`
 - Rich built-ins for I/O, collections, and math
 - Interactive REPL and script-file execution
-- Operators including `+`, `-`, `*`, `/`, comparisons, and logical operators
+- Operators including `+`, `-`, `*`, `/`, `%`, comparisons, and logical operators
 - A top-level denfition 
 
 ## At a Glance: Built-in Functions

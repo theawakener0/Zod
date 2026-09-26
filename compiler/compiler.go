@@ -330,6 +330,8 @@ func (c *Compiler) Compile(node ast.Node) error {
 			c.emit(code.OpMul)
 		case "/":
 			c.emit(code.OpDiv)
+		case "%":
+			c.emit(code.OpMod)
 		case ">":
 			c.emit(code.OpGreaterThan)
 		case "==":
@@ -404,6 +406,19 @@ func (c *Compiler) Compile(node ast.Node) error {
 
 		c.emit(code.OpHash, len(node.Pairs)*2)
 	case *ast.IndexExpression:
+		if inner, ok := node.Left.(*ast.IndexExpression); ok {
+			if err := c.Compile(inner.Left); err != nil {
+				return err
+			}
+			if err := c.Compile(inner.Index); err != nil {
+				return err
+			}
+			if err := c.Compile(node.Index); err != nil {
+				return err
+			}
+			c.emit(code.OpMatrixCell)
+			return nil
+		}
 		err0 := c.Compile(node.Left)
 		if err0 != nil {
 			return err0
@@ -677,6 +692,8 @@ func assignKind(op string) (int, error) {
 		return 3, nil
 	case "/=":
 		return 4, nil
+	case "%=":
+		return 5, nil
 	default:
 		return 0, fmt.Errorf("unknown assignment operator %s", op)
 	}
@@ -705,7 +722,7 @@ func (c *Compiler) compileAssignStatement(node *ast.AssignStatement) error {
 		}
 		c.emitDefine(symbol)
 		return nil
-	case "=", "+=", "-=", "*=", "/=":
+	case "=", "+=", "-=", "*=", "/=", "%=":
 		if node.Token.Literal == "=" {
 			symbol, found := c.symbolTable.Resolve(ident.Value)
 			if !found {
@@ -736,6 +753,8 @@ func (c *Compiler) compileAssignStatement(node *ast.AssignStatement) error {
 			c.emit(code.OpMul)
 		case "/=":
 			c.emit(code.OpDiv)
+		case "%=":
+			c.emit(code.OpMod)
 		}
 		c.emitStore(symbol)
 		return nil

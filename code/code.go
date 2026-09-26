@@ -51,6 +51,8 @@ const (
 	OpDefineLocal
 	OpImport
 	OpGetProp
+	OpMod
+	OpMatrixCell
 )
 
 type Definition struct {
@@ -218,6 +220,14 @@ var definition = map[Opcode]*Definition{
 	OpGetProp: {
 		Name:          "OpGetProp",
 		OperandWidths: []int{2},
+	},
+	OpMod: {
+		Name:          "OpMod",
+		OperandWidths: []int{},
+	},
+	OpMatrixCell: {
+		Name:          "OpMatrixCell",
+		OperandWidths: []int{},
 	},
 }
 

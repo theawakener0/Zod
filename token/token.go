@@ -1,94 +1,95 @@
 package token
 
-
 type TokenType string
 
 type Token struct {
-	Type	TokenType
-	Literal	string
+	Type    TokenType
+	Literal string
 }
 
 const (
 	ILLEGAL = "ILLEGAL"
-	EOF = "EOF"
+	EOF     = "EOF"
 
-	IDENT = "IDENT"
-	INT = "INT"
-	FLOAT = "FLOAT"
+	IDENT  = "IDENT"
+	INT    = "INT"
+	FLOAT  = "FLOAT"
 	STRING = "STRING"
 
-	ASSIGN = "="
-	PLUS = "+"
-	MINUS = "-"
-	BANG = "!"
+	ASSIGN   = "="
+	PLUS     = "+"
+	MINUS    = "-"
+	BANG     = "!"
 	ASTERISK = "*"
-	SLASH = "/"
+	SLASH    = "/"
+	MOD      = "%"
 
 	LT = "<"
 	GT = ">"
 
-	EQ = "=="
-	NOTEQ = "!="
-	LTEQ = "<="
-	GTEQ = ">="
-	INCASSIGN = "+="
+	EQ         = "=="
+	NOTEQ      = "!="
+	LTEQ       = "<="
+	GTEQ       = ">="
+	INCASSIGN  = "+="
 	DECDASSIGN = "-="
-	MLTASSIGN = "*="
-	DIVASSIGN = "/="
-	LAND = "&&"
-	LOR = "||"
-	INC = "++"
-	DEC = "--"
+	MLTASSIGN  = "*="
+	DIVASSIGN  = "/="
+	MODASSIGN  = "%="
+	LAND       = "&&"
+	LOR        = "||"
+	INC        = "++"
+	DEC        = "--"
 	ASSIGNCHAR = ":="
 
-	COMMA = ","
-	COLOMN = ":"
+	COMMA     = ","
+	COLOMN    = ":"
 	SEMICOLON = ";"
-	DOT = "."
+	DOT       = "."
 
-	LPAREN = "("
-	RPAREN = ")"
-	LBRACE = "{"
-	RBRACE = "}"
+	LPAREN   = "("
+	RPAREN   = ")"
+	LBRACE   = "{"
+	RBRACE   = "}"
 	LBRACKET = "["
 	RBRACKET = "]"
 
 	FUNCTION = "FUNCTION"
-	LET = "LET"
-	TRUE = "TRUE"
-	FALSE = "FALSE"
-	IF = "IF"
-	ELSEIF = "ELSEIF"
-	ELSE = "ELSE"
-	RETURN = "RETURN"
-	FOR = "FOR"
-	LOOP = "LOOP"
-	BREAK = "BREAK"
+	LET      = "LET"
+	TRUE     = "TRUE"
+	FALSE    = "FALSE"
+	IF       = "IF"
+	ELSEIF   = "ELSEIF"
+	ELSE     = "ELSE"
+	RETURN   = "RETURN"
+	FOR      = "FOR"
+	LOOP     = "LOOP"
+	BREAK    = "BREAK"
 	CONTINUE = "CONTINUE"
-	NULL = "NULL"
+	NULL     = "NULL"
 
 	IMPORT = "IMPORT"
-	FROM = "FROM"
-	PUB = "PUB"
+	FROM   = "FROM"
+	PUB    = "PUB"
 )
 
-var keywords = map[string]TokenType {
-	"fn" : FUNCTION,
-	"let": LET,
-	"true": TRUE,
-	"false": FALSE,
-	"if": IF,
-	"elseif": ELSEIF,
-	"else": ELSE,
-	"return": RETURN,
-	"for": FOR,
-	"loop": LOOP,
-	"break": BREAK,
+var keywords = map[string]TokenType{
+	"fn":       FUNCTION,
+	"let":      LET,
+	"true":     TRUE,
+	"false":    FALSE,
+	"if":       IF,
+	"elseif":   ELSEIF,
+	"else":     ELSE,
+	"return":   RETURN,
+	"for":      FOR,
+	"loop":     LOOP,
+	"break":    BREAK,
 	"continue": CONTINUE,
-	"null": NULL,
-	"import": IMPORT,
-	"from": FROM,
-	"pub": PUB,
+	"null":     NULL,
+	"import":   IMPORT,
+	"from":     FROM,
+	"pub":      PUB,
 }
 
 func LookupIdent(ident string) TokenType {
@@ -117,4 +118,3 @@ func LookupIdent(ident string) TokenType {
 	}
 	return IDENT
 }
-

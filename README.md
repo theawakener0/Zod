@@ -117,7 +117,7 @@ More runnable examples live in [`examples/`](examples/).
 
 | Category      | Operators                                |
 | ------------- | ---------------------------------------- |
-| Arithmetic    | `+`  `-`  `*`  `/`                       |
+| Arithmetic    | `+`  `-`  `*`  `/`  `%`                    |
 | Comparison    | `==`  `!=`  `<`  `>`  `<=`  `>=`         |
 | Logical       | `&&`  `\|\|`  `!`                        |
 | Increment     | `++`  `--` (prefix and postfix)          |
@@ -128,6 +128,7 @@ More runnable examples live in [`examples/`](examples/).
 | -------- | ----------------------------------------- |
 | `let`    | Declare a new variable: `let x = 5`       |
 | `:=`     | Assign (declares if needed): `x := 5`     |
+| `+=` `-=` `*=` `/=` `%=` | Compound assignment: `x %= 2` |
 
 Index assignment works on arrays and hashes too: `nums[0] = 10`, `user["age"] += 1`.
 
@@ -173,7 +174,7 @@ fmt.println("Hello, World!")
 | `fs`     | `import "std/fs" as fs`     | `read_file`, `write_file`, `append_file`, `exists`, `ls`, `mkdir`, `rm`, `stat` (includes `mtime` unix field), `fopen`, `fread`, `fwrite`, `fclose` |
 | `path`   | `import "std/path" as path` | `join`, `basename`, `dirname`, `ext`                                     |
 | `io`     | `import "std/io" as io`     | `read_stdin`, `write_stdout`, `read_lines`                               |
-| `term`   | `import "std/term" as term` | `color`, `input`, `clear`                                                |
+| `term`   | `import "std/term" as term` | `color`, `input`, `clear`, `width`, `height`, `size`, `read_key`, `has_input` |
 | `json`   | `import "std/json" as json` | `parse`, `stringify`, `read`, `write`                                    |
 | `http`   | `import "std/http" as http` | `get`, `get_timeout`, `post` (offline-safe demo; `get`/`post` use 10s timeout) |
 | `sort`   | `import "std/sort" as sort` | `sorted`, `sort_by` (comparator must return int)                         |

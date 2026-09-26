@@ -15,15 +15,15 @@ type (
 )
 
 type Parser struct {
-	l 				*lx.Lexer
-	
-	errors			[]string
-	
-	curToken 		tk.Token
-	peekToken 		tk.Token
+	l *lx.Lexer
 
-	prefixParseFn 	map[tk.TokenType]prefixParseFn
-	infixParseFn  	map[tk.TokenType]infixParseFn
+	errors []string
+
+	curToken  tk.Token
+	peekToken tk.Token
+
+	prefixParseFn map[tk.TokenType]prefixParseFn
+	infixParseFn  map[tk.TokenType]infixParseFn
 }
 
 const (
@@ -41,29 +41,30 @@ const (
 	PROPERTY
 )
 
-var precedences = map[tk.TokenType]int {
-	tk.EQ: 			EQUALS,
-	tk.NOTEQ:  		EQUALS,
-	tk.LAND: 		AND,
-	tk.LOR: 		OR,
-	tk.LT: 			LESSGREATER,
-	tk.GT: 			LESSGREATER,
-	tk.GTEQ: 		LESSGREATER,
-	tk.LTEQ: 		LESSGREATER,
-	tk.PLUS: 		SUM,
-	tk.MINUS: 		SUM,
-	tk.SLASH: 		PRODUCT,
-	tk.ASTERISK: 	PRODUCT,
-	tk.LPAREN:		CALL,
-	tk.INC:			CALL,
-	tk.DEC:			CALL,
-	tk.LBRACKET:	INDEX,
-	tk.DOT: 		PROPERTY,
+var precedences = map[tk.TokenType]int{
+	tk.EQ:       EQUALS,
+	tk.NOTEQ:    EQUALS,
+	tk.LAND:     AND,
+	tk.LOR:      OR,
+	tk.LT:       LESSGREATER,
+	tk.GT:       LESSGREATER,
+	tk.GTEQ:     LESSGREATER,
+	tk.LTEQ:     LESSGREATER,
+	tk.PLUS:     SUM,
+	tk.MINUS:    SUM,
+	tk.SLASH:    PRODUCT,
+	tk.ASTERISK: PRODUCT,
+	tk.MOD:      PRODUCT,
+	tk.LPAREN:   CALL,
+	tk.INC:      CALL,
+	tk.DEC:      CALL,
+	tk.LBRACKET: INDEX,
+	tk.DOT:      PROPERTY,
 }
 
 func New(l *lx.Lexer) *Parser {
 	p := &Parser{
-		l: l,
+		l:      l,
 		errors: []string{},
 	}
 
@@ -79,6 +80,7 @@ func New(l *lx.Lexer) *Parser {
 	p.registerInfix(tk.MINUS, p.parseInfixExpression)
 	p.registerInfix(tk.SLASH, p.parseInfixExpression)
 	p.registerInfix(tk.ASTERISK, p.parseInfixExpression)
+	p.registerInfix(tk.MOD, p.parseInfixExpression)
 	p.registerInfix(tk.EQ, p.parseInfixExpression)
 	p.registerInfix(tk.NOTEQ, p.parseInfixExpression)
 	p.registerInfix(tk.LAND, p.parseInfixExpression)
@@ -98,9 +100,9 @@ func New(l *lx.Lexer) *Parser {
 	p.registerPrefix(tk.NULL, p.parseNullLiteral)
 
 	p.registerPrefix(tk.LPAREN, p.parseGroupedExpression)
-	
+
 	p.registerPrefix(tk.IF, p.parseIfExpression)
-	
+
 	p.registerPrefix(tk.FUNCTION, p.parseFunctionLiteral)
 
 	p.registerPrefix(tk.STRING, p.parseStringLiteral)
@@ -114,7 +116,7 @@ func New(l *lx.Lexer) *Parser {
 	p.registerPrefix(tk.LBRACKET, p.parseArrayLiteral)
 
 	p.registerPrefix(tk.LBRACE, p.parseHashLiteral)
-	
+
 	p.nextToken()
 	p.nextToken()
 
@@ -149,7 +151,7 @@ func precedenceOf(t tk.TokenType) (int, bool) {
 		return LESSGREATER, true
 	case tk.PLUS, tk.MINUS:
 		return SUM, true
-	case tk.SLASH, tk.ASTERISK:
+	case tk.SLASH, tk.ASTERISK, tk.MOD:
 		return PRODUCT, true
 	case tk.LPAREN, tk.INC, tk.DEC:
 		return CALL, true
@@ -239,7 +241,8 @@ func (p *Parser) parseStatement() ast.Statement {
 			}
 			return stmt
 		} else if p.peekTokenIs(tk.INCASSIGN) || p.peekTokenIs(tk.DECDASSIGN) ||
-			p.peekTokenIs(tk.MLTASSIGN) || p.peekTokenIs(tk.DIVASSIGN) {
+			p.peekTokenIs(tk.MLTASSIGN) || p.peekTokenIs(tk.DIVASSIGN) ||
+			p.peekTokenIs(tk.MODASSIGN) {
 			if isPublic {
 				p.errors = append(p.errors, "pub can only be applied to let or := definitions")
 				return nil
@@ -336,7 +339,7 @@ func (p *Parser) parseAssignCharStatement() *ast.AssignStatement {
 
 	p.nextToken()
 	stmt.Value = p.parseExpression(LOWEST)
-	
+
 	if fl, ok := stmt.Value.(*ast.FunctionLiteral); ok {
 		if ident, ok := stmt.Left.(*ast.Identifier); ok {
 			fl.Name = ident.Value
@@ -346,7 +349,7 @@ func (p *Parser) parseAssignCharStatement() *ast.AssignStatement {
 	if p.peekTokenIs(tk.SEMICOLON) {
 		p.nextToken()
 	}
-	
+
 	return stmt
 }
 
@@ -362,11 +365,11 @@ func (p *Parser) parseAssignStatement() *ast.AssignStatement {
 
 	p.nextToken()
 	stmt.Value = p.parseExpression(LOWEST)
-	
+
 	if p.peekTokenIs(tk.SEMICOLON) {
 		p.nextToken()
 	}
-	
+
 	return stmt
 }
 
@@ -455,7 +458,7 @@ func (p *Parser) parseIndexAssignStatement(idx *ast.IndexExpression) *ast.Assign
 
 func isAssignOp(tok tk.TokenType) bool {
 	switch tok {
-	case tk.ASSIGN, tk.INCASSIGN, tk.DECDASSIGN, tk.MLTASSIGN, tk.DIVASSIGN:
+	case tk.ASSIGN, tk.INCASSIGN, tk.DECDASSIGN, tk.MLTASSIGN, tk.DIVASSIGN, tk.MODASSIGN:
 		return true
 	default:
 		return false
@@ -548,7 +551,7 @@ func (p *Parser) parseFloatLiteral() ast.Expression {
 func (p *Parser) parsePrefixExpression() ast.Expression {
 	expression := &ast.PrefixExpression{
 		Token: p.curToken,
-		Opt: p.curToken.Literal,
+		Opt:   p.curToken.Literal,
 	}
 
 	p.nextToken()
@@ -561,8 +564,8 @@ func (p *Parser) parsePrefixExpression() ast.Expression {
 func (p *Parser) parsePostfixExpression(left ast.Expression) ast.Expression {
 	expression := &ast.PostfixExpression{
 		Token: p.curToken,
-		Opt: p.curToken.Literal,
-		Left: left,
+		Opt:   p.curToken.Literal,
+		Left:  left,
 	}
 
 	return expression
@@ -571,10 +574,10 @@ func (p *Parser) parsePostfixExpression(left ast.Expression) ast.Expression {
 func (p *Parser) parseInfixExpression(left ast.Expression) ast.Expression {
 	expression := &ast.InfixExpression{
 		Token: p.curToken,
-		Opt: p.curToken.Literal,
-		Left: left,
+		Opt:   p.curToken.Literal,
+		Left:  left,
 	}
-	
+
 	precedence := p.curPrecedence()
 	p.nextToken()
 	expression.Right = p.parseExpression(precedence)
@@ -767,7 +770,7 @@ func (p *Parser) parseFunctionLiteral() ast.Expression {
 	if !p.expectPeek(tk.LBRACE) {
 		return nil
 	}
-	
+
 	fl.Body = p.parseBlockStatement()
 
 	return fl
@@ -834,7 +837,7 @@ func (p *Parser) parseExpressionList(endTok tk.TokenType) []ast.Expression {
 		p.nextToken()
 		return elements
 	}
-	
+
 	p.nextToken()
 	elements = append(elements, p.parseExpression(LOWEST))
 
@@ -895,7 +898,7 @@ func (p *Parser) parseHashLiteral() ast.Expression {
 	if !p.expectPeek(tk.RBRACE) {
 		return nil
 	}
-	
+
 	return hash
 }
 
@@ -970,7 +973,7 @@ func (p *Parser) parseFromImportStatement() *ast.ImportStatement {
 
 		return stmt
 	}
-	
+
 	stmt.Names = make([]*ast.Identifier, 0, 8)
 
 	if !p.expectPeek(tk.IDENT) {
@@ -1015,8 +1018,3 @@ func (p *Parser) expectPeek(tok tk.TokenType) bool {
 		return false
 	}
 }
-
-
-
-
-

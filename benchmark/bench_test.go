@@ -23,6 +23,8 @@ const (
 	benchHashInsertSrc = "let h = {}; for (i := 0; i < 100; i++) { h = insert(h, i, i * 2); }; len(h);"
 
 	benchStringConcatSrc = `let s = ""; for (i := 0; i < 100; i++) { s = s + "x"; }; len(s);`
+
+	benchMatrixCellSrc = "let g = matrix(48, 120, make(48*120, 1)); let s = 0; let rows = len(g); let cols = len(g[0]); for (r := 0; r < rows; r++) { for (c := 0; c < cols; c++) { s = s + g[r][c]; } }; s;"
 )
 
 // benchSink prevents the compiler from eliminating benchmarked work.
@@ -220,4 +222,26 @@ func BenchmarkStringConcatVM(b *testing.B) {
 // BenchmarkStringConcatEval measures repeated string "+" in a loop on the evaluator.
 func BenchmarkStringConcatEval(b *testing.B) {
 	benchmarkEval(b, benchStringConcatSrc, false)
+}
+
+// BenchmarkMatrixCell covers both engines via sub-benchmarks; skips gracefully
+// if the VM does not support builtins used by the canvas loop.
+func BenchmarkMatrixCell(b *testing.B) {
+	b.ReportAllocs()
+	b.Run("vm", func(b *testing.B) {
+		benchmarkVM(b, benchMatrixCellSrc, false)
+	})
+	b.Run("eval", func(b *testing.B) {
+		benchmarkEval(b, benchMatrixCellSrc, false)
+	})
+}
+
+// BenchmarkMatrixCellVM measures a 48x120 matrix double-index read loop on the VM.
+func BenchmarkMatrixCellVM(b *testing.B) {
+	benchmarkVM(b, benchMatrixCellSrc, false)
+}
+
+// BenchmarkMatrixCellEval measures a 48x120 matrix double-index read loop on the evaluator.
+func BenchmarkMatrixCellEval(b *testing.B) {
+	benchmarkEval(b, benchMatrixCellSrc, false)
 }
