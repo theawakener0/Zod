@@ -1,0 +1,68 @@
+import "std/math" as math
+
+// Capture the len builtin before pub len below shadows it in module scope.
+let alen = len
+
+pub add := fn(a, b) {
+  let out = []
+  for (i := 0; i < alen(a); i++) {
+    out = __arr_push(out, a[i] + b[i])
+  }
+  return out
+}
+
+pub sub := fn(a, b) {
+  let out = []
+  for (i := 0; i < alen(a); i++) {
+    out = __arr_push(out, a[i] - b[i])
+  }
+  return out
+}
+
+pub scale := fn(v, s) {
+  let out = []
+  for (i := 0; i < alen(v); i++) {
+    out = __arr_push(out, v[i] * s)
+  }
+  return out
+}
+
+pub dot := fn(a, b) {
+  let s = 0.0
+  for (i := 0; i < alen(a); i++) {
+    s = s + a[i] * b[i]
+  }
+  return s
+}
+
+pub len := fn(v) {
+  return math.sqrt(dot(v, v))
+}
+
+pub normalize := fn(v) {
+  let l = len(v)
+  if (l == 0) {
+    return error("normalize of zero vector")
+  }
+  return scale(v, 1.0 / l)
+}
+
+pub cross := fn(a, b) {
+  let out = []
+  out = __arr_push(out, a[1] * b[2] - a[2] * b[1])
+  out = __arr_push(out, a[2] * b[0] - a[0] * b[2])
+  out = __arr_push(out, a[0] * b[1] - a[1] * b[0])
+  return out
+}
+
+pub dist := fn(a, b) {
+  return len(sub(a, b))
+}
+
+pub lerp := fn(a, b, t) {
+  let out = []
+  for (i := 0; i < alen(a); i++) {
+    out = __arr_push(out, a[i] + (b[i] - a[i]) * t)
+  }
+  return out
+}

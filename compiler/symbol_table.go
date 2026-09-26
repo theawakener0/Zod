@@ -134,9 +134,6 @@ func (s *SymbolTable) isScopedGlobal(name string) bool {
 
 func (s *SymbolTable) DefineIfNotExists(name string) Symbol {
 	if symbol, ok := s.store[name]; ok {
-		// Builtins must be shadowable (e.g. stdlib `pub push` must
-		// override builtin `push`). Otherwise top-level `:=` and
-		// imports of colliding names silently keep the builtin in VM.
 		if symbol.Scope != FunctionScope && symbol.Scope != BuiltinScope {
 			return symbol
 		}

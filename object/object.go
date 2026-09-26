@@ -208,9 +208,6 @@ func (s *String) Inspect() string {
 	return s.Value
 }
 func (s *String) HashKey() HashKey {
-	// Manual FNV-1a 64 over the string bytes. Identical to
-	// fnv.New64a + Write([]byte(s.Value)) but avoids allocating
-	// both the hasher and the []byte copy of the string.
 	const (
 		offset64 = 14695981039346656037
 		prime64  = 1099511628211
@@ -333,7 +330,6 @@ func (h *Hash) Inspect() string {
 	pairs := make([]string, 0, len(h.Pairs))
 	if len(h.Order) == 0 && len(h.Pairs) > 0 {
 		// Fallback for hashes built without Order 
-		// Sort by rendered key for deterministic output.
 		rendered := make([]string, 0, len(h.Pairs))
 		byRendered := make(map[string]HashPair, len(h.Pairs))
 		for _, pair := range h.Pairs {
@@ -455,10 +451,6 @@ func (s *ImportSpec) Inspect() string {
 	return "ImportSpec(" + s.Path + " kind=" + strconv.Itoa(s.Kind) + ")"
 }
 
-// Small-integer cache. Integers are immutable (no code mutates
-// Integer.Value in place; verified across evaluator/vm/compiler),
-// and integer equality is always by value, never pointer identity,
-// so sharing instances for common small values is safe.
 const (
 	smallIntMin = 0
 	smallIntMax = 256
@@ -472,8 +464,6 @@ func init() {
 	}
 }
 
-// NewInteger returns a cached *Integer for small values and a fresh
-// one otherwise. Output is indistinguishable from &Integer{Value: v}.
 func NewInteger(v int64) *Integer {
 	if v >= smallIntMin && v <= smallIntMax {
 		return smallInts[v]

@@ -1,0 +1,73 @@
+// anim.zd — general motion helpers: easings, frame pacing, fps counter.
+//
+// Easing fns map t in [0, 1] to [0, 1]. frame_pacer keeps a fixed frame
+// budget using std/time.now_ms plus a sleep-remainder wait. fps_counter
+// tracks a rolling frames-per-second estimate over 1s windows.
+
+import "std/time" as time
+import "std/math" as math
+
+pub linear := fn(t) {
+  return t
+}
+
+pub ease_in := fn(t) {
+  return t * t
+}
+
+pub ease_out := fn(t) {
+  let u = 1 - t
+  return 1 - u * u
+}
+
+pub ease_in_out := fn(t) {
+  if (t < 0.5) {
+    return 4 * t * t * t
+  }
+  let u = 0 - 2 * t + 2
+  return 1 - u * u * u / 2
+}
+
+pub clamp01 := fn(t) {
+  return math.clamp(t, 0, 1)
+}
+
+pub frame_pacer := fn(fps) {
+  if (fps <= 0) {
+    return error("frame_pacer fps must be positive")
+  }
+  let interval = int(1000 / fps)
+  if (interval < 1) {
+    interval = 1
+  }
+  return {"interval": interval, "next": time.now_ms() + interval}
+}
+
+pub pacer_wait := fn(p) {
+  let t = time.now_ms()
+  let rest = p["next"] - t
+  if (rest > 0) {
+    time.sleep(rest)
+  }
+  if (rest < 0 - p["interval"]) {
+    p["next"] = t + p["interval"]
+  } else {
+    p["next"] = p["next"] + p["interval"]
+  }
+  return p
+}
+
+pub fps_counter := fn() {
+  return {"count": 0, "start": time.now_ms(), "fps": 0}
+}
+
+pub fps_tick := fn(f) {
+  f["count"] = f["count"] + 1
+  let e = time.now_ms() - f["start"]
+  if (e >= 1000) {
+    f["fps"] = f["count"] * 1000 / e
+    f["count"] = 0
+    f["start"] = time.now_ms()
+  }
+  return f["fps"]
+}

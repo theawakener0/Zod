@@ -1,0 +1,167 @@
+// canvas.zd — cell-buffer canvas for terminal games, charts and 2D scenes.
+//
+// A canvas is a hash {"w": w, "h": h, "cells": cells} where cells is nested
+// plain arrays: cells[y][x] is [ch, fg, bg]. ch is a one-char string, fg/bg
+// are null (no color) or [r, g, b] integer triples (0-255) rendered as
+// 24-bit ANSI escapes (no std/color dependency).
+//
+// Pure Zod, no I/O: render() returns one string (rows joined with "\n").
+// The caller batches output itself, e.g. (see examples/demo/game_of_life.zd):
+//   printf("%s%s%s%s", SYNC_BEGIN, HOME, canvas.render(c), SYNC_END)
+
+pub new := fn(w, h) {
+  let cells = []
+  for (y := 0; y < h; y++) {
+    let row = []
+    for (x := 0; x < w; x++) {
+      row = push(row, [" ", null, null])
+    }
+    cells = push(cells, row)
+  }
+  return {"w": w, "h": h, "cells": cells}
+}
+
+pub clear := fn(c) {
+  for (y := 0; y < c["h"]; y++) {
+    for (x := 0; x < c["w"]; x++) {
+      c["cells"][y][x] = [" ", null, null]
+    }
+  }
+  return c
+}
+
+pub in_bounds := fn(c, x, y) {
+  if (x < 0) {
+    return false
+  }
+  if (y < 0) {
+    return false
+  }
+  if (x >= c["w"]) {
+    return false
+  }
+  if (y >= c["h"]) {
+    return false
+  }
+  return true
+}
+
+pub set := fn(c, x, y, ch, fg, bg) {
+  if (!in_bounds(c, x, y)) {
+    return c
+  }
+  c["cells"][y][x] = [ch, fg, bg]
+  return c
+}
+
+pub get := fn(c, x, y) {
+  if (!in_bounds(c, x, y)) {
+    return null
+  }
+  return c["cells"][y][x]
+}
+
+pub line := fn(c, x0, y0, x1, y1, ch, fg, bg) {
+  let dx = x1 - x0
+  if (dx < 0) {
+    dx = -dx
+  }
+  let dy = y1 - y0
+  if (dy < 0) {
+    dy = -dy
+  }
+  let sx = 1
+  if (x0 > x1) {
+    sx = -1
+  }
+  let sy = 1
+  if (y0 > y1) {
+    sy = -1
+  }
+  let err = dx - dy
+  let x = x0
+  let y = y0
+  loop {
+    set(c, x, y, ch, fg, bg)
+    if (x == x1 && y == y1) {
+      break
+    }
+    let e2 = err * 2
+    if (e2 > 0 - dy) {
+      err = err - dy
+      x = x + sx
+    }
+    if (e2 < dx) {
+      err = err + dx
+      y = y + sy
+    }
+  }
+  return c
+}
+
+pub rect := fn(c, x, y, w, h, ch, fg, bg) {
+  if (w <= 0) {
+    return c
+  }
+  if (h <= 0) {
+    return c
+  }
+  for (i := 0; i < w; i++) {
+    set(c, x + i, y, ch, fg, bg)
+    set(c, x + i, y + h - 1, ch, fg, bg)
+  }
+  for (j := 0; j < h; j++) {
+    set(c, x, y + j, ch, fg, bg)
+    set(c, x + w - 1, y + j, ch, fg, bg)
+  }
+  return c
+}
+
+pub fill := fn(c, x, y, w, h, ch, fg, bg) {
+  if (w <= 0) {
+    return c
+  }
+  if (h <= 0) {
+    return c
+  }
+  for (j := 0; j < h; j++) {
+    for (i := 0; i < w; i++) {
+      set(c, x + i, y + j, ch, fg, bg)
+    }
+  }
+  return c
+}
+
+pub text := fn(c, x, y, s) {
+  for (i := 0; i < len(s); i++) {
+    set(c, x + i, y, __str_slice(s, i, i + 1), null, null)
+  }
+  return c
+}
+
+pub render := fn(c) {
+  let rows = []
+  for (y := 0; y < c["h"]; y++) {
+    let row = ""
+    for (x := 0; x < c["w"]; x++) {
+      let cell = c["cells"][y][x]
+      let ch = cell[0]
+      let fg = cell[1]
+      let bg = cell[2]
+      if (fg == null && bg == null) {
+        row = row + ch
+      } else {
+        let seq = ""
+        if (fg != null) {
+          seq = seq + "\x1b[38;2;" + string(fg[0]) + ";" + string(fg[1]) + ";" + string(fg[2]) + "m"
+        }
+        if (bg != null) {
+          seq = seq + "\x1b[48;2;" + string(bg[0]) + ";" + string(bg[1]) + ";" + string(bg[2]) + "m"
+        }
+        row = row + seq + ch + "\x1b[0m"
+      }
+    }
+    rows = push(rows, row)
+  }
+  return __str_join(rows, "\n")
+}

@@ -49,3 +49,88 @@ pub read_key := fn() {
 pub has_input := fn() {
   return __has_input()
 }
+
+pub hide_cursor := fn() {
+  return "\x1b[?25l"
+}
+
+pub show_cursor := fn() {
+  return "\x1b[?25h"
+}
+
+pub home := fn() {
+  return "\x1b[H"
+}
+
+pub move := fn(x, y) {
+  return "\x1b[" + string(int(y)) + ";" + string(int(x)) + "H"
+}
+
+pub bold := fn() {
+  return "\x1b[1m"
+}
+
+pub dim := fn() {
+  return "\x1b[2m"
+}
+
+pub reset := fn() {
+  return "\x1b[0m"
+}
+
+pub sync_begin := fn() {
+  return "\x1b[?2026h"
+}
+
+pub sync_end := fn() {
+  return "\x1b[?2026l"
+}
+
+pub key_name := fn(k) {
+  let key = string(k)
+  if (key == "\x1b[A" || key == "w" || key == "W") {
+    return "up"
+  }
+  if (key == "\x1b[B" || key == "s" || key == "S") {
+    return "down"
+  }
+  if (key == "\x1b[C" || key == "d" || key == "D") {
+    return "right"
+  }
+  if (key == "\x1b[D" || key == "a" || key == "A") {
+    return "left"
+  }
+  if (key == " ") {
+    return "space"
+  }
+  if (key == "\r" || key == "\n") {
+    return "enter"
+  }
+  if (key == "\x1b") {
+    return "esc"
+  }
+  if (key == "q" || key == "Q") {
+    return "q"
+  }
+  return key
+}
+
+pub poll_key := fn() {
+  if (__has_input()) {
+    return __read_key()
+  }
+  return null
+}
+
+pub wait_key := fn(timeout_ms) {
+  let start = __now_ms()
+  loop {
+    if (__has_input()) {
+      return __read_key()
+    }
+    if (__now_ms() - start >= timeout_ms) {
+      return null
+    }
+    __sleep_ms(5)
+  }
+}

@@ -1,0 +1,98 @@
+// color.zd - pure-Zod 24-bit truecolor helpers (no I/O).
+// Colors are [r, g, b] arrays with channels in 0-255.
+
+pub paint := fn(prefix, r, g, b) {
+  return "\x1b[" + string(prefix) + ";2;" + string(int(r)) + ";" + string(int(g)) + ";" + string(int(b)) + "m"
+}
+
+pub fg := fn(r, g, b, s) {
+  return paint("38", r, g, b) + string(s) + "\x1b[0m"
+}
+
+pub bg := fn(r, g, b, s) {
+  return paint("48", r, g, b) + string(s) + "\x1b[0m"
+}
+
+pub to_rgb := fn(h) {
+  let s = string(h)
+  if (__str_slice(s, 0, 1) == "#") {
+    s = __str_slice(s, 1, len(s))
+  }
+  if (len(s) == 3) {
+    s = __str_slice(s, 0, 1) + __str_slice(s, 0, 1) + __str_slice(s, 1, 2) + __str_slice(s, 1, 2) + __str_slice(s, 2, 3) + __str_slice(s, 2, 3)
+  }
+  return [int("0x" + __str_slice(s, 0, 2)), int("0x" + __str_slice(s, 2, 4)), int("0x" + __str_slice(s, 4, 6))]
+}
+
+pub hex := fn(h, s) {
+  let c = to_rgb(h)
+  return fg(c[0], c[1], c[2], s)
+}
+
+pub lerp := fn(a, b, t) {
+  let tt = float(t)
+  if (tt < 0.0) {
+    tt = 0.0
+  }
+  if (tt > 1.0) {
+    tt = 1.0
+  }
+  let out = []
+  for (i := 0; i < 3; i++) {
+    out = push(out, int(float(a[i]) + (float(b[i]) - float(a[i])) * tt + 0.5))
+  }
+  return out
+}
+
+pub mix := fn(a, b, t) {
+  return lerp(a, b, t)
+}
+
+pub ramp := fn(t, stops) {
+  let n = len(stops)
+  if (n == 0) {
+    return null
+  }
+  if (n == 1) {
+    return stops[0]
+  }
+  let tt = float(t)
+  if (tt <= 0.0) {
+    return stops[0]
+  }
+  if (tt >= 1.0) {
+    return stops[n - 1]
+  }
+  let pos = tt * float(n - 1)
+  let i = int(pos)
+  return lerp(stops[i], stops[i + 1], pos - float(i))
+}
+
+pub strip_ansi := fn(s) {
+  let text = string(s)
+  let out = ""
+  let n = len(text)
+  let i = 0
+  let letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+  for (i < n) {
+    let ch = __str_slice(text, i, i + 1)
+    if (ch == "\x1b") {
+      if (__str_slice(text, i + 1, i + 2) == "[") {
+        i = i + 2
+        for (i < n) {
+          let c = __str_slice(text, i, i + 1)
+          i = i + 1
+          if (__str_index(letters, c) != -1) {
+            break
+          }
+        }
+      } else {
+        i = i + 1
+      }
+    } else {
+      out = out + ch
+      i = i + 1
+    }
+  }
+  return out
+}

@@ -21,7 +21,7 @@ const Banner = `
                                             ▀▀▀  
 `
 
-var version = "v0.6.0"
+var version = "v0.6.3"
 
 func main() {
 	if len(os.Args) > 1 && (os.Args[1] == "-v" || os.Args[1] == "--version") {
@@ -50,7 +50,6 @@ func main() {
 	}
 
 	if fileIdx == 2 {
-		// `zod --eng=<x>` with no file: REPL with explicit engine.
 		user, err := user.Current()
 		if err != nil {
 			panic(err)

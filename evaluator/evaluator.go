@@ -250,11 +250,6 @@ func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
 		}
 		return &obj.Array{Elements: elements}
 	case *ast.IndexExpression:
-		// Fast path: m[i][j] reads on a matrix fetch the cell directly,
-		// avoiding the per-cell row-copy allocation of
-		// evalMatrixIndexExpression. Single m[i] still returns a copied
-		// Array (see evalMatrixIndexExpression), so `let r = m[0]; r[0] = 9`
-		// keeps working without mutating the matrix.
 		if inner, ok := n.Left.(*ast.IndexExpression); ok {
 			return evalNestedIndexExpression(inner, n.Index, env)
 		}

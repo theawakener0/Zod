@@ -40,9 +40,6 @@ func (l *Lexer) peekChar() byte {
 }
 
 func newToken(tokenType tk.TokenType, ch byte) tk.Token {
-	// Fast path: single-char literals are interned constants (no alloc).
-	// Slicing l.input would also avoid string(byte) alloc, but constants
-	// avoid even the slice header cost for the common case.
 	switch tokenType {
 	case tk.ASSIGN:
 		return tk.Token{Type: tokenType, Literal: "="}
@@ -334,7 +331,6 @@ func (l *Lexer) skipWhitespaceAndComments() bool {
 			crossedNewline = true
 		}
 
-		// Hoist peekChar(): single call per iteration instead of 2-3.
 		var peek byte
 		if l.ch == '/' {
 			peek = l.peekChar()

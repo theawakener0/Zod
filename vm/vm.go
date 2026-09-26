@@ -1212,8 +1212,6 @@ func (vm *VM) executeMatrixCell(matObj, rowIdxObj, colIdxObj obj.Object) error {
 		}
 		return vm.push(row[colIdx.Value])
 	}
-	// Generic double index (arrays of arrays, hashes, ...): emulate two
-	// nested OpIndex so semantics stay identical to the old bytecode.
 	if err := vm.executeIndexExpression(matObj, rowIdxObj); err != nil {
 		return err
 	}

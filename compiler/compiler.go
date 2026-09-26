@@ -1186,9 +1186,6 @@ func (c *Compiler) compileImportStatement(node *ast.ImportStatement) error {
 		specNames := []string{}
 		targets := []int{}
 		for _, n := range names {
-			// Imports must shadow builtins (e.g. `keys`, `println`).
-			// DefineIfNotExists would keep the BUILTIN symbol and the
-			// VM would silently keep calling the old builtin.
 			sym := c.symbolTable.Define(n)
 			if c.allSymbols == nil {
 				c.allSymbols = map[string]int{}
@@ -1207,7 +1204,6 @@ func (c *Compiler) compileImportStatement(node *ast.ImportStatement) error {
 		names := []string{}
 		targets := []int{}
 		for _, id := range node.Names {
-			// See above: imports shadow builtins.
 			sym := c.symbolTable.Define(id.Value)
 			if c.allSymbols == nil {
 				c.allSymbols = map[string]int{}

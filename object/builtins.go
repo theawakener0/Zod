@@ -1900,9 +1900,9 @@ var Builtins = []struct {
 			return newError("could not determine terminal height: not a TTY")
 		},
 	}},
-	// NOTE: __read_key and __has_input read the raw stdin fd directly,
-	// bypassing getStdinReader()'s buffered bufio.Reader, so buffered line
-	// input and raw key polling never share (or deadlock on) one buffer.
+	/* NOTE: __read_key and __has_input read the raw stdin fd directly,
+	 bypassing getStdinReader()'s buffered bufio.Reader, so buffered line
+	 input and raw key polling never share (or deadlock on) one buffer.*/
 	{"__read_key", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) != 0 {
@@ -1983,10 +1983,6 @@ var stdinReader *bufio.Reader
 
 const maxHTTPBody = 5 * 1024 * 1024
 
-// Terminal helpers (Linux only; no new dependencies).
-// termios is manipulated as a raw byte buffer to avoid C struct padding
-// mismatches. Linux layout: Lflag u32 LE at byte 12, line discipline at 16,
-// Cc[0..31] at bytes 17..48 with VTIME=Cc[5] and VMIN=Cc[6].
 const (
 	termiosSize = 64
 	termLflag   = 12
@@ -2012,8 +2008,6 @@ func termWinsizeTry(fd uintptr) (termWinsize, bool) {
 	return ws, true
 }
 
-// termWinsizeDim returns terminal cols (width=true) or rows via ioctl on
-// stdout then stdin, or 0 when unavailable.
 func termWinsizeDim(width bool) int {
 	for _, f := range []uintptr{os.Stdout.Fd(), os.Stdin.Fd()} {
 		if ws, ok := termWinsizeTry(f); ok {
@@ -2215,8 +2209,6 @@ func newError(format string, a ...any) *Error {
 }
 
 func GetBuiltinByName(name string) *Builtin {
-	// O(1) map lookup; linear scan kept as fallback for compat
-	// (e.g. if Builtins were appended to after init).
 	if b, ok := builtinIndex[name]; ok {
 		return b
 	}

@@ -137,8 +137,6 @@ func (p *Parser) nextToken() {
 	p.peekToken = p.l.NextToken()
 }
 
-// precedenceOf is the switch fast path shared by peek/curPrecedence and
-// the parseExpression hot loop: zero map hashes on the common operators.
 func precedenceOf(t tk.TokenType) (int, bool) {
 	switch t {
 	case tk.LOR:
