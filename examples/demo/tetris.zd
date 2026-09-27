@@ -1,0 +1,552 @@
+// tetris.zd — full playable Tetris for the Zod terminal (script mode).
+//
+// 10x20 board, 7-bag randomizer, CW/CCW rotation with wall kicks,
+// ghost piece, next preview, hold, line flash, levels, scoring,
+// persistent high score, menu, and a deterministic --auto demo mode.
+
+import "std/term" as term
+import "std/canvas" as canvas
+import "std/color" as color
+import "std/rand" as rand
+import "std/time" as time
+import "std/anim" as anim
+import "std/math" as math
+import "std/array" as array
+import "std/str" as str
+import "std/fmt" as fmt
+import "std/fs" as fs
+import "std/os" as os
+
+let CLR = "\x1b[2J"
+let HOME = term.home()
+let HIDE = term.hide_cursor()
+let SHOW = term.show_cursor()
+let SYNC_BEGIN = term.sync_begin()
+let SYNC_END = term.sync_end()
+
+let BW = 10
+let BH = 20
+let VW = 44
+let VH = 22
+let HS_PATH = "./.tetris_highscore"
+
+// Pieces I/O/T/S/Z/J/L as 4x4 cell lists.
+let SHAPES = [
+  [[0, 1], [1, 1], [2, 1], [3, 1]],
+  [[1, 0], [2, 0], [1, 1], [2, 1]],
+  [[1, 0], [0, 1], [1, 1], [2, 1]],
+  [[1, 0], [2, 0], [0, 1], [1, 1]],
+  [[0, 0], [1, 0], [1, 1], [2, 1]],
+  [[0, 0], [0, 1], [1, 1], [2, 1]],
+  [[2, 0], [0, 1], [1, 1], [2, 1]]
+]
+let PNAMES = ["I", "O", "T", "S", "Z", "J", "L"]
+let PCOLORS = [
+  [0, 255, 255],
+  [255, 255, 0],
+  [190, 80, 255],
+  [0, 230, 0],
+  [255, 60, 60],
+  [90, 140, 255],
+  [255, 170, 0]
+]
+let KICKS = [[0, 0], [-1, 0], [1, 0], [0, -1], [-2, 0], [2, 0]]
+
+let new_state = fn(high) {
+  let b = []
+  for (y := 0; y < BH; y++) {
+    let row = []
+    for (x := 0; x < BW; x++) {
+      row = push(row, 0)
+    }
+    b = push(b, row)
+  }
+  return {"board": b, "bag": [], "cur": 0, "cells": [], "px": 3, "py": 0,
+    "next": [], "hold": -1, "hold_used": false, "score": 0, "lines": 0,
+    "level": 1, "over": false, "quit": false, "paused": false,
+    "flash": 0, "flash_rows": [], "last_fall": time.now_ms(), "high": high}
+}
+
+let collides = fn(board, cells, px, py) {
+  for (i := 0; i < len(cells); i++) {
+    let cx = px + cells[i][0]
+    let cy = py + cells[i][1]
+    if (cx < 0) { return true }
+    if (cx >= BW) { return true }
+    if (cy >= BH) { return true }
+    if (cy >= 0) {
+      if (board[cy][cx] != 0) { return true }
+    }
+  }
+  false
+}
+
+let rot_cw = fn(cells) {
+  let out = []
+  for (i := 0; i < len(cells); i++) {
+    out = push(out, [3 - cells[i][1], cells[i][0]])
+  }
+  out
+}
+
+let rot_ccw = fn(cells) {
+  let out = []
+  for (i := 0; i < len(cells); i++) {
+    out = push(out, [cells[i][1], 3 - cells[i][0]])
+  }
+  out
+}
+
+let refill_bag = fn(st) {
+  if (len(st["bag"]) == 0) {
+    st["bag"] = rand.shuffle(array.range(0, 7))
+  }
+}
+
+let draw_piece = fn(st) {
+  refill_bag(st)
+  let p = st["bag"][0]
+  if (len(st["bag"]) == 1) {
+    st["bag"] = []
+  } else {
+    st["bag"] = array.slice(st["bag"], 1, len(st["bag"]))
+  }
+  p
+}
+
+let refill_next = fn(st) {
+  for (len(st["next"]) < 3) {
+    st["next"] = push(st["next"], draw_piece(st))
+  }
+}
+
+let spawn_piece = fn(st) {
+  refill_next(st)
+  st["cur"] = st["next"][0]
+  if (len(st["next"]) == 1) {
+    st["next"] = []
+  } else {
+    st["next"] = array.slice(st["next"], 1, len(st["next"]))
+  }
+  refill_next(st)
+  st["cells"] = SHAPES[st["cur"]]
+  st["px"] = 3
+  st["py"] = 0
+  st["hold_used"] = false
+  st["last_fall"] = time.now_ms()
+  if (collides(st["board"], st["cells"], 3, 0)) {
+    st["over"] = true
+  }
+}
+
+let try_move = fn(st, dx, dy) {
+  if (!collides(st["board"], st["cells"], st["px"] + dx, st["py"] + dy)) {
+    st["px"] = st["px"] + dx
+    st["py"] = st["py"] + dy
+    return true
+  }
+  false
+}
+
+let try_rotate = fn(st, dir) {
+  if (st["cur"] == 1) { return true }
+  let nc = rot_cw(st["cells"])
+  if (dir < 0) { nc = rot_ccw(st["cells"]) }
+  for (i := 0; i < len(KICKS); i++) {
+    let nx = st["px"] + KICKS[i][0]
+    let ny = st["py"] + KICKS[i][1]
+    if (!collides(st["board"], nc, nx, ny)) {
+      st["cells"] = nc
+      st["px"] = nx
+      st["py"] = ny
+      return true
+    }
+  }
+  false
+}
+
+let ghost_y = fn(st) {
+  let g = st["py"]
+  for (!collides(st["board"], st["cells"], st["px"], g + 1)) {
+    g = g + 1
+  }
+  g
+}
+
+let full_rows = fn(board) {
+  let rows = []
+  for (y := 0; y < BH; y++) {
+    let full = true
+    for (x := 0; x < BW; x++) {
+      if (board[y][x] == 0) { full = false }
+    }
+    if (full) { rows = push(rows, y) }
+  }
+  rows
+}
+
+let add_score = fn(st, n) {
+  let base = 800
+  if (n == 1) { base = 100 }
+  elseif (n == 2) { base = 300 }
+  elseif (n == 3) { base = 500 }
+  st["score"] = st["score"] + base * st["level"]
+  st["lines"] = st["lines"] + n
+  st["level"] = int(st["lines"] / 10) + 1
+}
+
+let do_lock = fn(st) {
+  for (i := 0; i < len(st["cells"]); i++) {
+    let cx = st["px"] + st["cells"][i][0]
+    let cy = st["py"] + st["cells"][i][1]
+    if (cy >= 0 && cy < BH && cx >= 0 && cx < BW) {
+      st["board"][cy][cx] = st["cur"] + 1
+    }
+  }
+  let rows = full_rows(st["board"])
+  if (len(rows) > 0) {
+    st["flash_rows"] = rows
+    st["flash"] = 2
+  } else {
+    spawn_piece(st)
+  }
+}
+
+let apply_collapse = fn(st) {
+  let rows = st["flash_rows"]
+  let n = len(rows)
+  let kept = []
+  for (y := 0; y < BH; y++) {
+    if (!array.contains(rows, y)) {
+      kept = push(kept, st["board"][y])
+    }
+  }
+  let nb = []
+  for (i := 0; i < n; i++) {
+    let row = []
+    for (x := 0; x < BW; x++) {
+      row = push(row, 0)
+    }
+    nb = push(nb, row)
+  }
+  for (i := 0; i < len(kept); i++) {
+    nb = push(nb, kept[i])
+  }
+  st["board"] = nb
+  add_score(st, n)
+  st["flash_rows"] = []
+  spawn_piece(st)
+}
+
+let hard_drop = fn(st) {
+  let g = ghost_y(st)
+  st["score"] = st["score"] + (g - st["py"]) * 2
+  st["py"] = g
+  do_lock(st)
+}
+
+let do_hold = fn(st) {
+  if (st["hold_used"]) { return false }
+  if (st["hold"] == -1) {
+    st["hold"] = st["cur"]
+    spawn_piece(st)
+  } else {
+    let t = st["hold"]
+    st["hold"] = st["cur"]
+    st["cur"] = t
+    st["cells"] = SHAPES[t]
+    st["px"] = 3
+    st["py"] = 0
+    if (collides(st["board"], st["cells"], 3, 0)) {
+      st["over"] = true
+    }
+  }
+  st["hold_used"] = true
+  true
+}
+
+let gravity_ms = fn(st) {
+  math.max(50, 800 - (st["level"] - 1) * 70)
+}
+
+let step_input = fn(st) {
+  let k = term.poll_key()
+  if (k == null) { return false }
+  let name = term.key_name(k)
+  if (name == "q" || name == "esc") {
+    st["quit"] = true
+  } elseif (name == "left") {
+    try_move(st, -1, 0)
+  } elseif (name == "right") {
+    try_move(st, 1, 0)
+  } elseif (name == "down") {
+    if (try_move(st, 0, 1)) {
+      st["score"] = st["score"] + 1
+      st["last_fall"] = time.now_ms()
+    }
+  } elseif (name == "up") {
+    try_rotate(st, 1)
+  } elseif (name == "space") {
+    hard_drop(st)
+  } elseif (k == "z" || k == "Z") {
+    try_rotate(st, -1)
+  } elseif (k == "c" || k == "C") {
+    do_hold(st)
+  } elseif (k == "p" || k == "P") {
+    if (st["paused"]) {
+      st["paused"] = false
+    } else {
+      st["paused"] = true
+    }
+  }
+  true
+}
+
+let step_gravity = fn(st) {
+  if (st["paused"]) { return false }
+  let now = time.now_ms()
+  if (now - st["last_fall"] >= gravity_ms(st)) {
+    st["last_fall"] = now
+    if (!try_move(st, 0, 1)) {
+      do_lock(st)
+    }
+    return true
+  }
+  false
+}
+
+let auto_move = fn(st, frame) {
+  if (frame == 20) {
+    do_hold(st)
+  }
+  if (frame % 11 == 0) {
+    try_rotate(st, 1)
+  }
+  if (frame % 3 == 0) {
+    try_move(st, 1, 0)
+  }
+  if (frame % 7 == 0) {
+    try_move(st, -1, 0)
+  }
+  if (frame % 5 == 4) {
+    hard_drop(st)
+  }
+}
+
+let draw_box = fn(cv, ox, oy, piece) {
+  if (piece < 0) { return false }
+  let cells = SHAPES[piece]
+  for (i := 0; i < len(cells); i++) {
+    canvas.set(cv, ox + cells[i][0], oy + cells[i][1], "█", PCOLORS[piece], null)
+  }
+  true
+}
+
+let render = fn(st, cv) {
+  canvas.clear(cv)
+  for (y := 0; y < VH; y++) {
+    canvas.set(cv, 1, y, "|", null, null)
+    canvas.set(cv, 12, y, "|", null, null)
+  }
+  for (x := 1; x <= 12; x++) {
+    canvas.set(cv, x, 0, "-", null, null)
+    canvas.set(cv, x, 21, "-", null, null)
+  }
+  canvas.set(cv, 1, 0, "+", null, null)
+  canvas.set(cv, 12, 0, "+", null, null)
+  canvas.set(cv, 1, 21, "+", null, null)
+  canvas.set(cv, 12, 21, "+", null, null)
+  for (y := 0; y < BH; y++) {
+    for (x := 0; x < BW; x++) {
+      let v = st["board"][y][x]
+      if (v != 0) {
+        canvas.set(cv, 2 + x, 1 + y, "█", PCOLORS[v - 1], null)
+      }
+    }
+  }
+  if (st["flash"] > 0) {
+    for (i := 0; i < len(st["flash_rows"]); i++) {
+      canvas.fill(cv, 2, 1 + st["flash_rows"][i], 10, 1, " ", null, [255, 255, 255])
+    }
+  } else {
+    if (!st["over"]) {
+      let g = ghost_y(st)
+      for (i := 0; i < len(st["cells"]); i++) {
+        canvas.set(cv, 2 + st["px"] + st["cells"][i][0], 1 + g + st["cells"][i][1], "░", PCOLORS[st["cur"]], null)
+      }
+      for (i := 0; i < len(st["cells"]); i++) {
+        canvas.set(cv, 2 + st["px"] + st["cells"][i][0], 1 + st["py"] + st["cells"][i][1], "█", PCOLORS[st["cur"]], null)
+      }
+    }
+  }
+  canvas.text(cv, 15, 0, "TETRIS")
+  canvas.text(cv, 15, 2, "SCORE " + string(st["score"]))
+  canvas.text(cv, 15, 3, "LEVEL " + string(st["level"]))
+  canvas.text(cv, 15, 4, "LINES " + string(st["lines"]))
+  canvas.text(cv, 15, 5, "HIGH " + string(math.max(st["high"], st["score"])))
+  canvas.text(cv, 21, 0, PNAMES[st["cur"]])
+  canvas.text(cv, 15, 7, "NEXT")
+  if (len(st["next"]) > 0) {
+    draw_box(cv, 15, 8, st["next"][0])
+  }
+  canvas.text(cv, 15, 13, "HOLD")
+  if (st["hold"] == -1) {
+    canvas.text(cv, 15, 14, "-")
+  } else {
+    draw_box(cv, 15, 14, st["hold"])
+  }
+  canvas.text(cv, 15, 18, "arrows/WASD move")
+  canvas.text(cv, 15, 19, "up rot  z ccw")
+  canvas.text(cv, 15, 20, "space drop c hold")
+  canvas.text(cv, 15, 21, "p pause  q quit")
+  if (st["over"]) {
+    canvas.text(cv, 3, 10, "GAME OVER")
+  } elseif (st["paused"]) {
+    canvas.text(cv, 4, 10, "PAUSED")
+  }
+  let frame = canvas.render(cv)
+  printf("%s%s%s%s", SYNC_BEGIN, HOME, frame, SYNC_END)
+}
+
+let play = fn(st, auto) {
+  printf("%s", HIDE)
+  spawn_piece(st)
+  let cv = canvas.new(VW, VH)
+  let pacer = anim.frame_pacer(20)
+  let frame = 0
+  for (!st["over"] && !st["quit"]) {
+    if (st["flash"] > 0) {
+      st["flash"] = st["flash"] - 1
+      if (st["flash"] == 0) {
+        apply_collapse(st)
+      }
+    } else {
+      if (!auto) {
+        step_input(st)
+      } else {
+        auto_move(st, frame)
+      }
+      if (!st["over"] && !st["quit"]) {
+        step_gravity(st)
+      }
+    }
+    render(st, cv)
+    if (auto) {
+      frame = frame + 1
+      if (frame >= 150) { break }
+    }
+    anim.pacer_wait(pacer)
+  }
+  printf("%s", SHOW)
+  st
+}
+
+let show_menu = fn(high) {
+  printf("%s%s", CLR, HOME)
+  fmt.println("")
+  fmt.println(color.fg(0, 255, 255, "  ===== TETRIS ====="))
+  fmt.println("")
+  fmt.println("  " + color.fg(0, 255, 0, "1") + "  Start")
+  fmt.println("  " + color.fg(255, 80, 80, "0") + "  Quit")
+  fmt.println("")
+  fmt.println("  HIGH " + string(high))
+  fmt.println("")
+  fmt.println("  arrows/WASD move   up rotate   z ccw")
+  fmt.println("  space hard-drop   c hold   p pause")
+  fmt.println("")
+}
+
+let read_int = fn(prompt, lo, hi) {
+  loop {
+    let r = try(int(input(prompt)))
+    if (r[0]) {
+      if (r[1] >= lo && r[1] <= hi) { return r[1] }
+      fmt.println("  Enter " + string(lo) + "-" + string(hi) + ".")
+    } else {
+      fmt.println("  Enter a number.")
+    }
+  }
+}
+
+let load_high = fn() {
+  let r = try(fs.read_file(HS_PATH))
+  if (!r[0]) { return 0 }
+  let n = try(int(str.trim(r[1])))
+  if (!n[0]) { return 0 }
+  if (n[1] < 0) { return 0 }
+  n[1]
+}
+
+let save_high = fn(h) {
+  let w = try(fs.write_file(HS_PATH, string(h)))
+  w
+}
+
+let drain_keys = fn() {
+  loop {
+    let h = try(term.has_input())
+    if (!h[0]) { break }
+    if (!h[1]) { break }
+    let k = try(term.read_key())
+    if (!k[0]) { break }
+  }
+}
+
+let show_result = fn(st) {
+  printf("%s%s", CLR, HOME)
+  fmt.println("")
+  fmt.println("  GAME OVER")
+  fmt.println("  SCORE " + string(st["score"]))
+  fmt.println("  LINES " + string(st["lines"]))
+  fmt.println("  LEVEL " + string(st["level"]))
+  fmt.println("")
+}
+
+// --- entry point ------------------------------------------------------
+let args = os.args()
+let auto = array.contains(args, "--auto")
+
+let high = load_high()
+
+if (auto) {
+  rand.seed(1)
+  let st = new_state(high)
+  play(st, true)
+  if (st["score"] > high) {
+    high = st["score"]
+    save_high(high)
+  }
+  printf("%s\n", "AUTO OK score=" + string(st["score"]) + " lines=" + string(st["lines"]) + " level=" + string(st["level"]))
+  os.exit(0)
+}
+
+let wr = try(term.width())
+let hr = try(term.height())
+if (wr[0] && hr[0]) {
+  if (wr[1] < VW || hr[1] < VH) {
+    fmt.println("Terminal too small (need 44x22).")
+    os.exit(0)
+  }
+}
+
+let playing = true
+for (playing) {
+  show_menu(high)
+  let choice = read_int("  Choose (0-1): ", 0, 1)
+  if (choice == 0) {
+    playing = false
+  } else {
+    drain_keys()
+    let st = new_state(high)
+    play(st, false)
+    if (st["score"] > high) {
+      high = st["score"]
+      save_high(high)
+    }
+    if (!st["quit"]) {
+      show_result(st)
+    }
+  }
+}
+fmt.println("")
+fmt.println("Thanks for playing!")

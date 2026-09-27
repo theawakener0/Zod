@@ -1,0 +1,217 @@
+// cube.zd — rotating 3D wireframe cube for the Zod terminal.
+//
+// Script-mode demo: 8 vertices rotated (yaw-about-Y then pitch-about-X)
+// and perspective-projected each frame, 12 depth-shaded edges painted
+// far-first onto a reused canvas buffer, one batched write per frame.
+// Controls: arrows/WASD orbit, space toggles spin, +/- speed, q/esc quits.
+// Run: go run . examples/demo/cube.zd [--auto]
+//   --auto runs 120 headless frames on a fixed 60x24 canvas (for CI).
+import "std/term" as term
+import "std/canvas" as canvas
+import "std/color" as color
+import "std/math" as math
+import "std/time" as time
+import "std/anim" as anim
+import "std/array" as array
+import "std/str" as str
+import "std/fmt" as fmt
+import "std/os" as os
+
+// Parse --auto FIRST: headless mode bypasses the terminal size check.
+let ARGS = os.args()
+let AUTO = 0
+if (array.contains(ARGS, "--auto")) {
+  AUTO = 1
+}
+
+// Fixed canvas size for the whole run (startup size).
+let CW = 60
+let CH = 24
+if (AUTO == 0) {
+  let WR = try(term.width())
+  let HR = try(term.height())
+  if (!WR[0] || !HR[0]) {
+    println("cube: no terminal found (not a TTY). Re-run with --auto for headless mode.")
+    printf("%s", term.show_cursor())
+    os.exit(0)
+  }
+  CW = WR[1]
+  CH = HR[1]
+  if (CW < 40 || CH < 20) {
+    println("cube: terminal too small (need 40x20, have " + string(CW) + "x" + string(CH) + ").")
+    printf("%s", term.show_cursor())
+    os.exit(0)
+  }
+}
+
+// Cube geometry: 8 verts [+-1,+-1,+-1]; 12 edges (4 back + 4 front + 4 struts).
+let VX = [-1, 1, 1, -1, -1, 1, 1, -1]
+let VY = [-1, -1, 1, 1, -1, -1, 1, 1]
+let VZ = [-1, -1, -1, -1, 1, 1, 1, 1]
+let EA = [0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3]
+let EB = [1, 2, 3, 0, 5, 6, 7, 4, 4, 5, 6, 7]
+
+// Depth gradient: far dim blue -> near warm bright.
+let STOPS = [
+  [50, 90, 190],
+  [0, 200, 255],
+  [120, 255, 170],
+  [255, 230, 120]
+]
+
+let f2 = fn(x) {
+  return string(math.round(float(x) * 100.0) / 100.0)
+}
+
+let run_cube = fn(frames) {
+  let c = canvas.new(CW, CH)
+  let cx = float(CW) / 2.0
+  let cyy = float(CH) / 2.0
+  let R = float(math.min(CW, CH)) * 0.38
+  let D = 3.5
+  let yaw = 0.5
+  let pitch = -0.35
+  let speed = 0.06
+  let spin = true
+  let quit = false
+  let frame = 0
+  let fc = anim.fps_counter()
+  let pacer = anim.frame_pacer(20)
+  loop {
+    if (AUTO == 1 && frame >= frames) {
+      break
+    }
+    if (quit) {
+      break
+    }
+    // EXACTLY 4 trig calls per frame (computed once, reused inline below).
+    let sy = math.sin(yaw)
+    let cy = math.cos(yaw)
+    let sp = math.sin(pitch)
+    let cp = math.cos(pitch)
+    // Rotate yaw-about-Y then pitch-about-X, then perspective project.
+    let PX = []
+    let PY = []
+    let PZ = []
+    for (vi := 0; vi < 8; vi++) {
+      let x = VX[vi]
+      let y = VY[vi]
+      let z = VZ[vi]
+      let x1 = x * cy + z * sy
+      let z1 = z * cy - x * sy
+      let y2 = y * cp - z1 * sp
+      let z2 = y * sp + z1 * cp
+      let denom = D + z2
+      if (denom < 0.5) {
+        denom = 0.5
+      }
+      let s = D / denom
+      PX = push(PX, int(math.round(cx + x1 * s * R)))
+      PY = push(PY, int(math.round(cyy - y2 * s * R * 0.5)))
+      PZ = push(PZ, z2)
+    }
+    // Mean endpoint depth per edge.
+    let EDEP = []
+    for (ei := 0; ei < 12; ei++) {
+      EDEP = push(EDEP, (PZ[EA[ei]] + PZ[EB[ei]]) / 2.0)
+    }
+    // Far-first paint order via 12-edge insertion pass.
+    let order = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    for (si := 1; si < 12; si++) {
+      let key = order[si]
+      let kd = EDEP[key]
+      let j = si - 1
+      for (j >= 0) {
+        if (EDEP[order[j]] > kd) {
+          order[j + 1] = order[j]
+          j = j - 1
+        } else {
+          break
+        }
+      }
+      order[j + 1] = key
+    }
+    // Paint edges far-first, then vertex glyphs on top.
+    canvas.clear(c)
+    for (oi := 0; oi < 12; oi++) {
+      let e = order[oi]
+      let a = EA[e]
+      let b = EB[e]
+      let t = math.clamp((EDEP[e] + 2.0) / 4.0, 0, 1)
+      canvas.line(c, PX[a], PY[a], PX[b], PY[b], "░", color.ramp(t, STOPS), null)
+    }
+    for (gi := 0; gi < 8; gi++) {
+      let tv = math.clamp((PZ[gi] + 2.0) / 4.0, 0, 1)
+      canvas.set(c, PX[gi], PY[gi], "█", color.ramp(tv, STOPS), null)
+    }
+    // HUD: FPS + angles + speed + controls.
+    let fps = anim.fps_tick(fc)
+    let spin_txt = "off"
+    if (spin) {
+      spin_txt = "on"
+    }
+    canvas.text(c, 1, 0, fmt.sprintf("FPS %s YAW %s PIT %s SPD %s SPIN %s", [string(int(fps)), f2(yaw), f2(pitch), f2(speed), spin_txt]))
+    canvas.text(c, 1, CH - 1, str.join(["arrows/WASD orbit", "space spin", "+/- speed", "q quit"], " | "))
+    // Single batched write per frame.
+    printf("%s%s%s%s", term.sync_begin(), term.home(), canvas.render(c), term.sync_end())
+    // Input (interactive only; auto mode spins untouched).
+    if (AUTO == 0) {
+      let k = term.poll_key()
+      if (k != null && !is_error(k)) {
+        let kname = term.key_name(k)
+        if (kname == "up") {
+          pitch = pitch - 0.12
+        } elseif (kname == "down") {
+          pitch = pitch + 0.12
+        } elseif (kname == "left") {
+          yaw = yaw - 0.12
+        } elseif (kname == "right") {
+          yaw = yaw + 0.12
+        }
+        if (k == " ") {
+          spin = !spin
+        }
+        if (k == "+" || k == "=") {
+          speed = math.clamp(speed + 0.01, 0.01, 0.3)
+        }
+        if (k == "-" || k == "_") {
+          speed = math.clamp(speed - 0.01, 0.01, 0.3)
+        }
+        if (k == "q" || k == "Q") {
+          quit = true
+        }
+        if (kname == "esc") {
+          quit = true
+        }
+        pitch = math.clamp(pitch, -1.4, 1.4)
+      }
+    }
+    if (spin) {
+      yaw = yaw + speed
+    }
+    if (yaw > math.tau) {
+      yaw = yaw - math.tau
+    }
+    if (yaw < 0 - math.tau) {
+      yaw = yaw + math.tau
+    }
+    frame = frame + 1
+    anim.pacer_wait(pacer)
+  }
+  return frame
+}
+
+term.clear()
+printf("%s", term.hide_cursor())
+if (AUTO == 1) {
+  run_cube(120)
+  printf("%s", term.show_cursor())
+  println("AUTO OK")
+  os.exit(0)
+} else {
+  run_cube(0)
+  printf("%s", term.show_cursor())
+  term.clear()
+  println("cube: goodbye.")
+  os.exit(0)
+}
