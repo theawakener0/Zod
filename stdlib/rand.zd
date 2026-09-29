@@ -1,6 +1,6 @@
-pub seed := fn(s) {
-  __seed_rand(s)
-}
+// pub seed := fn(s) {
+//   __seed_rand(s)
+// }
 
 pub float := fn() {
   return __rand_float()

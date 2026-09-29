@@ -202,16 +202,20 @@ let run_cube = fn(frames) {
 }
 
 term.clear()
-printf("%s", term.hide_cursor())
+
 if (AUTO == 1) {
   run_cube(120)
   printf("%s", term.show_cursor())
   println("AUTO OK")
   os.exit(0)
-} else {
-  run_cube(0)
-  printf("%s", term.show_cursor())
-  term.clear()
-  println("cube: goodbye.")
-  os.exit(0)
 }
+
+term.enable_raw()
+printf("%s", term.hide_cursor())
+
+run_cube(0)
+printf("%s", term.show_cursor())
+term.disable_raw()
+term.clear()
+println("cube: goodbye.")
+os.exit(0)

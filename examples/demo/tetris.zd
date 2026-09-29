@@ -409,6 +409,7 @@ let render = fn(st, cv) {
 }
 
 let play = fn(st, auto) {
+  term.enable_raw()
   printf("%s", HIDE)
   spawn_piece(st)
   let cv = canvas.new(VW, VH)
@@ -438,6 +439,7 @@ let play = fn(st, auto) {
     anim.pacer_wait(pacer)
   }
   printf("%s", SHOW)
+  term.disable_raw()
   st
 }
 
