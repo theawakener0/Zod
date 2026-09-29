@@ -23,16 +23,19 @@ import (
 	"unsafe"
 )
 
+// Object typed variables
 var (
 	NULL  = &Null{}
 	TRUE  = &Boolean{Value: true}
 	FALSE = &Boolean{Value: false}
 )
 
+// Built-ins List
 var Builtins = []struct {
 	Name    string
 	Builtin *Builtin
 }{
+	// len(s) -> int (`len` is a function that returns the length of an object (Str, Byte, Mat, Arr, Hash) as an integer)
 	{"len", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) != 1 {
@@ -55,6 +58,7 @@ var Builtins = []struct {
 			}
 		},
 	}},
+	// println(...s) -> null (`println` is a function that prints a string with a newline to stdout)
 	{"println", &Builtin{
 		Fn: func(args ...Object) Object {
 			for _, arg := range args {
@@ -64,6 +68,7 @@ var Builtins = []struct {
 			return NULL
 		},
 	}},
+	// printf(...s) -> null (`printf` is a function that print a string to stdout) 
 	{"printf", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) < 1 {
@@ -90,6 +95,7 @@ var Builtins = []struct {
 			return NULL
 		},
 	}},
+	// input() | input(s) -> string (`input` is a function that reads a line from stdin)
 	{"input", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) > 1 {
@@ -107,6 +113,7 @@ var Builtins = []struct {
 			return &String{Value: text}
 		},
 	}},
+	// int(s) -> int (`int` is a function that returns the integer representation of an object)
 	{"int", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) != 1 {
@@ -142,6 +149,7 @@ var Builtins = []struct {
 			}
 		},
 	}},
+	// float(s) -> float (`float` is a that returns the float representation of an object)
 	{"float", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) != 1 {
@@ -169,6 +177,7 @@ var Builtins = []struct {
 			}
 		},
 	}},
+	// string(s) -> string (`string` is a function that returns the string representation of an object)
 	{"string", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) != 1 {
@@ -204,6 +213,7 @@ var Builtins = []struct {
 			}
 		},
 	}},
+	// type(s) -> string (`type` is a function that returns the type of an object)
 	{"type", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) != 1 {
@@ -212,6 +222,7 @@ var Builtins = []struct {
 			return &String{Value: string(args[0].Type())}
 		},
 	}},
+	// first(s) -> any (`first` is a function that returns the first element of an array)
 	{"first", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) != 1 {
@@ -229,6 +240,7 @@ var Builtins = []struct {
 			}
 		},
 	}},
+	// last(s) -> any (`last` is a function that returns the last element if an array)
 	{"last", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) != 1 {
@@ -246,6 +258,7 @@ var Builtins = []struct {
 			}
 		},
 	}},
+	// pop(s) -> any (`pop` is a fuction that removes and returns the last element of an array)
 	{"pop", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) != 1 {
@@ -265,6 +278,7 @@ var Builtins = []struct {
 			}
 		},
 	}},
+	// push(a, s) -> array (`push` is a function that appends an element to an array)
 	{"push", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) != 2 {
@@ -285,6 +299,7 @@ var Builtins = []struct {
 			}
 		},
 	}},
+	// insert(h, k, v) -> hash (`insert` is a function that inserts a key/value pair into a hashmap)
 	{"insert", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) != 3 {
@@ -317,6 +332,7 @@ var Builtins = []struct {
 			return &Hash{Pairs: newPairs, Order: newOrder}
 		},
 	}},
+	// remove(h, k) -> hash (`remove` is a function that removes a key from a hashmap)
 	{"remove", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) != 2 {
@@ -350,6 +366,7 @@ var Builtins = []struct {
 			return &Hash{Pairs: newPairs, Order: newOrder}
 		},
 	}},
+	// keys(h) -> array (`keys` is a function that returns an array of the keys of a hashmap)
 	{"keys", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) != 1 {
@@ -370,6 +387,7 @@ var Builtins = []struct {
 			return &Array{Elements: keys}
 		},
 	}},
+	// vals(h) -> array (`vals` is a function that returns an array of the values of a hashmap)
 	{"vals", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) != 1 {
@@ -390,6 +408,7 @@ var Builtins = []struct {
 			return &Array{Elements: values}
 		},
 	}},
+	// contains(h, k) -> bool (`contains` is a function that returns true if a hashmap contains a key)
 	{"contains", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) != 2 {
@@ -412,6 +431,7 @@ var Builtins = []struct {
 			return FALSE
 		},
 	}},
+	// random() | random(n) -> float | int (`random` is a function that returns a random float or integer)
 	{"random", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) == 0 {
@@ -437,6 +457,7 @@ var Builtins = []struct {
 			}
 		},
 	}},
+	// matrix(rows, cols, data) -> array (`matrix` is a function that returns a Matrix object from a 2D array with a defined rows and cols)
 	{"matrix", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) != 3 {
@@ -484,6 +505,7 @@ var Builtins = []struct {
 			return &Matrix{Rows: rows, Cols: cols, Data: data}
 		},
 	}},
+	// make(size) | make(size, fill) -> array (`make` is a function that returns an array of a given size filled with a default value)
 	{"make", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) < 1 || len(args) > 2 {
@@ -528,6 +550,7 @@ var Builtins = []struct {
 			return &Array{Elements: elements}
 		},
 	}},
+	// color(color, s) -> string (`color` is a function that returns a string with a given color)
 	{"color", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) != 2 {
@@ -557,6 +580,7 @@ var Builtins = []struct {
 			return newError("first argument to `color` not supported. got=%s", args[0].Type())
 		},
 	}},
+	// sleep(s) -> null (`sleep` is a function that sleeps for a given number of seconds)
 	{"sleep", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) != 1 {
@@ -572,6 +596,7 @@ var Builtins = []struct {
 			}
 		},
 	}},
+	// exp(n) -> float (`exp` is a function that returns an exponent of a number)
 	{"exp", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) != 1 {
@@ -588,6 +613,7 @@ var Builtins = []struct {
 			}
 		},
 	}},
+	// pi() -> float (`pi` is a function that returns pi)
 	{"pi", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) != 0 {
@@ -596,6 +622,7 @@ var Builtins = []struct {
 			return &Float{Value: math.Pi}
 		},
 	}},
+	// error(s) -> error (`error` is a function that returns an error message)
 	{"error", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) != 1 {
@@ -1385,19 +1412,20 @@ var Builtins = []struct {
 			return &String{Value: hex.EncodeToString(sum[:])}
 		},
 	}},
-	{"__seed_rand", &Builtin{
-		Fn: func(args ...Object) Object {
-			if len(args) != 1 {
-				return newError("wrong number of arguments. got=%d, want=1", len(args))
-			}
-			n, ok := args[0].(*Integer)
-			if !ok {
-				return newError("argument to `__seed_rand` must be INTEGER. got=%s", args[0].Type())
-			}
-			rand.Seed(n.Value)
-			return NULL
-		},
-	}},
+	// DEPRECATED
+	// {"__seed_rand", &Builtin{
+	// 	Fn: func(args ...Object) Object {
+	// 		if len(args) != 1 {
+	// 			return newError("wrong number of arguments. got=%d, want=1", len(args))
+	// 		}
+	// 		n, ok := args[0].(*Integer)
+	// 		if !ok {
+	// 			return newError("argument to `__seed_rand` must be INTEGER. got=%s", args[0].Type())
+	// 		}
+	// 		rand.Seed(n.Value)
+	// 		return NULL
+	// 	},
+	// }},
 	{"__rand_float", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) != 0 {
