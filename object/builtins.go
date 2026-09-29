@@ -2005,6 +2005,28 @@ var Builtins = []struct {
 			return FALSE
 		},
 	}},
+	{"__term_raw_enable", &Builtin{
+		Fn: func(args ...Object) Object {
+			if  len(args) != 0 {
+				return newError("wrong number of arguments. got=%d, want=0", len(args))
+			}
+			if err := termEnableRaw(); err != nil {
+				return newError("could not enable raw mode: %s", err.Error())
+			}
+			return NULL
+		},
+	}},
+	{"__term_raw_disable", &Builtin{
+		Fn: func(args ...Object) Object {
+			if  len(args) != 0 {
+				return newError("wrong number of arguments. got=%d, want=0", len(args))
+			}
+			if err := termDisableRaw(); err != nil {
+				return newError("could not disable raw mode: %s", err.Error())
+			}
+			return NULL
+		},
+	}},
 }
 
 var stdinReader *bufio.Reader
@@ -2016,8 +2038,16 @@ const (
 	termLflag   = 12
 	termVTIME   = 22
 	termVMIN    = 23
+
 	termICANON  = 0x0002
 	termECHO    = 0x0008
+	termISIG	= 0x0001
+	termEXTEN	= 0x8000
+)
+
+var (
+	termRawActive	bool
+	termOrigAttr	[termiosSize]byte
 )
 
 type termWinsize struct {
@@ -2069,6 +2099,42 @@ func termGetAttr(fd uintptr, buf *[termiosSize]byte) bool {
 func termSetAttr(fd uintptr, buf *[termiosSize]byte) bool {
 	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, uintptr(syscall.TCSETS), uintptr(unsafe.Pointer(buf)))
 	return errno == 0
+}
+
+func termEnableRaw() error {
+	if termRawActive {
+		return nil
+	}
+	fd := uintptr(os.Stdin.Fd())
+	if !termGetAttr(fd, &termOrigAttr) {
+		return fmt.Errorf("not a TTY or TCGETS failed")
+	}
+
+	raw := termOrigAttr
+	lflag := termGetLflag(&raw)
+	lflag &^= (termICANON | termECHO | termISIG)
+	termSetLflag(&raw, lflag)
+
+	raw[termVMIN] = 1
+	raw[termVTIME] = 0
+
+	if !termSetAttr(fd, &raw) {
+		return fmt.Errorf("TCSETS failed while entering raw mode")
+	}
+	termRawActive = true
+	return nil
+}
+
+func termDisableRaw() error {
+	if !termRawActive {
+		return nil
+	}
+	fd := uintptr(os.Stdin.Fd())
+	if !termSetAttr(fd, &termOrigAttr) {
+		return fmt.Errorf("TCSETS failed while restoring terminal")
+	}
+	termRawActive = false
+	return nil
 }
 
 func getStdinReader() *bufio.Reader {

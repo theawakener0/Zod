@@ -20,4 +20,5 @@ go.work.sum
 
 # env file
 .env
+.tetris_highscore
 

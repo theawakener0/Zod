@@ -134,3 +134,11 @@ pub wait_key := fn(timeout_ms) {
     __sleep_ms(5)
   }
 }
+
+pub enable_raw := fn() {
+    return __term_raw_enable()
+}
+
+pub disable_raw := fn() {
+    return __term_raw_disable()
+}
