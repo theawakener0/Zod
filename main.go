@@ -6,6 +6,7 @@ import (
 	"os/user"
 	"path/filepath"
 
+	obj "github.com/theawakener0/Zod/object"
 	"github.com/theawakener0/Zod/repl"
 )
 
@@ -28,6 +29,10 @@ func main() {
 		fmt.Printf("zod %s\n", version)
 		return
 	}
+
+	defer func ()  {
+		_ = obj.TermDisableRaw()
+	}()
 
 	engine := "--eng=vm"
 	fileIdx := 1

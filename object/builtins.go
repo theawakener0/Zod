@@ -1928,62 +1928,74 @@ var Builtins = []struct {
 			return newError("could not determine terminal height: not a TTY")
 		},
 	}},
-	/* NOTE: __read_key and __has_input read the raw stdin fd directly,
-	 bypassing getStdinReader()'s buffered bufio.Reader, so buffered line
-	 input and raw key polling never share (or deadlock on) one buffer.*/
 	{"__read_key", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) != 0 {
 				return newError("wrong number of arguments. got=%d, want=0", len(args))
 			}
 			fd := int(os.Stdin.Fd())
-			var orig [termiosSize]byte
-			if !termGetAttr(uintptr(fd), &orig) {
-				// Not a TTY (e.g. piped stdin in tests): plain single-byte read.
-				var b [1]byte
-				n, err := syscall.Read(fd, b[:])
-				if err != nil {
-					return newError("could not read key: %s", err.Error())
+
+			enteredTemporarily := false
+			if !termRawActive {
+				var orig [termiosSize]byte
+				if termGetAttr(uintptr(fd), &orig) {
+					raw := orig
+					termSetLflag(&raw, termGetLflag(&raw)&^(termICANON|termECHO))
+					raw[termVMIN] = 1
+					raw[termVTIME] = 0
+					if !termSetAttr(uintptr(fd), &raw) {
+						return newError("could not set terminal to raw mode")
+					}
+					defer termSetAttr(uintptr(fd), &orig)
+					enteredTemporarily = true
+					_ = enteredTemporarily
 				}
-				if n == 0 {
-					return newError("could not read key: EOF")
-				}
-				return &String{Value: string(b[:n])}
 			}
-			raw := orig
-			termSetLflag(&raw, termGetLflag(&raw)&^(termICANON|termECHO))
-			raw[termVMIN] = 1
-			raw[termVTIME] = 0
-			if !termSetAttr(uintptr(fd), &raw) {
-				return newError("could not set terminal to raw mode")
-			}
-			defer termSetAttr(uintptr(fd), &orig)
+
 			var b [1]byte
 			n, err := syscall.Read(fd, b[:])
 			if err != nil {
-				return newError("could not read key: %s", err.Error())
+				return newError("could not read key: %s", err.Error()) 		
 			}
 			if n == 0 {
 				return newError("could not read key: EOF")
 			}
-			if b[0] != 0x1B {
+
+			if b[0] != 0x1b {
 				return &String{Value: string(b[:1])}
 			}
-			// ESC: allow 0.1s per follow-up byte for escape sequences; read up to 2 more.
-			timed := raw
-			timed[termVMIN] = 0
-			timed[termVTIME] = 1
-			termSetAttr(uintptr(fd), &timed)
-			seq := []byte{b[0]}
-			for i := 0; i < 2; i++ {
+
+			sep := []byte{b[0]}
+
+			var saved [termiosSize]byte
+			havedSaved := false
+			if termRawActive || enteredTemporarily {
+				if termGetAttr(uintptr(fd), &saved) {
+					havedSaved = true
+					timed := saved
+					timed[termVMIN] = 0
+					timed[termVTIME] = 1
+					termSetAttr(uintptr(fd), &timed)
+				}
+			}
+
+			for i := 0; i < 5; i++ {
 				var eb [1]byte
 				m, err := syscall.Read(fd, eb[:])
 				if err != nil || m == 0 {
 					break
 				}
-				seq = append(seq, eb[0])
+				sep = append(sep, eb[0])
+				if (eb[0] >= 'A' && eb[0] <= 'Z') || (eb[0] >= 'a' && eb[0] <= 'z') || eb[0] == '~' {
+					break
+				}
 			}
-			return &String{Value: string(seq)}
+
+			if havedSaved {
+				termSetAttr(uintptr(fd), &saved)
+			}
+
+			return &String{Value: string(sep)}
 		},
 	}},
 	{"__has_input", &Builtin{
@@ -2312,6 +2324,10 @@ func GetBuiltinByName(name string) *Builtin {
 		}
 	}
 	return nil
+}
+
+func TermDisableRaw() error {
+	return termDisableRaw()
 }
 
 var builtinIndex = func() map[string]*Builtin {
