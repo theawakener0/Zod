@@ -47,26 +47,28 @@ func Start(in io.Reader, out io.Writer, engine string) {
 		}
 
 		if engine == "--eng=vm" {
-			constants = runVM(line, out, constants, globals, symbolTable, cwd)
+			var err error
+			constants, err = runVM(line, out, constants, globals, symbolTable, cwd)
+			_ = err
 			continue
 		}
 
 		if engine == "--eng=eval" {
-			runEval(line, env, out)
+			_ = runEval(line, env, out)
 			continue
 		}
 
 	}
 }
 
-func runVM(source string, out io.Writer, constants []obj.Object, globals []obj.Object, symbolTable *compiler.SymbolTable, baseDir string) []obj.Object {
+func runVM(source string, out io.Writer, constants []obj.Object, globals []obj.Object, symbolTable *compiler.SymbolTable, baseDir string) ([]obj.Object, error) {
 	l := lx.New(source)
 	p := ps.New(l)
 
 	program := p.ParseProgram()
 	if len(p.Errors()) != 0 {
 		printParseErrors(out, p.Errors())
-		return constants
+		return constants, fmt.Errorf("parse error")
 	}
 
 	comp := compiler.NewWithState(symbolTable, constants)
@@ -74,7 +76,7 @@ func runVM(source string, out io.Writer, constants []obj.Object, globals []obj.O
 	err0 := comp.Compile(program)
 	if err0 != nil {
 		fmt.Fprintf(out, "Oh shit here we go again! Compilation failed:\n %s\n", err0)
-		return constants
+		return constants, err0
 	}
 
 	bytecode := comp.Bytecode()
@@ -83,7 +85,7 @@ func runVM(source string, out io.Writer, constants []obj.Object, globals []obj.O
 	err1 := machine.Run()
 	if err1 != nil {
 		fmt.Fprintf(out, "Oh shit here we go again! Executing bytecode failed:\n %s\n", err1)
-		return bytecode.Constant
+		return bytecode.Constant, err1
 	}
 
 	LastPopped := machine.LastPoppedStackElem()
@@ -92,10 +94,15 @@ func runVM(source string, out io.Writer, constants []obj.Object, globals []obj.O
 		io.WriteString(out, "\n")
 	}
 
-	return bytecode.Constant
+	errObj, ok := LastPopped.(*obj.Error)
+	if ok {
+		return bytecode.Constant, fmt.Errorf("%s", errObj.Message)
+	}
+
+	return bytecode.Constant, nil
 }
 
-func Execute(source string, out io.Writer, engine string, baseDir string) {
+func Execute(source string, out io.Writer, engine string, baseDir string) error {
 	if engine == "--eng=vm" {
 		constants := make([]obj.Object, 0, 256)
 		globals := make([]obj.Object, vm.GlobalsSize)
@@ -104,25 +111,24 @@ func Execute(source string, out io.Writer, engine string, baseDir string) {
 			symbolTable.DefineBuiltin(i, v.Name)
 		}
 
-		runVM(source, out, constants, globals, symbolTable, baseDir)
-		return
+		_, err := runVM(source, out, constants, globals, symbolTable, baseDir)
+		return err
 	}
 	if engine == "--eng=eval" {
 		env := obj.NewEnviroment()
-
-		runEval(source, env, out)
-		return
+		return runEval(source, env, out)
 	}
+	return fmt.Errorf("unknown engine %s", engine)
 }
 
-func runEval(source string, env *obj.Enviroment, out io.Writer) {
+func runEval(source string, env *obj.Enviroment, out io.Writer) error {
 	l := lx.New(source)
 	p := ps.New(l)
 
 	program := p.ParseProgram()
 	if len(p.Errors()) != 0 {
 		printParseErrors(out, p.Errors())
-		return
+		return fmt.Errorf("parse error")
 	}
 
 	eval := ev.Eval(program, env)
@@ -130,6 +136,13 @@ func runEval(source string, env *obj.Enviroment, out io.Writer) {
 		io.WriteString(out, eval.Inspect())
 		io.WriteString(out, "\n")
 	}
+
+	err, ok := eval.(*obj.Error)
+	if ok {
+		return fmt.Errorf("%s", err.Message)
+	}
+
+	return nil
 }
 
 func printParseErrors(out io.Writer, error []string) {

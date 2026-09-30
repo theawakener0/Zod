@@ -309,19 +309,21 @@ func (vm *VM) Run() error {
 			constants = vm.constant
 		case code.OpReturnValue:
 			returnValue := vm.pop()
-
 			popped := vm.popFrame()
 			vm.sp = popped.basePointer - 1
-			if vm.frameIndex > 0 {
-				vm.globals = vm.currentFrame().globals
-				if vm.currentFrame().cl != nil && vm.currentFrame().cl.Constants != nil {
-					vm.constant = vm.currentFrame().cl.Constants
-				}
-				frame = vm.currentFrame()
-				ins = frame.Instructions()
-				globals = vm.globals
-				constants = vm.constant
+
+			if vm.frameIndex == 0 {
+				return vm.push(returnValue)
 			}
+
+			vm.globals = vm.currentFrame().globals
+			if vm.currentFrame().cl != nil && vm.currentFrame().cl.Constants != nil {
+				vm.constant = vm.currentFrame().cl.Constants
+			}
+			frame = vm.currentFrame()
+			ins = frame.Instructions()
+			globals = vm.globals
+			constants = vm.constant
 
 			err := vm.push(returnValue)
 			if err != nil {
@@ -330,16 +332,19 @@ func (vm *VM) Run() error {
 		case code.OpReturn:
 			popped := vm.popFrame()
 			vm.sp = popped.basePointer - 1
-			if vm.frameIndex > 0 {
-				vm.globals = vm.currentFrame().globals
-				if vm.currentFrame().cl != nil && vm.currentFrame().cl.Constants != nil {
-					vm.constant = vm.currentFrame().cl.Constants
-				}
-				frame = vm.currentFrame()
-				ins = frame.Instructions()
-				globals = vm.globals
-				constants = vm.constant
+
+			if vm.frameIndex == 0 {
+				return vm.push(Null)
 			}
+
+			vm.globals = vm.currentFrame().globals
+			if vm.currentFrame().cl != nil && vm.currentFrame().cl.Constants != nil {
+				vm.constant = vm.currentFrame().cl.Constants
+			}
+			frame = vm.currentFrame()
+			ins = frame.Instructions()
+			globals = vm.globals
+			constants = vm.constant
 
 			err := vm.push(Null)
 			if err != nil {
@@ -1492,9 +1497,13 @@ func (vm *VM) currentFrame() *Frame {
 	return vm.frames[vm.frameIndex-1]
 }
 
-func (vm *VM) pushFrame(f *Frame) {
+func (vm *VM) pushFrame(f *Frame) error {
+	if vm.frameIndex >= MaxFrames {
+		return fmt.Errorf("maximum call depth exceeded")
+	}
 	vm.frames[vm.frameIndex] = f
 	vm.frameIndex++
+	return nil
 }
 
 func (vm *VM) popFrame() *Frame {
@@ -1521,7 +1530,10 @@ func (vm *VM) callFunction(cl *obj.Closure, numArgs int) error {
 		homeConst = vm.constant
 	}
 	frame := NewFrame(cl, vm.sp-numArgs, home)
-	vm.pushFrame(frame)
+	err := vm.pushFrame(frame)
+	if err != nil {
+		return err
+	}
 
 	vm.globals = home
 	vm.constant = homeConst

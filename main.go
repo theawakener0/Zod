@@ -50,7 +50,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		repl.Execute(string(source), os.Stdout, engine, filepath.Dir(os.Args[fileIdx]))
+		err = repl.Execute(string(source), os.Stdout, engine, filepath.Dir(os.Args[fileIdx]))
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 		return
 	}
 
