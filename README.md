@@ -170,19 +170,8 @@ fmt.println("Hello, World!")
 | `matrix` | `import "std/matrix" as matrix` | `new`, `eye`, `zeros`, `ones`, `rows`, `row`, `get`, `transpose`, `mul`, `det2`, `det3`, `det`, `inv2`, `inv` |
 | `rand`   | `import "std/rand" as rand` | `seed`, `float`, `int`, `range`, `choice`, `shuffle`                     |
 | `time`   | `import "std/time" as time` | `sleep`, `now_ms`, `now_s`, `elapsed_note`                               |
-| `os`     | `import "std/os" as os`     | `args`, `env_get`, `env_set`, `env_list`, `exit`, `cwd`                              |
-| `fs`     | `import "std/fs" as fs`     | `read_file`, `write_file`, `append_file`, `exists`, `ls`, `mkdir`, `rm`, `stat` (includes `mtime` unix field), `fopen`, `fread`, `fwrite`, `fclose` |
-| `path`   | `import "std/path" as path` | `join`, `basename`, `dirname`, `ext`                                     |
-| `io`     | `import "std/io" as io`     | `read_stdin`, `write_stdout`, `read_lines`                               |
-| `term`   | `import "std/term" as term` | `color`, `input`, `clear`, `width`, `height`, `size`, `read_key`, `has_input` |
-| `json`   | `import "std/json" as json` | `parse`, `stringify`, `read`, `write`                                    |
-| `http`   | `import "std/http" as http` | `get`, `get_timeout`, `post` (offline-safe demo; `get`/`post` use 10s timeout) |
-| `sort`   | `import "std/sort" as sort` | `sorted`, `sort_by` (comparator must return int)                         |
-| `bytes`  | `import "std/bytes" as bytes` | `from_str`, `to_str`, `len`, `slice`, `concat`                         |
-| `log`    | `import "std/log" as log`   | `info`, `warn`, `error`, `debug`                                         |
-| `test`   | `import "std/test" as test` | `assert`, `assert_eq`, `assert_true`                                     |
-| `crypto` | `import "std/crypto" as crypto` | `uuid`, `random_bytes`, `random_hex`, `sha256`                       |
-| `iter`   | `import "std/iter" as iter` | `reduce`, `chain`, `take`, `drop`                                        |
+| `os`     | `import "std/os" as os`     | `args`, `env_get`, `env_set`, `env_list`, `exit`, `cwd`                  |
+
 
 - The `__*` names (about 50 intrinsics such as `__print`, `__str_split`, `__read_file`) are private implementation details backing `std/*`. Do not call them directly.
 - New types: `Bytes` (`type(x)` returns `"BYTES"`) and `Error` values (`type(error("x"))` returns `"ERROR"`). New globals are `error(msg)` (creates an error value) and `is_error(x)` (tests for one); `string()` also formats `Array`, `Hash`, `Matrix`, `Bytes`, `null`, and `Error` (`string(error("x"))` returns `"Error: x"`).

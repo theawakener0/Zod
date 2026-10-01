@@ -10,11 +10,6 @@ import (
 	obj "github.com/theawakener0/Zod/object"
 )
 
-// writeVMImportFixture creates a fresh temp module mirroring the shape of
-// examples/pub_lib.zd: public `version` + `greet`, private `secret`.
-// Every test gets its own t.TempDir() because the VM module caches
-// (vmModuleCache/vmLoading in vm.go:25-26) are process-global and keyed by
-// path, so paths must never be reused across tests.
 func writeVMImportFixture(t *testing.T) (dir, modPath string) {
 	t.Helper()
 	dir = t.TempDir()
@@ -28,9 +23,6 @@ func writeVMImportFixture(t *testing.T) (dir, modPath string) {
 	return dir, modPath
 }
 
-// runVMWithBaseDir runs the full parse→compile→run pipeline on the VM with
-// the compiler BaseDir set to dir. It returns the machine (nil when compile
-// fails), the compile error, and the Run error.
 func runVMWithBaseDir(t *testing.T, dir, input string) (*VM, error, error) {
 	t.Helper()
 	program := parse(input)
@@ -43,10 +35,6 @@ func runVMWithBaseDir(t *testing.T, dir, input string) (*VM, error, error) {
 	return machine, nil, machine.Run()
 }
 
-// requirePrivateFailure accepts either a Go error from Run (OpImport pushes
-// the Error and also returns it as a Go error, vm.go:436-441) or an *obj.Error
-// value left on the stack (OpGetProp only pushes, vm.go:445-460), as long as
-// the message mentions "private".
 func requirePrivateFailure(t *testing.T, runErr error, machine *VM) {
 	t.Helper()
 	if runErr != nil {
@@ -188,9 +176,6 @@ func TestImportModulePrivateProperty(t *testing.T) {
 	}
 }
 
-// TestImportNestedTopLevelOnly documents the VM-only restriction from
-// compiler.go:1171 ("import only supported at top-level in VM"): an import
-// nested in a function body must fail at compile time.
 func TestImportNestedTopLevelOnly(t *testing.T) {
 	dir, mod := writeVMImportFixture(t)
 
