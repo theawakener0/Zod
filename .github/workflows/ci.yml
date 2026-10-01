@@ -28,12 +28,18 @@ jobs:
           CGO_ENABLED: 0
           GOARCH: ${{ matrix.arch }}
         run: go build ./...
-      - name: Build (cross GOOS check)
+      - name: Build (cross darwin)
         env:
           CGO_ENABLED: 0
-        run: |
-          GOOS=darwin GOARCH=amd64 go build ./...
-          GOOS=windows GOARCH=amd64 go build ./...
+          GOOS: darwin
+          GOARCH: amd64
+        run: go build ./...
+      - name: Build (cross windows)
+        env:
+          CGO_ENABLED: 0
+          GOOS: windows
+          GOARCH: amd64
+        run: go build ./...
       - name: Test (native, no cross-arch env)
         run: go test -count=1 ./...
       - name: Stdlib smoke (eval + vm)
