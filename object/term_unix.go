@@ -32,10 +32,31 @@ func termEnableRaw() error {
 	if err != nil {
 		return err
 	}
+	// MakeRaw clears OPOST, so the kernel stops translating "\n" to
+	// "\r\n". Zod renders full-screen frames (std/canvas) with bare
+	// newlines, which would otherwise print as a staircase while raw
+	// mode is active. Put OPOST/ONLCR back; term.Restore reverts this
+	// together with everything else MakeRaw changed.
+	if err := termKeepOutputTranslation(fd); err != nil {
+		_ = term.Restore(fd, old)
+		return fmt.Errorf("could not restore output translation: %w", err)
+	}
 	termOldState = old
 	termRawActive = true
 
 	return nil
+}
+
+// termKeepOutputTranslation re-enables OPOST/ONLCR on fd, which
+// term.MakeRaw disabled. Raw mode must only change *input* processing;
+// Zod's output relies on the kernel newline translation.
+func termKeepOutputTranslation(fd int) error {
+	t, err := unix.IoctlGetTermios(fd, ioctlReadTermios)
+	if err != nil {
+		return err
+	}
+	t.Oflag |= unix.OPOST | unix.ONLCR
+	return unix.IoctlSetTermios(fd, ioctlWriteTermios, t)
 }
 
 func termDisableRaw() error {
@@ -73,14 +94,22 @@ func termWinsizeDim(width bool) int {
 
 func termHasInput() (bool, error) {
 	fd := int(os.Stdin.Fd())
-	var rfds unix.FdSet
-	rfds.Set(fd)
-	tv := unix.NsecToTimeval(0)
-	n, err := unix.Select(fd+1, &rfds, nil, nil, &tv)
-	if err != nil {
-		return false, err
+	for {
+		var rfds unix.FdSet
+		rfds.Set(fd)
+		tv := unix.NsecToTimeval(0)
+		n, err := unix.Select(fd+1, &rfds, nil, nil, &tv)
+		if err == unix.EINTR {
+			continue
+		}
+		if err != nil {
+			// Report "no input" rather than an error: an Error object is
+			// truthy in Zod, and std/term's poll_key would treat it as
+			// "input ready" and block in read_key (freezing the games).
+			return false, nil
+		}
+		return n > 0, nil
 	}
-	return n > 0, nil
 }
 
 func termReadKey() (string, error) {
@@ -112,21 +141,18 @@ func termReadKey() (string, error) {
 		return string(b[:1]), nil
 	}
 
-	sep := []byte{b[0]}
-	for i := 0; i < 5; i++ {
+	// The press started with ESC: collect the rest of the escape
+	// sequence ("\x1b[A" etc.), tolerating split delivery.
+	return collectEscapeSequence(b[0], func() (byte, bool) {
 		ok, err := termHasInput()
 		if err != nil || !ok {
-			break
+			return 0, false
 		}
 		var eb [1]byte
 		m, err := syscall.Read(fd, eb[:])
 		if err != nil || m == 0 {
-			break
+			return 0, false
 		}
-		sep = append(sep, eb[0])
-		if (eb[0] >= 'A' && eb[0] <= 'Z') || (eb[0] >= 'a' && eb[0] <= 'z') || eb[0] == '~' {
-			break
-		}
-	}
-	return string(sep), nil
+		return eb[0], true
+	}), nil
 }

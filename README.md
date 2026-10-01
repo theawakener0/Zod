@@ -169,7 +169,7 @@ Importing or accessing a private binding is an error (e.g. `secret is private`).
 
 ## Standard Library (preferred)
 
-New code should use the standard library in [`stdlib/`](stdlib/) (21 modules) instead of the legacy core built-ins below. Each module is imported by path with an alias:
+New code should use the standard library in [`stdlib/`](stdlib/) (25 modules) instead of the legacy core built-ins below. Each module is imported by path with an alias:
 
 ```zod
 import "std/fmt" as fmt

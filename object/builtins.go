@@ -1410,24 +1410,30 @@ var Builtins = []struct {
 			return &String{Value: hex.EncodeToString(sum[:])}
 		},
 	}},
-	// DEPRECATED
-	// {"__seed_rand", &Builtin{
-	// 	Fn: func(args ...Object) Object {
-	// 		if len(args) != 1 {
-	// 			return newError("wrong number of arguments. got=%d, want=1", len(args))
-	// 		}
-	// 		n, ok := args[0].(*Integer)
-	// 		if !ok {
-	// 			return newError("argument to `__seed_rand` must be INTEGER. got=%s", args[0].Type())
-	// 		}
-	// 		rand.Seed(n.Value)
-	// 		return NULL
-	// 	},
-	// }},
+	// seededRand, when non-nil, replaces the global math/rand source for
+	// script-level randomness. std/rand's seed() sets it; unseeded scripts
+	// keep using the global source. A dedicated source is required because
+	// math/rand.Seed is a no-op on Go >= 1.24 (GODEBUG randseednop).
+	{"__seed_rand", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 1 {
+				return newError("wrong number of arguments. got=%d, want=1", len(args))
+			}
+			n, ok := args[0].(*Integer)
+			if !ok {
+				return newError("argument to `__seed_rand` must be INTEGER. got=%s", args[0].Type())
+			}
+			seededRand = rand.New(rand.NewSource(n.Value))
+			return NULL
+		},
+	}},
 	{"__rand_float", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) != 0 {
 				return newError("wrong number of arguments. got=%d, want=0", len(args))
+			}
+			if seededRand != nil {
+				return &Float{Value: seededRand.Float64()}
 			}
 			return &Float{Value: rand.Float64()}
 		},
@@ -1443,6 +1449,9 @@ var Builtins = []struct {
 			}
 			if n.Value <= 0 {
 				return newError("argument to `__rand_int` must be positive. got=%d", n.Value)
+			}
+			if seededRand != nil {
+				return NewInteger(seededRand.Int63n(n.Value))
 			}
 			return NewInteger(rand.Int63n(n.Value))
 		},
@@ -1979,6 +1988,10 @@ var Builtins = []struct {
 }
 
 var stdinReader *bufio.Reader
+
+// seededRand, when non-nil, replaces the global math/rand source for
+// script-level randomness (set by the __seed_rand builtin).
+var seededRand *rand.Rand
 
 const maxHTTPBody = 5 * 1024 * 1024
 

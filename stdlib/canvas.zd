@@ -5,7 +5,7 @@
 // are null (no color) or [r, g, b] integer triples (0-255) rendered as
 // 24-bit ANSI escapes (no std/color dependency).
 //
-// Pure Zod, no I/O: render() returns one string (rows joined with "\n").
+// Pure Zod, no I/O: render() returns one string (rows joined with "\r\n").
 // The caller batches output itself, e.g. (see examples/demo/game_of_life.zd):
 //   printf("%s%s%s%s", SYNC_BEGIN, HOME, canvas.render(c), SYNC_END)
 
@@ -163,5 +163,5 @@ pub render := fn(c) {
     }
     rows = push(rows, row)
   }
-  return __str_join(rows, "\n")
+  return __str_join(rows, "\r\n")
 }

@@ -22,7 +22,7 @@ const Banner = `
                                             ▀▀▀  
 `
 
-var version = "v0.6.3"
+var version = "v0.7.0"
 
 func main() {
 	if len(os.Args) > 1 && (os.Args[1] == "-v" || os.Args[1] == "--version") {
