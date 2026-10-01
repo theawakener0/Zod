@@ -12,6 +12,7 @@ import (
 	"github.com/theawakener0/Zod/lexer"
 	obj "github.com/theawakener0/Zod/object"
 	"github.com/theawakener0/Zod/parser"
+	zstdlib "github.com/theawakener0/Zod/stdlib"
 )
 
 type EmittedInstruction struct {
@@ -1063,6 +1064,9 @@ func resolveStdModulePath(rel, baseDir string) (string, bool) {
 			}
 		}
 	}
+	if vpath, ok := zstdlib.Resolve(rel); ok {
+		return vpath, true
+	}
 	return "", false
 }
 
@@ -1126,11 +1130,14 @@ func ResolveModulePath(baseDir, path string) (string, error) {
 			return candExt, nil
 		}
 	}
+	if vpath, ok := zstdlib.Resolve(path); ok {
+		return vpath, nil
+	}
 	return "", fmt.Errorf("module not found")
 }
 
 func CollectModuleExports(absPath string) ([]string, []string, error) {
-	data, err := os.ReadFile(absPath)
+	data, err := zstdlib.ReadFile(absPath)
 	if err != nil {
 		return nil, nil, err
 	}

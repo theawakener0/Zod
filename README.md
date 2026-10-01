@@ -24,6 +24,21 @@ go install github.com/theawakener0/Zod@latest
 
 Requires [Go](https://go.dev/dl/) 1.27 or newer and installs the `Zod` executable into your Go bin directory.
 
+> [!TIP]
+> The standard library is embedded in the binary, so a plain `go install` works out of the box — no separate `stdlib/` directory is needed.
+
+### Standard library lookup
+
+`import "std/..."` resolves modules in this order:
+
+1. `$ZOD_STDLIB` environment variable (explicit override — wins).
+2. `stdlib/` next to the `zod` executable (GitHub release tarballs ship this).
+3. `stdlib/` in the current working directory.
+4. `stdlib/` in up to 5 parent directories of the working directory/script.
+5. The standard library embedded in the binary.
+
+Users who maintain their own copy of the stdlib should set `$ZOD_STDLIB`; it takes priority over every other source.
+
 ## Demo
 
 ### Conway's Game of Life
@@ -39,6 +54,7 @@ Requires [Go](https://go.dev/dl/) 1.27 or newer and installs the `Zod` executabl
 - `break` and `continue`
 - `try(expr)` for recoverable errors
 - Standard library in [`stdlib/`](stdlib/) (`std/fmt`, `std/str`, `std/array`, …) via `import "std/fmt" as fmt`
+- The standard library is also embedded in the binary, so `std/...` imports resolve automatically without a `stdlib/` directory
 - Legacy core built-ins for I/O (`println()`, `printf()`, `input()`, etc.), arrays, and hashes (kept for compat)
 - An interactive REPL
 

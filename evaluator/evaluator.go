@@ -11,6 +11,7 @@ import (
 	"github.com/theawakener0/Zod/lexer"
 	obj "github.com/theawakener0/Zod/object"
 	"github.com/theawakener0/Zod/parser"
+	zstdlib "github.com/theawakener0/Zod/stdlib"
 )
 
 var (
@@ -1401,7 +1402,7 @@ func evalImport(stmt *ast.ImportStatement, env *obj.Enviroment) obj.Object {
 		loadingModules[resolved] = true
 		defer delete(loadingModules, resolved)
 
-		source, err := os.ReadFile(resolved)
+		source, err := zstdlib.ReadFile(resolved)
 		if err != nil {
 			return newError("could not read module %s: %s", resolved, err)
 		}
@@ -1573,6 +1574,9 @@ func resolveStdModulePath(rel, baseDir string) (string, bool) {
 			}
 		}
 	}
+	if vpath, ok := zstdlib.Resolve(rel); ok {
+		return vpath, true
+	}
 	return "", false
 }
 
@@ -1625,5 +1629,8 @@ func resolveModulePath(path string) (string, error) {
 		}
 	}
 
+	if vpath, ok := zstdlib.Resolve(path); ok {
+		return vpath, nil
+	}
 	return "", fmt.Errorf("module not found")
 }

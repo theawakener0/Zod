@@ -12,6 +12,7 @@ import (
 	"github.com/theawakener0/Zod/lexer"
 	obj "github.com/theawakener0/Zod/object"
 	"github.com/theawakener0/Zod/parser"
+	zstdlib "github.com/theawakener0/Zod/stdlib"
 )
 
 // StackSize bounds the operand stack. It is deliberately much larger than
@@ -1783,7 +1784,7 @@ func (vm *VM) loadModule(path string) (*obj.Module, *obj.Error) {
 	if vmLoading[path] {
 		return nil, &obj.Error{Message: fmt.Sprintf("circular import detected: %s", path)}
 	}
-	data, err := os.ReadFile(path)
+	data, err := zstdlib.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, &obj.Error{Message: fmt.Sprintf("module not found: %s", path)}
