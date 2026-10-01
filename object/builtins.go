@@ -17,10 +17,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 	"unicode/utf8"
-	"unsafe"
 )
 
 // Object typed variables
@@ -1933,69 +1931,12 @@ var Builtins = []struct {
 			if len(args) != 0 {
 				return newError("wrong number of arguments. got=%d, want=0", len(args))
 			}
-			fd := int(os.Stdin.Fd())
 
-			enteredTemporarily := false
-			if !termRawActive {
-				var orig [termiosSize]byte
-				if termGetAttr(uintptr(fd), &orig) {
-					raw := orig
-					termSetLflag(&raw, termGetLflag(&raw)&^(termICANON|termECHO))
-					raw[termVMIN] = 1
-					raw[termVTIME] = 0
-					if !termSetAttr(uintptr(fd), &raw) {
-						return newError("could not set terminal to raw mode")
-					}
-					defer termSetAttr(uintptr(fd), &orig)
-					enteredTemporarily = true
-					_ = enteredTemporarily
-				}
-			}
-
-			var b [1]byte
-			n, err := syscall.Read(fd, b[:])
+			s, err := termReadKey()
 			if err != nil {
-				return newError("could not read key: %s", err.Error()) 		
+				return newError("%s", err.Error())
 			}
-			if n == 0 {
-				return newError("could not read key: EOF")
-			}
-
-			if b[0] != 0x1b {
-				return &String{Value: string(b[:1])}
-			}
-
-			sep := []byte{b[0]}
-
-			var saved [termiosSize]byte
-			havedSaved := false
-			if termRawActive || enteredTemporarily {
-				if termGetAttr(uintptr(fd), &saved) {
-					havedSaved = true
-					timed := saved
-					timed[termVMIN] = 0
-					timed[termVTIME] = 1
-					termSetAttr(uintptr(fd), &timed)
-				}
-			}
-
-			for i := 0; i < 5; i++ {
-				var eb [1]byte
-				m, err := syscall.Read(fd, eb[:])
-				if err != nil || m == 0 {
-					break
-				}
-				sep = append(sep, eb[0])
-				if (eb[0] >= 'A' && eb[0] <= 'Z') || (eb[0] >= 'a' && eb[0] <= 'z') || eb[0] == '~' {
-					break
-				}
-			}
-
-			if havedSaved {
-				termSetAttr(uintptr(fd), &saved)
-			}
-
-			return &String{Value: string(sep)}
+			return &String{Value: s}
 		},
 	}},
 	{"__has_input", &Builtin{
@@ -2003,15 +1944,11 @@ var Builtins = []struct {
 			if len(args) != 0 {
 				return newError("wrong number of arguments. got=%d, want=0", len(args))
 			}
-			fd := int(os.Stdin.Fd())
-			var rfds syscall.FdSet
-			rfds.Bits[fd/64] |= int64(1) << (uint(fd) % 64)
-			tv := syscall.Timeval{Sec: 0, Usec: 0}
-			n, err := syscall.Select(fd+1, &rfds, nil, nil, &tv)
+			ok, err := termHasInput()
 			if err != nil {
 				return newError("could not poll stdin: %s", err.Error())
 			}
-			if n > 0 {
+			if ok {
 				return TRUE
 			}
 			return FALSE
@@ -2044,110 +1981,6 @@ var Builtins = []struct {
 var stdinReader *bufio.Reader
 
 const maxHTTPBody = 5 * 1024 * 1024
-
-const (
-	termiosSize = 64
-	termLflag   = 12
-	termVTIME   = 22
-	termVMIN    = 23
-
-	termICANON  = 0x0002
-	termECHO    = 0x0008
-	termISIG	= 0x0001
-	termEXTEN	= 0x8000
-)
-
-var (
-	termRawActive	bool
-	termOrigAttr	[termiosSize]byte
-)
-
-type termWinsize struct {
-	Row    uint16
-	Col    uint16
-	Xpixel uint16
-	Ypixel uint16
-}
-
-func termWinsizeTry(fd uintptr) (termWinsize, bool) {
-	var ws termWinsize
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, uintptr(syscall.TIOCGWINSZ), uintptr(unsafe.Pointer(&ws)))
-	if errno != 0 {
-		return ws, false
-	}
-	return ws, true
-}
-
-func termWinsizeDim(width bool) int {
-	for _, f := range []uintptr{os.Stdout.Fd(), os.Stdin.Fd()} {
-		if ws, ok := termWinsizeTry(f); ok {
-			if width && ws.Col > 0 {
-				return int(ws.Col)
-			}
-			if !width && ws.Row > 0 {
-				return int(ws.Row)
-			}
-		}
-	}
-	return 0
-}
-
-func termGetLflag(b *[termiosSize]byte) uint32 {
-	return uint32(b[termLflag]) | uint32(b[termLflag+1])<<8 | uint32(b[termLflag+2])<<16 | uint32(b[termLflag+3])<<24
-}
-
-func termSetLflag(b *[termiosSize]byte, v uint32) {
-	b[termLflag] = byte(v)
-	b[termLflag+1] = byte(v >> 8)
-	b[termLflag+2] = byte(v >> 16)
-	b[termLflag+3] = byte(v >> 24)
-}
-
-func termGetAttr(fd uintptr, buf *[termiosSize]byte) bool {
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, uintptr(syscall.TCGETS), uintptr(unsafe.Pointer(buf)))
-	return errno == 0
-}
-
-func termSetAttr(fd uintptr, buf *[termiosSize]byte) bool {
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, uintptr(syscall.TCSETS), uintptr(unsafe.Pointer(buf)))
-	return errno == 0
-}
-
-func termEnableRaw() error {
-	if termRawActive {
-		return nil
-	}
-	fd := uintptr(os.Stdin.Fd())
-	if !termGetAttr(fd, &termOrigAttr) {
-		return fmt.Errorf("not a TTY or TCGETS failed")
-	}
-
-	raw := termOrigAttr
-	lflag := termGetLflag(&raw)
-	lflag &^= (termICANON | termECHO | termISIG)
-	termSetLflag(&raw, lflag)
-
-	raw[termVMIN] = 1
-	raw[termVTIME] = 0
-
-	if !termSetAttr(fd, &raw) {
-		return fmt.Errorf("TCSETS failed while entering raw mode")
-	}
-	termRawActive = true
-	return nil
-}
-
-func termDisableRaw() error {
-	if !termRawActive {
-		return nil
-	}
-	fd := uintptr(os.Stdin.Fd())
-	if !termSetAttr(fd, &termOrigAttr) {
-		return fmt.Errorf("TCSETS failed while restoring terminal")
-	}
-	termRawActive = false
-	return nil
-}
 
 func getStdinReader() *bufio.Reader {
 	if stdinReader == nil {
@@ -2324,10 +2157,6 @@ func GetBuiltinByName(name string) *Builtin {
 		}
 	}
 	return nil
-}
-
-func TermDisableRaw() error {
-	return termDisableRaw()
 }
 
 var builtinIndex = func() map[string]*Builtin {

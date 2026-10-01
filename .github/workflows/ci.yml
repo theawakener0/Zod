@@ -28,10 +28,16 @@ jobs:
           CGO_ENABLED: 0
           GOARCH: ${{ matrix.arch }}
         run: go build ./...
+      - name: Build (cross GOOS check)
+        env:
+          CGO_ENABLED: 0
+        run: |
+          GOOS=darwin GOARCH=amd64 go build ./...
+          GOOS=windows GOARCH=amd64 go build ./...
       - name: Test (native, no cross-arch env)
         run: go test -count=1 ./...
       - name: Stdlib smoke (eval + vm)
-        run: go run . examples/std_demo.zd && go run . --eng=vm examples/std_demo.zd && go run . examples/std_bytes_demo.zd && go run . --eng=vm examples/std_bytes_demo.zd && go run . examples/std_err_demo.zd && go run . --eng=vm examples/std_err_demo.zd
+        run: go run . --eng=eval examples/std_demo.zd && go run . --eng=vm examples/std_demo.zd && go run . --eng=eval examples/std_bytes_demo.zd && go run . --eng=vm examples/std_bytes_demo.zd && go run . --eng=eval examples/std_err_demo.zd && go run . --eng=vm examples/std_err_demo.zd
       - name: Stdlib fs smoke (non-Windows)
         if: runner.os != 'Windows'
-        run: go run . examples/std_fs_demo.zd && go run . --eng=vm examples/std_fs_demo.zd
+        run: go run . --eng=eval examples/std_fs_demo.zd && go run . --eng=vm examples/std_fs_demo.zd

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/theawakener0/Zod/compiler"
 	ev "github.com/theawakener0/Zod/evaluator"
@@ -49,12 +50,17 @@ func Start(in io.Reader, out io.Writer, engine string) {
 		if engine == "--eng=vm" {
 			var err error
 			constants, err = runVM(line, out, constants, globals, symbolTable, cwd)
-			_ = err
+			if err != nil {
+				fmt.Fprintf(out, "Oh shit here we go again! %s\n", err)
+			}
 			continue
 		}
 
 		if engine == "--eng=eval" {
-			_ = runEval(line, env, out)
+			err := runEval(line, env, out)
+			if err != nil {
+				fmt.Fprintf(out, "Oh shit here we go again! %s\n", err)
+			}
 			continue
 		}
 
@@ -67,16 +73,14 @@ func runVM(source string, out io.Writer, constants []obj.Object, globals []obj.O
 
 	program := p.ParseProgram()
 	if len(p.Errors()) != 0 {
-		printParseErrors(out, p.Errors())
-		return constants, fmt.Errorf("parse error")
+		return constants, fmt.Errorf("%s", formatParseErrors(p.Errors()))
 	}
 
 	comp := compiler.NewWithState(symbolTable, constants)
 	comp.BaseDir = baseDir
 	err0 := comp.Compile(program)
 	if err0 != nil {
-		fmt.Fprintf(out, "Oh shit here we go again! Compilation failed:\n %s\n", err0)
-		return constants, err0
+		return constants, fmt.Errorf("compilation failed:\n %s", err0)
 	}
 
 	bytecode := comp.Bytecode()
@@ -84,19 +88,16 @@ func runVM(source string, out io.Writer, constants []obj.Object, globals []obj.O
 	machine := vm.NewWithGlobalsStore(bytecode, globals)
 	err1 := machine.Run()
 	if err1 != nil {
-		fmt.Fprintf(out, "Oh shit here we go again! Executing bytecode failed:\n %s\n", err1)
-		return bytecode.Constant, err1
+		return bytecode.Constant, fmt.Errorf("executing bytecode failed:\n %s", err1)
 	}
 
 	LastPopped := machine.LastPoppedStackElem()
+	if errObj, ok := LastPopped.(*obj.Error); ok {
+		return bytecode.Constant, fmt.Errorf("%s", errObj.Message)
+	}
 	if LastPopped != nil && LastPopped.Type() != obj.NULL_OBJ {
 		io.WriteString(out, LastPopped.Inspect())
 		io.WriteString(out, "\n")
-	}
-
-	errObj, ok := LastPopped.(*obj.Error)
-	if ok {
-		return bytecode.Constant, fmt.Errorf("%s", errObj.Message)
 	}
 
 	return bytecode.Constant, nil
@@ -127,22 +128,28 @@ func runEval(source string, env *obj.Enviroment, out io.Writer) error {
 
 	program := p.ParseProgram()
 	if len(p.Errors()) != 0 {
-		printParseErrors(out, p.Errors())
-		return fmt.Errorf("parse error")
+		return fmt.Errorf("%s", formatParseErrors(p.Errors()))
 	}
 
 	eval := ev.Eval(program, env)
+	if err, ok := eval.(*obj.Error); ok {
+		return fmt.Errorf("%s", err.Message)
+	}
 	if eval != nil && eval.Type() != obj.NULL_OBJ {
 		io.WriteString(out, eval.Inspect())
 		io.WriteString(out, "\n")
 	}
 
-	err, ok := eval.(*obj.Error)
-	if ok {
-		return fmt.Errorf("%s", err.Message)
-	}
-
 	return nil
+}
+
+func formatParseErrors(errors []string) string {
+	var sb strings.Builder
+	sb.WriteString("We ran into some problems while parsing your program.\nParse errors:\n")
+	for _, msg := range errors {
+		sb.WriteString("\t" + msg + "\n")
+	}
+	return sb.String()
 }
 
 func printParseErrors(out io.Writer, error []string) {
