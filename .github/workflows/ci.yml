@@ -40,6 +40,14 @@ jobs:
           GOOS: windows
           GOARCH: amd64
         run: go build ./...
+      - name: Test with race detector
+        if: runner.os == 'Linux'
+        run: go test -race -count=1 ./...
+      - name: Test with coverage (report only)
+        if: runner.os == 'Linux'
+        run: |
+          go test -coverprofile=coverage.out -count=1 ./...
+          go tool cover -func=coverage.out | tail -20
       - name: Test (native, no cross-arch env)
         run: go test -count=1 ./...
       - name: Stdlib smoke (eval + vm)

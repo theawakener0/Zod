@@ -300,8 +300,13 @@ func TestCallingFunctionsWithWrongArguments(t *testing.T) {
 
 		vm := New(comp.Bytecode())
 		err = vm.Run()
-		if err != nil {
-			t.Fatalf("vm error: %s", err)
+		// Aligned semantics (Phase 3): an uncaught error aborts the run
+		// with the error's message instead of surfacing as a value.
+		if err == nil {
+			t.Fatalf("expected vm abort, got none (input=%q)", tt.input)
+		}
+		if err.Error() != tt.expected {
+			t.Fatalf("wrong VM abort: want=%q, got=%q", tt.expected, err.Error())
 		}
 
 		stackElem := vm.LastPoppedStackElem()
@@ -471,6 +476,19 @@ func runVMTests(t *testing.T, tests []vmTestCase) {
 
 		vm := New(comp.Bytecode())
 		err1 := vm.Run()
+		if expErr, ok := tt.expected.(*obj.Error); ok {
+			// Aligned semantics (Phase 3): an uncaught error aborts the run
+			// with the error's message instead of surfacing as a value.
+			if err1 == nil {
+				t.Fatalf("expected vm abort, got none (input=%q)", tt.input)
+			}
+			if err1.Error() != expErr.Message {
+				t.Fatalf("wrong vm abort: want=%q, got=%q", expErr.Message, err1.Error())
+			}
+			stackElem := vm.LastPoppedStackElem()
+			testExpectedObject(t, tt.expected, stackElem)
+			continue
+		}
 		if err1 != nil {
 			t.Fatalf("vm error: %s", err1)
 		}

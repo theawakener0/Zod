@@ -14,7 +14,11 @@ import (
 	"github.com/theawakener0/Zod/parser"
 )
 
-const StackSize = 2048
+// StackSize bounds the operand stack. It is deliberately much larger than
+// MaxFrames*typical-frame so deep recursion trips the frame guard first and
+// reports "maximum call depth exceeded" (matching the evaluator) instead of
+// a generic stack overflow.
+const StackSize = 8192
 const GlobalsSize = 65536
 const MaxFrames = 1024
 
@@ -104,7 +108,10 @@ func (vm *VM) Run() error {
 				return err
 			}
 		case code.OpPop:
-			vm.pop()
+			popped := vm.pop()
+			if err := abortOnError(popped); err != nil {
+				return err
+			}
 		case code.OpTrue:
 			err := vm.push(True)
 			if err != nil {
@@ -138,6 +145,9 @@ func (vm *VM) Run() error {
 			frame.ip += 2
 
 			condition := vm.pop()
+			if err := abortOnError(condition); err != nil {
+				return err
+			}
 			if !isTruthy(condition) {
 				frame.ip = pos - 1
 			}
@@ -150,12 +160,19 @@ func (vm *VM) Run() error {
 			globalIndex := int(ins[ip+1])<<8 | int(ins[ip+2])
 			frame.ip += 2
 
-			globals[globalIndex] = vm.pop()
+			stored := vm.pop()
+			if err := abortOnError(stored); err != nil {
+				return err
+			}
+			globals[globalIndex] = stored
 		case code.OpSetLocal:
 			localIndex := int(ins[ip+1])
 			frame.ip += 1
 
 			v := vm.pop()
+			if err := abortOnError(v); err != nil {
+				return err
+			}
 			if cell, ok := vm.stack[frame.basePointer+localIndex].(*obj.Cell); ok && cell != nil {
 				cell.Value = v
 			} else {
@@ -166,6 +183,9 @@ func (vm *VM) Run() error {
 			frame.ip += 1
 
 			v := vm.pop()
+			if err := abortOnError(v); err != nil {
+				return err
+			}
 			if v == nil {
 				v = Null
 			}
@@ -179,6 +199,9 @@ func (vm *VM) Run() error {
 				return fmt.Errorf("free variable index out of range: %d", freeIndex)
 			}
 			v := vm.pop()
+			if err := abortOnError(v); err != nil {
+				return err
+			}
 			if cell, ok := currentClosure.Free[freeIndex].(*obj.Cell); ok && cell != nil {
 				cell.Value = v
 			} else {
@@ -198,6 +221,9 @@ func (vm *VM) Run() error {
 				if err != nil {
 					return err
 				}
+			}
+			if err := abortOnError(vm.lastPopped); err != nil {
+				return err
 			}
 		case code.OpTry:
 			err := vm.executeTry()
@@ -253,6 +279,13 @@ func (vm *VM) Run() error {
 			numElements := int(ins[ip+1])<<8 | int(ins[ip+2])
 			frame.ip += 2
 
+			// Mirror the evaluator: a single error element propagates as the
+			// error itself instead of an array containing it.
+			if numElements == 1 {
+				if _, ok := vm.stack[vm.sp-1].(*obj.Error); ok {
+					break
+				}
+			}
 			array := vm.buildArray(vm.sp-numElements, vm.sp)
 			vm.sp -= numElements
 
@@ -1557,6 +1590,41 @@ func (vm *VM) callBuiltin(builtin *obj.Builtin, numArgs int) error {
 	return vm.push(Null)
 }
 
+// vmErrorTolerantBuiltins mirrors evaluator.builtinAcceptsError: these
+// builtins meaningfully accept error values, so an error argument must be
+// delivered to them instead of short-circuiting the call.
+var vmErrorTolerantBuiltins = []string{"string", "type", "is_error", "__print", "__eprint", "__panic"}
+
+func vmBuiltinAcceptsError(fn obj.Object) bool {
+	bi, ok := fn.(*obj.Builtin)
+	if !ok {
+		return false
+	}
+	for _, name := range vmErrorTolerantBuiltins {
+		if b := obj.GetBuiltinByName(name); b != nil && bi == b {
+			return true
+		}
+	}
+	return false
+}
+
+// abortOnError halts the VM with the error's message, mirroring the
+// evaluator, which aborts the program on uncaught error values. It is
+// invoked only at points where the evaluator also stops propagating:
+// statement boundaries (OpPop), bindings (stores), index assignment, and
+// jump conditions — never inside pure expression evaluation, so try()
+// still converts errors instead of aborting. A try() argument compiles to
+// <expr> followed by OpTry with no statement boundary in between, which is
+// why no OpTry special-casing is needed here. Known residual gap:
+// try(if <error> { ... }) still aborts (a branch decision cannot propagate
+// an error); the evaluator converts it. Pathological; accepted.
+func abortOnError(v obj.Object) error {
+	if errObj, ok := v.(*obj.Error); ok && errObj != nil {
+		return fmt.Errorf("%s", errObj.Message)
+	}
+	return nil
+}
+
 func (vm *VM) executeCall(numArgs int) error {
 	callee := vm.stack[vm.sp-1-numArgs]
 	if callee == nil {
@@ -1568,6 +1636,19 @@ func (vm *VM) executeCall(numArgs int) error {
 			vm.sp = 0
 		}
 		return vm.push(errObj)
+	}
+	// Mirror the evaluator: a single error argument short-circuits the call
+	// (the callee never executes) unless it is a builtin that accepts errors.
+	if numArgs == 1 {
+		if errObj, ok := vm.stack[vm.sp-1].(*obj.Error); ok && errObj != nil {
+			if !vmBuiltinAcceptsError(callee) {
+				vm.sp -= numArgs + 1
+				if vm.sp < 0 {
+					vm.sp = 0
+				}
+				return vm.push(errObj)
+			}
+		}
 	}
 
 	switch callee := callee.(type) {
