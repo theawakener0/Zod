@@ -25,7 +25,7 @@ go install github.com/theawakener0/Zod@latest
 Requires [Go](https://go.dev/dl/) 1.27 or newer and installs the `Zod` executable into your Go bin directory.
 
 > [!TIP]
-> The standard library is embedded in the binary, so a plain `go install` works out of the box — no separate `stdlib/` directory is needed.
+> The standard library is embedded in the binary, so a plain `go install` works out of the box, no separate `stdlib/` directory is needed.
 
 ### Standard library lookup
 
@@ -44,6 +44,14 @@ Users who maintain their own copy of the stdlib should set `$ZOD_STDLIB`; it tak
 ### Conway's Game of Life
 
 ![Conway's Game of Life](media/demo.gif)
+
+### 3D Cube Simulation
+
+![3D Game of Life](media/DemoCube.gif)
+
+### Tetris (simple version)
+
+![Tetris](media/DemoTetris.gif)
 
 ## Features
 
@@ -167,7 +175,7 @@ import "examples/pub_lib.zd" as m        // property access: m.version, m.greet(
 
 Importing or accessing a private binding is an error (e.g. `secret is private`). See `docs/introduction.md` (Modules & pub) and `examples/modules_pub.zd` for details.
 
-## Standard Library (preferred)
+## Standard Library
 
 New code should use the standard library in [`stdlib/`](stdlib/) (25 modules) instead of the legacy core built-ins below. Each module is imported by path with an alias:
 
