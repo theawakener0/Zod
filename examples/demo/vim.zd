@@ -1,0 +1,566 @@
+// ============================================================================
+// Minimal vim-like editor in ZodLang (normal / insert / command modes).
+// Usage: zod examples/demo/vim.zd [file]
+//
+// Commands: i / a (insert), x (delete char), dd (delete line), 0 / $ /
+// Home / End, hjkl + arrows, :w [:file] :e <file> :q :q! :wq (:x), Ctrl-C.
+// Notes: columns are byte offsets (len/slice are byte-based), so multibyte
+// UTF-8 moves by bytes; CRLF is normalized to LF on load; long lines scroll
+// horizontally. Runs on the alternate screen (restored on exit) with a
+// visible cursor: block in normal mode, bar in insert/command (DECSCUSR).
+// ============================================================================
+
+import "std/term" as term
+import "std/str" as str
+import "std/fs" as fs
+import "std/os" as os
+import "std/fmt" as fmt
+import "std/array" as arr
+
+raw_name := fn(k) {
+    if (k == "\x1b[A") { return "up" }
+    if (k == "\x1b[B") { return "down" }
+    if (k == "\x1b[C") { return "right" }
+    if (k == "\x1b[D") { return "left" }
+    if (k == "\x1b[H" || k == "\x1b[1~") { return "home" }
+    if (k == "\x1b[F" || k == "\x1b[4~") { return "end" }
+    if (k == "\x1b[3~") { return "delete" }
+    if (k == "\r" || k == "\n") { return "enter" }
+    if (k == "\x1b") { return "esc" }
+    if (k == " ") { return "space" }
+    return k
+}
+
+CTRL_BAD := "\x01\x02\x03\x04\x05\x06\x07\x08\x0b\x0c\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1c\x1d\x1e\x1f\x7f"
+
+is_text_key := fn(k) {
+    if (k == null) { return false }
+    if (is_error(k)) { return false }
+    if (k == "") { return false }
+    if (str.starts_with(k, "\x1b")) { return false }
+    if (k == "\r" || k == "\n" || k == "\x7f" || k == "\b") { return false }
+    if (k == "\t") { return true }
+    if (str.contains(CTRL_BAD, k)) { return false }
+    true
+}
+
+new_editor := fn(path, lines) {
+    {
+        "path": path,
+        "lines": lines,
+        "row": 0,
+        "col": 0,
+        "mode": "normal",
+        "dirty": false,
+        "quit": false,
+        "message": "",
+        "cmd": "",
+        "top": 0,
+        "left": 0,
+        "pending": "",
+    }
+}
+
+line_at := fn(ed, row) {
+    lines := ed["lines"]
+    if (row < 0 || row >= len(lines)) { return "" }
+    lines[row]
+}
+
+splice_lines := fn(ed, start, del, ins) {
+    lines := ed["lines"]
+    n := len(lines)
+    if (start < 0) { start = 0 }
+    if (start > n) { start = n }
+    if (del < 0) { del = 0 }
+    if (start + del > n) { del = n - start }
+    head := arr.slice(lines, 0, start)
+    tail := arr.slice(lines, start + del, n)
+    out := head
+    for (i := 0; i < len(ins); i++) {
+        out = arr.push(out, ins[i])
+    }
+    for (i := 0; i < len(tail); i++) {
+        out = arr.push(out, tail[i])
+    }
+    ed["lines"] = out
+}
+
+set_line := fn(ed, row, line) {
+    splice_lines(ed, row, 1, [line])
+}
+
+remove_current_line := fn(ed) {
+    if (len(ed["lines"]) <= 1) {
+        ed["lines"] = [""]
+        ed["row"] = 0
+        ed["col"] = 0
+        return false
+    }
+    splice_lines(ed, ed["row"], 1, [])
+    if (ed["row"] >= len(ed["lines"])) { ed["row"] = len(ed["lines"]) - 1 }
+    true
+}
+
+clamp_cursor := fn(ed) {
+    n := len(ed["lines"])
+    if (n == 0) {
+        ed["lines"] = [""]
+        ed["row"] = 0
+        ed["col"] = 0
+        return false
+    }
+    if (ed["row"] < 0) { ed["row"] = 0 }
+    if (ed["row"] >= n) { ed["row"] = n - 1 }
+    L := len(ed["lines"][ed["row"]])
+    if (ed["col"] < 0) { ed["col"] = 0 }
+    if (ed["col"] > L) { ed["col"] = L }
+    true
+}
+
+split_body := fn(text) {
+    if (text == "") { return [""] }
+    parts := str.split(text, "\n")
+    if (len(parts) == 0) { return [""] }
+    out := []
+    for (i := 0; i < len(parts); i++) {
+        s := parts[i]
+        if (str.ends_with(s, "\r")) { s = str.slice(s, 0, len(s) - 1) }
+        out = arr.push(out, s)
+    }
+    if (len(out) == 0) { return [""] }
+    out
+}
+
+load_lines := fn(path) {
+    r := try(fs.read_file(path))
+    if (!r[0]) { return [""] }
+    split_body(r[1])
+}
+
+open_path := fn(ed, path) {
+    r := try(fs.read_file(path))
+    ed["path"] = path
+    ed["row"] = 0
+    ed["col"] = 0
+    ed["top"] = 0
+    ed["left"] = 0
+    ed["pending"] = ""
+    if (!r[0]) {
+        ed["lines"] = [""]
+        ed["dirty"] = false
+        ed["message"] = "\"" + path + "\" [New File]"
+        return false
+    }
+    ed["lines"] = split_body(r[1])
+    ed["dirty"] = false
+    ed["message"] = "\"" + path + "\" " + string(len(ed["lines"])) + "L"
+    true
+}
+
+save_to := fn(ed, path) {
+    body := str.join(ed["lines"], "\n")
+    w := try(fs.write_file(path, body))
+    if (!w[0]) {
+        ed["message"] = "E: write error"
+        return false
+    }
+    ed["path"] = path
+    ed["dirty"] = false
+    ed["message"] = "\"" + path + "\" written"
+    true
+}
+
+save_lines := fn(ed) {
+    save_to(ed, ed["path"])
+}
+
+ensure_visible := fn(ed, view_h, view_w) {
+    if (ed["row"] < ed["top"]) { ed["top"] = ed["row"] }
+    if (ed["row"] >= ed["top"] + view_h) { ed["top"] = ed["row"] - view_h + 1 }
+    if (ed["top"] < 0) { ed["top"] = 0 }
+    max_top := len(ed["lines"]) - view_h
+    if (max_top < 0) { max_top = 0 }
+    if (ed["top"] > max_top) { ed["top"] = max_top }
+    if (ed["col"] < ed["left"]) { ed["left"] = ed["col"] }
+    if (ed["col"] >= ed["left"] + view_w) { ed["left"] = ed["col"] - view_w + 1 }
+    if (ed["left"] < 0) { ed["left"] = 0 }
+}
+
+render := fn(ed) {
+    wr := try(term.width())
+    hr := try(term.height())
+    W := 80
+    H := 24
+    if (wr[0]) { W = wr[1] }
+    if (hr[0]) { H = hr[1] }
+    if (W < 20) { W = 20 }
+    if (H < 5) { H = 5 }
+
+    view_h := H - 1
+    ensure_visible(ed, view_h, W)
+
+    out := term.sync_begin() + term.home()
+
+    for (i := 0; i < view_h; i++) {
+        ri := ed["top"] + i
+        line := ""
+        if (ri < len(ed["lines"])) {
+            line = ed["lines"][ri]
+            if (ed["left"] > 0 || len(line) > W) {
+                line = str.slice(line, ed["left"], ed["left"] + W)
+            }
+        }
+        out += line + "\x1b[K\r\n"
+    }
+
+    flag := ""
+    if (ed["dirty"]) { flag = " [+]" }
+    status := ""
+    if (ed["message"] != "") {
+        status = ed["message"]
+    } elseif (ed["mode"] == "command") {
+        status = ":" + ed["cmd"]
+    } elseif (ed["mode"] == "insert") {
+        status = "-- INSERT -- " + ed["path"] + flag + "  " + string(ed["row"] + 1) + "," + string(ed["col"] + 1)
+    } else {
+        pend := ed["pending"]
+        if (pend != "") { pend = " [" + pend + "]" }
+        status = ed["path"] + flag + "  " + string(ed["row"] + 1) + "," + string(ed["col"] + 1) + pend
+    }
+    if (len(status) > W) { status = str.slice(status, 0, W) }
+
+    status = str.pad_right(status, W, " ")
+    out += "\x1b[7m" + status + "\x1b[0m"
+
+    cr := (ed["row"] - ed["top"]) + 1
+    cc := (ed["col"] - ed["left"]) + 1
+    if (cr > view_h) { cr = view_h }
+    if (cr < 1) { cr = 1 }
+    if (cc > W) { cc = W }
+    if (cc < 1) { cc = 1 }
+    shape := "\x1b[2 q"
+    if (ed["mode"] == "insert" || ed["mode"] == "command") { shape = "\x1b[6 q" }
+    out += shape + "\x1b[" + string(cr) + ";" + string(cc) + "H"
+    out += term.sync_end()
+
+    printf("%s", out)
+
+    if (ed["message"] != "" && ed["mode"] != "command") {
+        ed["message"] = ""
+    }
+}
+
+quit_if_clean := fn(ed) {
+    if (!ed["dirty"]) {
+        ed["quit"] = true
+    } else {
+        ed["message"] = "No write since last change (:q! to force)"
+    }
+}
+
+delete_char_at := fn(ed) {
+    s := line_at(ed, ed["row"])
+    c := ed["col"]
+    if (c < len(s)) {
+        set_line(ed, ed["row"], str.slice(s, 0, c) + str.slice(s, c + 1, len(s)))
+        ed["dirty"] = true
+    }
+}
+
+handle_normal := fn(ed, k) {
+    name := raw_name(k)
+
+    if (k == "\x03" || k == "\x04") {
+        ed["pending"] = ""
+        quit_if_clean(ed)
+        return false
+    }
+    if (name == "esc") {
+        ed["pending"] = ""
+        return false
+    }
+
+    if (ed["pending"] == "d") {
+        if (k == "d") {
+            ed["pending"] = ""
+            remove_current_line(ed)
+            ed["dirty"] = true
+            clamp_cursor(ed)
+            return false
+        }
+        ed["pending"] = ""
+    }
+
+    if (name == "left" || k == "h") {
+        ed["col"] -= 1
+    } elseif (name == "down" || k == "j") {
+        ed["row"] += 1
+    } elseif (name == "up" || k == "k") {
+        ed["row"] -= 1
+    } elseif (name == "right" || k == "l") {
+        ed["col"] += 1
+    } elseif (name == "home" || k == "0") {
+        ed["col"] = 0
+    } elseif (name == "end" || k == "$") {
+        L := len(line_at(ed, ed["row"]))
+        if (L > 0) {
+            ed["col"] = L - 1
+        } else {
+            ed["col"] = 0
+        }
+    } elseif (name == "delete" || k == "x") {
+        delete_char_at(ed)
+    } elseif (k == "i") {
+        ed["mode"] = "insert"
+        ed["pending"] = ""
+    } elseif (k == "a") {
+        ed["col"] += 1
+        clamp_cursor(ed)
+        ed["mode"] = "insert"
+        ed["pending"] = ""
+    } elseif (k == "d") {
+        ed["pending"] = "d"
+        return false
+    } elseif (k == ":") {
+        ed["mode"] = "command"
+        ed["cmd"] = ""
+        ed["pending"] = ""
+        ed["message"] = ""
+        return false
+    }
+
+    clamp_cursor(ed)
+}
+
+handle_insert := fn(ed, k) {
+    name := raw_name(k)
+
+    if (name == "esc" || k == "\x03") {
+        ed["mode"] = "normal"
+        ed["col"] -= 1
+        clamp_cursor(ed)
+        return false
+    }
+    if (name == "left") {
+        ed["col"] -= 1
+        clamp_cursor(ed)
+        return false
+    }
+    if (name == "right") {
+        ed["col"] += 1
+        clamp_cursor(ed)
+        return false
+    }
+    if (name == "up") {
+        ed["row"] -= 1
+        clamp_cursor(ed)
+        return false
+    }
+    if (name == "down") {
+        ed["row"] += 1
+        clamp_cursor(ed)
+        return false
+    }
+    if (name == "home") {
+        ed["col"] = 0
+        clamp_cursor(ed)
+        return false
+    }
+    if (name == "end") {
+        ed["col"] = len(line_at(ed, ed["row"]))
+        clamp_cursor(ed)
+        return false
+    }
+    if (name == "delete") {
+        delete_char_at(ed)
+        clamp_cursor(ed)
+        return false
+    }
+    if (k == "\x7f" || k == "\b") {
+        if (ed["col"] > 0) {
+            s := line_at(ed, ed["row"])
+            c := ed["col"]
+            set_line(ed, ed["row"], str.slice(s, 0, c - 1) + str.slice(s, c, len(s)))
+            ed["col"] -= 1
+            ed["dirty"] = true
+        } elseif (ed["row"] > 0) {
+            prev := line_at(ed, ed["row"] - 1)
+            cur := line_at(ed, ed["row"])
+            splice_lines(ed, ed["row"] - 1, 2, [prev + cur])
+            ed["row"] -= 1
+            ed["col"] = len(prev)
+            ed["dirty"] = true
+        }
+        clamp_cursor(ed)
+        return false
+    }
+    if (name == "enter") {
+        s := line_at(ed, ed["row"])
+        c := ed["col"]
+        left := str.slice(s, 0, c)
+        right := str.slice(s, c, len(s))
+        splice_lines(ed, ed["row"], 1, [left, right])
+        ed["row"] += 1
+        ed["col"] = 0
+        ed["dirty"] = true
+        return false
+    }
+
+    if (is_text_key(k)) {
+        s := line_at(ed, ed["row"])
+        c := ed["col"]
+        set_line(ed, ed["row"], str.slice(s, 0, c) + k + str.slice(s, c, len(s)))
+        ed["col"] = c + len(k)
+        ed["dirty"] = true
+    }
+}
+
+cmd_arg := fn(t, n) {
+    if (len(t) <= n) { return "" }
+    str.trim(str.slice(t, n, len(t)))
+}
+
+run_command := fn(ed, cmd) {
+    t := str.trim(cmd)
+    if (t == "q") {
+        quit_if_clean(ed)
+    } elseif (t == "q!") {
+        ed["quit"] = true
+    } elseif (t == "w" || t == "w!") {
+        save_lines(ed)
+    } elseif (t == "wq" || t == "wq!" || t == "x") {
+        if (save_lines(ed)) {
+            ed["quit"] = true
+        }
+    } elseif (str.starts_with(t, "w ") || str.starts_with(t, "w! ")) {
+        cut := 2
+        if (str.starts_with(t, "w! ")) { cut = 3 }
+        arg := cmd_arg(t, cut)
+        if (arg == "") {
+            ed["message"] = "No file name"
+        } else {
+            save_to(ed, arg)
+        }
+    } elseif (str.starts_with(t, "wq ") || str.starts_with(t, "wq! ")) {
+        cut := 3
+        if (str.starts_with(t, "wq! ")) { cut = 4 }
+        arg := cmd_arg(t, cut)
+        if (arg == "") {
+            ed["message"] = "No file name"
+        } else {
+            if (save_to(ed, arg)) {
+                ed["quit"] = true
+            }
+        }
+    } elseif (str.starts_with(t, "e ")) {
+        arg := cmd_arg(t, 2)
+        if (arg == "") {
+            ed["message"] = "No file name"
+        } else {
+            if (ed["dirty"]) {
+                ed["message"] = "No write since last change (:e! to force)"
+            } else {
+                open_path(ed, arg)
+            }
+        }
+    } elseif (str.starts_with(t, "e! ")) {
+        arg := cmd_arg(t, 3)
+        if (arg == "") {
+            ed["message"] = "No file name"
+        } else {
+            open_path(ed, arg)
+        }
+    } else {
+        ed["message"] = "Not an editor command: " + t
+    }
+}
+
+handle_command := fn(ed, k) {
+    name := raw_name(k)
+
+    if (name == "esc" || k == "\x03") {
+        ed["mode"] = "normal"
+        ed["cmd"] = ""
+        return false
+    }
+
+    if (name == "enter") {
+        cmd := ed["cmd"]
+        ed["mode"] = "normal"
+        ed["cmd"] = ""
+        run_command(ed, cmd)
+        return false
+    }
+
+    if (k == "\x7f" || k == "\b") {
+        if (len(ed["cmd"]) > 0) {
+            ed["cmd"] = str.slice(ed["cmd"], 0, len(ed["cmd"]) - 1)
+        }
+        return false
+    }
+
+    // Ctrl-U clears the command line.
+    if (k == "\x15") {
+        ed["cmd"] = ""
+        return false
+    }
+
+    if (k == "\t") {
+        return false
+    }
+
+    if (is_text_key(k)) {
+        ed["cmd"] += k
+    }
+}
+
+
+ARGS := os.args()
+path := "untitled.txt"
+
+seen_zd := false
+picked := false
+for (i := 0; i < len(ARGS); i++) {
+    a := ARGS[i]
+    if (!seen_zd && str.ends_with(a, ".zd")) {
+        seen_zd = true
+    } elseif (!seen_zd && str.starts_with(a, "-")) {
+    } elseif (seen_zd && !picked && !str.starts_with(a, "-")) {
+        path = a
+        picked = true
+    }
+}
+
+lines := load_lines(path)
+ed := new_editor(path, lines)
+if (!fs.exists(path)) {
+    ed["message"] = "\"" + path + "\" [New File]"
+}
+
+wr := try(term.width())
+if (!wr[0]) {
+    fmt.println("vim: need a TTY")
+    os.exit(1)
+}
+
+term.enable_raw()
+printf("%s%s", "\x1b[?1049h", term.show_cursor())
+
+loop {
+    if (ed["quit"]) { break }
+    render(ed)
+    k := term.read_key()
+    if (is_error(k) || k == null) { continue }
+    if (ed["mode"] == "normal") {
+        handle_normal(ed, k)
+    } elseif (ed["mode"] == "insert") {
+        handle_insert(ed, k)
+    } elseif (ed["mode"] == "command") {
+        handle_command(ed, k)
+    }
+}
+
+printf("%s%s", "\x1b[0 q", term.show_cursor())
+printf("%s", "\x1b[?1049l")
+term.disable_raw()
