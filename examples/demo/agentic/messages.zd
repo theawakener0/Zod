@@ -1,0 +1,33 @@
+import "std/array" as arr
+import "std/hash" as hash
+
+pub new_message := fn(system_prompt) {
+    msgs := []
+    if (system_prompt != null && system_prompt != "") {
+        msgs = arr.push(msgs, {"role": "system", "content": system_prompt})
+    }
+
+    return {
+        "messages": msgs,
+        "add": fn(self, role, content, extra) {
+            msg := {"role": role, "content": content}
+            if (extra != null) {
+                keys := hash.keys(extra)
+                for (i := 0; i < len(keys); i++) {
+                    msg[keys[i]] = extra[keys[i]]
+                }
+            }
+            self["messages"] = arr.push(self["messages"], m)
+            return self
+        },
+        "to_api": fn(self) {
+            return self["messages"]
+        },
+        "last": fn(self) {
+            if (len(self["messages"]) == 0) {
+                return null
+            }
+            return self["messages"][len(self["messages"]) - 1]
+        }
+    }
+}

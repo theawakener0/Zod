@@ -1903,6 +1903,66 @@ var Builtins = []struct {
 			return &String{Value: string(data)}
 		},
 	}},
+	{"__http_post_headers", &Builtin{
+		Fn: func(args ...Object) Object {
+				if len(args) != 4{
+					return newError("wrong number of arguments. got=%d, want=4", len(args))
+				}
+				u, ok := args[0].(*String)
+				if !ok {
+					return newError("first argument to `__http_post_headers` must be STRING. got=%s", args[0].Type())
+				}
+				body, ok := args[1].(*String)
+				if !ok {
+					return newError("second argument to `__http_post_headers` must be STRING. got=%s", args[1].Type())
+				}
+				headersObj, ok := args[2].(*Hash)
+				if !ok {
+					return newError("third argument to `__http_post_headers` must be HASH. got=%s", args[2].Type())
+				}
+				ms, ok := args[3].(*Integer)
+				if !ok {
+					return newError("fourth argument to `__http_post_headers` must be INTEGER. got=%s", args[3].Type())
+				}
+				if ms.Value < 1 || ms.Value > 60000 {
+					return newError("fourth argument to `__http_post_headers` must be between 1 and 60000. got=%d", ms.Value)
+				}
+
+				req, err := http.NewRequest("POST", u.Value, strings.NewReader(body.Value))
+				if err != nil {
+					return newError("http post %q failed: %s", u.Value, err.Error())
+				}
+
+				req.Header.Set("Content-Type", "application/json")
+				errObj := applyHeaders(headersObj, req.Header)
+				if errObj != NULL {
+					return errObj
+				}
+
+				client := &http.Client{Timeout: time.Duration(ms.Value) * time.Millisecond}
+				resp, err := client.Do(req)
+				if err != nil {
+					return newError("http post %q failed: %s", u.Value, err.Error())
+				}
+				defer resp.Body.Close()
+
+				if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+					data, _ := io.ReadAll(io.LimitReader(resp.Body, maxHTTPBody+1))
+					return newError("http post %q failed with status %s: %s", u.Value, resp.Status, string(data))
+				}
+				if resp.ContentLength > maxHTTPBody {
+					return newError("http response body too large")
+				}
+				data, err := io.ReadAll(io.LimitReader(resp.Body, maxHTTPBody+1))
+				if err != nil {
+					return newError("http post %q failed: %s", u.Value, err.Error())
+				}
+				if int64(len(data)) > maxHTTPBody {
+					return newError("http response body too large")
+				}
+				return &String{Value: string(data)}
+			},
+	}},
 	{"__term_width", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) != 0 {
@@ -1994,6 +2054,30 @@ var stdinReader *bufio.Reader
 var seededRand *rand.Rand
 
 const maxHTTPBody = 5 * 1024 * 1024
+
+func applyHeaders(h *Hash, header http.Header) Object {
+	for _, key := range h.Order {
+		pair := h.Pairs[key]
+		k, ok1 := pair.Key.(*String)
+		v, ok2 := pair.Value.(*String)
+		if !ok1 || !ok2 {
+			return newError("headers hash keys and values must be STRING")
+		}
+		header.Set(k.Value, v.Value)
+	}
+
+	if len(h.Order) == 0 {
+		for _, pair := range h.Pairs {
+			k, ok1 := pair.Key.(*String)
+			v, ok2 := pair.Value.(*String)
+			if !ok1 || !ok2 {
+				return newError("headers hash keys and values must be STRING")
+			}
+			header.Set(k.Value, v.Value)
+		}
+	}
+	return NULL
+}
 
 func getStdinReader() *bufio.Reader {
 	if stdinReader == nil {

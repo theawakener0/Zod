@@ -1,0 +1,53 @@
+import "std/http" as http
+import "std/json" as json
+import "std/os" as os
+import "std/fmt" as fmt
+import "std/str" as str
+
+pub Base_URL := "https://ai.hackclub.com/proxy/v1"
+pub DEFAULT_MODEL := "qwen/qwen3-32b"
+
+pub new_client := fn(api_key, model) {
+    if (api_key == null || api_key == "") { api_key = os.getenv("HACKCLUB_AI_API_KEY") }
+    if (api_key == null || api_key == "") { return error("HACKCLUB_AI_API_KEY is required") }
+    if (model == null || model == "") { model = DEFAULT_MODEL }
+
+    do_post := fn(url, data) {
+        url := Base_URL + url
+        body := json.stringify(data)
+        headers := {
+            "Authorization": "Bearer " + api_key,
+            "Content-Type": "application/json"
+        }
+
+        resp := try(http.post_headers(url, body, headers))
+        if (!resp[0]) {
+            return error("http post failed: " + resp[1])
+        }
+        return json.parse(resp[1])
+    }
+
+    chat := fn(messages, options) {
+        if (options == null) { options = {} }
+
+        payload := {
+            "model": model,
+            "messages": messages,
+            "temperature": 0.7,
+            "stream": false
+        }
+        if (options["temperature"] != null) { payload["temperature"] = options["temperature"] }
+        if (options["max_tokens"] != null) { payload["max_tokens"] = options["max_tokens"] }
+        if (options["tools"] != null) { payload["tools"] = options["tools"] }
+        if (options["tool_choice"] != null) { payload["tool_choice"] = options["tool_choice"] }
+
+        return do_post("/chat/completions", payload)
+    }
+
+    return {
+        "api_key": api_key,
+        "model": model,
+        "chat": chat
+    }
+
+}

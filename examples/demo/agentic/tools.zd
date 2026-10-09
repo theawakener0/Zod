@@ -1,0 +1,67 @@
+import "std/json" as json
+import "std/array" as arr
+import "std/hash" as hash
+import "std/fmt" as fmt
+
+/* 
+- A tool is a hash
+{
+    "name":             string,
+    "description":      string,
+    "parameters":       JSON-schema hash,
+    "fn":               function that receives a hash of arguments
+}
+*/
+
+pub make_tool := fn(name, description, parameters, fn) {
+    {
+        "name": name,
+        "description": description,
+        "parameters": parameters,
+        "fn": fn
+    }
+}
+
+pub to_openai := fn(tools) {
+    out := []
+    for (i := 0; i < len(tools); ++i) {
+        t := tools[i]
+        out = arr.push(out, {
+            "type": "function",
+            "function": {
+                "name": t["name"],
+                "description": t["description"],
+                "parameters": t["parameters"]
+            }
+        })
+    }
+    out
+}
+
+pub call_tool := fn(tools_by_name,name, args_json) {
+    if (!hash.contains(tools_by_name, name)) {
+        return "Error: unknown tool " + name
+    }
+    tool := tools_by_name[name]
+    args := try(json.parse(args_json))
+    if (!args[0]) {
+        return "Error: bad arguments JSON: " + args[1]
+    }
+    resp := tool["fn"](args[1])
+    if (!resp[0]) {
+        return "Error: calling tool: " + resp[1]
+    }
+    if (type(resp[1]) == "STRING") {
+        return resp[1]
+    }
+    return json.stringify(resp[1])
+}
+
+pub index_by_name := fn(tools) {
+    h := {}
+    for (i := 0; i < len(tools); ++i) {
+        h[tools[i]["name"]] = tools[i]
+    }
+    h
+}
+

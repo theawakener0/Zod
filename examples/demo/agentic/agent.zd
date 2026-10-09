@@ -1,0 +1,77 @@
+import "client.zd" as client
+import "messages.zd" as messages
+import "tools.zd" as tools
+import "std/fmt" as fmt
+import "std/array" as arr
+import "std/hash" as hash
+
+pub new_agent := fn(cli, tool_list, sys_prompt, max_steps) {
+    if (sys_prompt == null || sys_prompt == "") {
+        sys_prompt = "You are a helpful assistant that can use tools if needed when they help answer"
+    }
+    if (max_steps == null || max_steps == 0) {
+        max_steps = 8
+    }
+
+    tools_by_name := tools.index_by_name(tool_list)
+    openai_tools := tools.to_openai(tool_list)
+    conv := messages.new_conversation(sys_prompt)
+
+    run := fn(user_message) {
+        conv["add"](conv, "user", user_message, null)
+        
+        for (step := 0; step < max_steps; step += 1) {
+            options := {
+                "tools": openai_tools,
+                "tool_choice": "auto"
+            }
+            if (len(tool_list) == 0) {
+                options = {}
+            }
+
+            resp := try(cli["chat"](conv["to_api"](conv), options))
+            if (!resp[0]) {
+                return "Agent error: " + resp[1]
+            }
+            data := resp[1]
+
+            choice := data["choices"][0]
+            message := choice["message"]
+            finish := choice["finish_reason"]
+
+            extra := null
+            if (message[tool_calls] != null) {
+                extra = {"tool_calls": message[tool_calls]}
+            }
+            conv["add"](conv, "assistant", message["content"], extra)
+
+            if (message["tool_calls"] != null && len(message["tool_calls"]) > 0) {
+                for (i := 0; i < len(message["tool_calls"]); i++) {
+                    tc := message["tool_calls"][i]
+                    name := tc["name"]
+                    args := tc["function"]["arguments"]
+                    id := tc["id"]
+
+                    result := tools.call_tool(tools_by_name, name, args)
+
+                    conv["add"](conv, "tool", result, {
+                        "name": name,
+                        "tool_call_id": id
+                    })
+                }
+                continue
+            }
+
+            if (message["content"] != null) {
+                return message["content"]
+            }
+            return ""
+        }
+        return "Reached maximum number of steps without finishing."
+    }
+
+    return {
+        "run": run,
+        "conversation": conv
+    }
+}

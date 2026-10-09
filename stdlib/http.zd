@@ -9,3 +9,11 @@ pub get_timeout := fn(url, ms) {
 pub post := fn(url, body) {
   return __http_post(url, body, 10000)
 }
+
+pub post_headers := fn(url, body, headers) {
+  return __http_post_headers(url, body, headers, 10000)
+}
+
+pub post_timeout := fn(url, body, ms) {
+  return __http_post_headers(url, body, headers, ms)
+}
