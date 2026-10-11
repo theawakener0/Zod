@@ -17,3 +17,11 @@ pub post_headers := fn(url, body, headers) {
 pub post_timeout := fn(url, body, ms) {
   return __http_post_headers(url, body, headers, ms)
 }
+
+pub post_stream := fn(url, body, headers) {
+  return __http_post_stream(url, body, headers, 120000)
+}
+
+pub post_stream_timeout := fn(url, body, headers, ms) {
+  return __http_post_stream(url, body, headers, ms)
+}

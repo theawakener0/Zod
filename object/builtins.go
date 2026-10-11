@@ -1963,6 +1963,103 @@ var Builtins = []struct {
 				return &String{Value: string(data)}
 			},
 	}},
+	{"__http_post_stream", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 4 {
+				return newError("wrong number of arguments. got=%d, want=4", len(args))
+			}
+			u, ok := args[0].(*String)
+			if !ok {
+				return newError("first argument to `__http_post_stream` must be STRING. got=%s", args[0].Type())
+			}
+			body, ok := args[1].(*String)
+			if !ok {
+				return newError("second argument to `__http_post_stream` must be STRING. got=%s", args[1].Type())
+			}
+			headersObj, ok := args[2].(*Hash)
+			if !ok {
+				return newError("third argument to `__http_post_stream` must be HASH. got=%s", args[2].Type())
+			}
+			ms, ok := args[3].(*Integer)
+			if !ok {
+				return newError("fourth argument to `__http_post_stream` must be INTEGER. got=%s", args[3].Type())
+			}
+			if ms.Value < 1 || ms.Value > 300000 {
+				return newError("fourth argument to `__http_post_stream` must be between 1 and 300000. got=%d", ms.Value)
+			}
+
+			req, err := http.NewRequest("POST", u.Value, strings.NewReader(body.Value))
+			if err != nil {
+				return newError("http stream %q failed: %s", u.Value, err.Error())
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "text/event-stream")
+			errObj := applyHeaders(headersObj, req.Header)
+			if errObj != NULL {
+				return errObj
+			}
+
+			client := &http.Client{Timeout: time.Duration(ms.Value) * time.Millisecond}
+			resp, err := client.Do(req)
+			if err != nil {
+				return newError("http stream %q failed: %s", u.Value, err.Error())
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+				data, _ := io.ReadAll(io.LimitReader(resp.Body, maxHTTPBody+1))
+				return newError("http stream %q failed with status %s: %s", u.Value, resp.Status, string(data))
+			}
+
+			scanner := bufio.NewScanner(resp.Body)
+
+			var full strings.Builder
+			var totalBytes int64
+
+			for scanner.Scan() {
+				line := scanner.Text()
+
+				if line == "" || strings.HasPrefix(line, ":") {
+					continue
+				}
+				if !strings.HasPrefix(line, "data: ") {
+					continue
+				}
+				payload := strings.TrimPrefix(line, "data: ")
+				payload = strings.TrimSpace(payload)
+
+				if payload == "[DONE]" {
+					break
+				}
+
+				delta, err := extractSSEDelta(payload)
+				if err != nil {
+					continue
+				}
+				if delta == "" {
+					continue
+				}
+
+				totalBytes += int64(len(delta))
+				if totalBytes > maxHTTPBody {
+					return newError("http stream response too large")
+				}
+
+				fmt.Print(delta)
+				full.WriteString(delta)
+			}
+			
+			errScan := scanner.Err()
+			if errScan != nil {
+				return newError("http stream %q read error: %s", u.Value, errScan.Error())
+			}
+
+			if full.Len() > 0 {
+				fmt.Println()
+			}
+			return &String{Value: full.String()}
+		},
+	}},
 	{"__term_width", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) != 0 {
@@ -2077,6 +2174,24 @@ func applyHeaders(h *Hash, header http.Header) Object {
 		}
 	}
 	return NULL
+}
+
+func extractSSEDelta(payload string) (string, error) {
+	var chunk struct {
+		Choices []struct {
+			Delta struct {
+				Content string `json:"content"`
+			} `json:"delta"`
+		} `json:"choices"`
+	}
+	err := json.Unmarshal([]byte(payload), &chunk)
+	if err != nil {
+		return "", err
+	}
+	if len(chunk.Choices) == 0 {
+		return "", nil
+	}
+	return chunk.Choices[0].Delta.Content, nil
 }
 
 func getStdinReader() *bufio.Reader {
