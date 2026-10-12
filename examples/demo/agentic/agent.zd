@@ -70,8 +70,21 @@ pub new_agent := fn(cli, tool_list, sys_prompt, max_steps) {
         return "Reached maximum number of steps without finishing."
     }
 
+    stream := fn(user_message) {
+        conv["add"](conv, "user", user_message, null)
+
+        text := try(cli["stream"](conv["to_api"](conv), null))
+        if (!text[0]) {
+            return "Agent stream error: " + text[1]
+        }
+
+        conv["add"](conv, "assistant", text[1], null)
+        return text[1]
+    }
+
     return {
         "run": run,
+        "stream": stream,
         "conversation": conv
     }
 }
