@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/theawakener0/Zod/compiler"
@@ -117,6 +118,14 @@ func Execute(source string, out io.Writer, engine string, baseDir string) error 
 	}
 	if engine == "--eng=eval" {
 		env := obj.NewEnviroment()
+		if baseDir != "" {
+			abs := baseDir
+			if a, err := filepath.Abs(baseDir); err == nil {
+				abs = a
+			}
+			ev.PushModuleDir(abs)
+			defer ev.PopModuleDir()
+		}
 		return runEval(source, env, out)
 	}
 	return fmt.Errorf("unknown engine %s", engine)

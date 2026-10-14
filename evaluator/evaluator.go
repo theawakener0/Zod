@@ -1496,6 +1496,23 @@ func stdlibPath() string {
 
 var moduleDirStack []string
 
+// PushModuleDir sets the entry script directory for relative import
+// resolution (mirrors compiler BaseDir used by the VM engine).
+// Callers must defer PopModuleDir.
+func PushModuleDir(dir string) {
+	if dir == "" {
+		return
+	}
+	moduleDirStack = append(moduleDirStack, dir)
+}
+
+// PopModuleDir removes the most recent entry directory.
+func PopModuleDir() {
+	if len(moduleDirStack) > 0 {
+		moduleDirStack = moduleDirStack[:len(moduleDirStack)-1]
+	}
+}
+
 func currentModuleBaseDir() string {
 	if len(moduleDirStack) > 0 {
 		return moduleDirStack[len(moduleDirStack)-1]

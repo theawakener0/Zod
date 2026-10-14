@@ -1,0 +1,32 @@
+// std/process: run external commands via the __exec builtin.
+// NOTE: shell() passes script to "sh -c" without escaping. The caller is
+// responsible for quoting/validating untrusted input to avoid injection.
+
+pub exec := fn(cmd, args, opts) {
+  if (args == null) {
+    args = []
+  }
+  if (opts == null) {
+    opts = {}
+  }
+  return __exec(cmd, args, opts)
+}
+
+pub run := fn(cmd, args) {
+  return exec(cmd, args, {})
+}
+
+pub shell := fn(script, opts) {
+  if (opts == null) {
+    opts = {}
+  }
+  return __exec("sh", ["-c", script], opts)
+}
+
+pub shell_cwd := fn(script, cwd) {
+  return __exec("sh", ["-c", script], {"cwd": cwd})
+}
+
+pub shell_timeout := fn(script, ms) {
+  return __exec("sh", ["-c", script], {"timeout_ms": ms})
+}

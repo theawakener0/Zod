@@ -1,0 +1,525 @@
+import "tools.zd" as tools
+import "std/fs" as fs
+import "std/str" as str
+import "std/array" as arr
+import "std/json" as json
+import "std/process" as process
+
+// Pure-Zod coding tools for the AI harness.
+// No Go changes; only std/* + tools.zd (+ __exec indirectly via std/process).
+
+pub make_coding_tools := fn(cwd, opts) {
+    if (opts == null) {
+        opts = {}
+    }
+    allow_exec := true
+    if (opts["allow_exec"] != null) {
+        allow_exec = opts["allow_exec"]
+    }
+    max_bytes := 200000
+    if (opts["max_bytes"] != null && type(opts["max_bytes"]) == "INTEGER") {
+        max_bytes = opts["max_bytes"]
+    }
+
+    // Returns null when path is usable, else an error string.
+    check_path := fn(p) {
+        if (p == null || type(p) != "STRING" || p == "") {
+            return "Error: path required"
+        }
+        if (str.contains(p, "..")) {
+            return "Error: path escapes cwd: " + p
+        }
+        return null
+    }
+
+    base_name := fn(rel) {
+        parts := str.split(rel, "/")
+        return parts[len(parts) - 1]
+    }
+
+    // Strip leading "**/" segments from a glob pattern.
+    strip_starslash := fn(p) {
+        out := p
+        for (str.starts_with(out, "**/")) {
+            out = str.slice(out, 3, len(out))
+        }
+        return out
+    }
+
+    // Match a file (basename name, cwd-relative rel path) against pattern.
+    // "*" / "**" match everything; "*.<suf>" is a suffix match;
+    // "pre*" is a prefix match; other "*" patterns strip stars and
+    // contains-match; otherwise exact or contains match.
+    match_pat := fn(name, rel, pat) {
+        if (pat == "*" || pat == "**" || pat == "**/*") {
+            return true
+        }
+        p := strip_starslash(pat)
+        if (p == "*" || p == "") {
+            return true
+        }
+        if (str.starts_with(p, "*.")) {
+            rest := str.slice(p, 2, len(p))
+            if (!str.contains(rest, "*")) {
+                return str.ends_with(name, "." + rest)
+            }
+        }
+        if (str.ends_with(p, "*")) {
+            pre := str.slice(p, 0, len(p) - 1)
+            if (!str.contains(pre, "*")) {
+                core := pre
+                for (str.starts_with(core, "*")) {
+                    core = str.slice(core, 1, len(core))
+                }
+                if (core == "") {
+                    return true
+                }
+                return str.starts_with(name, core) || str.starts_with(rel, core)
+            }
+        }
+        if (str.contains(p, "*")) {
+            core := str.replace(p, "*", "")
+            core = str.replace(core, "/", "")
+            if (core == "") {
+                return true
+            }
+            return str.contains(name, core) || str.contains(rel, core)
+        }
+        if (name == p || rel == p) {
+            return true
+        }
+        return str.contains(name, p) || str.contains(rel, p)
+    }
+
+    // Recursively list files under base. root is base's cwd-relative path
+    // ("" when base == cwd). Returns cwd-relative paths. Depth capped at 8,
+    // entries capped at 200. Skips dot-dirs and node_modules/.git/target.
+    // Every fs call is guarded with try; errors are skipped.
+    walk_files := fn(base, root) {
+        out := []
+        dirs := [base]
+        rels := [root]
+        depths := [0]
+        for (len(dirs) > 0) {
+            idx := len(dirs) - 1
+            cur := dirs[idx]
+            cur_rel := rels[idx]
+            dep := depths[idx]
+            dirs = arr.slice(dirs, 0, idx)
+            rels = arr.slice(rels, 0, idx)
+            depths = arr.slice(depths, 0, idx)
+            if (dep > 8) {
+                continue
+            }
+            lr := try(fs.ls(cur))
+            if (!lr[0]) {
+                continue
+            }
+            entries := lr[1]
+            for (i := 0; i < len(entries); i += 1) {
+                name := entries[i]
+                if (str.starts_with(name, ".")) {
+                    continue
+                }
+                if (name == "node_modules" || name == ".git" || name == "target") {
+                    continue
+                }
+                full := cur + "/" + name
+                rel := name
+                if (cur_rel != "") {
+                    rel = cur_rel + "/" + name
+                }
+                sr := try(fs.stat(full))
+                if (!sr[0]) {
+                    continue
+                }
+                st := sr[1]
+                if (st["is_dir"]) {
+                    if (dep < 8) {
+                        dirs = arr.push(dirs, full)
+                        rels = arr.push(rels, rel)
+                        depths = arr.push(depths, dep + 1)
+                    }
+                } else {
+                    out = arr.push(out, rel)
+                    if (len(out) >= 200) {
+                        return out
+                    }
+                }
+            }
+        }
+        return out
+    }
+
+    // Resolve optional dir arg to [base, root]; returns null pair on error.
+    resolve_base := fn(d) {
+        if (d == null) {
+            d = ""
+        }
+        if (type(d) != "STRING") {
+            return ["Error: dir must be a string", null, null]
+        }
+        if (str.contains(d, "..")) {
+            return ["Error: path escapes cwd: " + d, null, null]
+        }
+        base := cwd
+        root := ""
+        if (d != "") {
+            base = cwd + "/" + d
+            root = d
+        }
+        return [null, base, root]
+    }
+
+    read_file := tools.make_tool(
+        "read_file",
+        "Read a file relative to cwd. Returns the file content, truncated to max_bytes with a marker when too large.",
+        {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "cwd-relative file path"}
+            },
+            "required": ["path"]
+        },
+        fn(args) {
+            p := args["path"]
+            e := check_path(p)
+            if (e != null) {
+                return e
+            }
+            full := cwd + "/" + p
+            r := try(fs.read_file(full))
+            if (!r[0]) {
+                return "Error: " + r[1]
+            }
+            c := r[1]
+            if (len(c) > max_bytes) {
+                n := len(c) - max_bytes
+                c = str.slice(c, 0, max_bytes) + "\n...[truncated " + string(n) + " chars]"
+            }
+            return c
+        }
+    )
+
+    write_file := tools.make_tool(
+        "write_file",
+        "Write content to a file relative to cwd, creating parent directories as needed.",
+        {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "cwd-relative file path"},
+                "content": {"type": "string", "description": "file content to write"}
+            },
+            "required": ["path", "content"]
+        },
+        fn(args) {
+            p := args["path"]
+            e := check_path(p)
+            if (e != null) {
+                return e
+            }
+            content := args["content"]
+            if (content == null || type(content) != "STRING") {
+                return "Error: content required"
+            }
+            parts := str.split(p, "/")
+            if (len(parts) > 1) {
+                d := str.join(arr.slice(parts, 0, len(parts) - 1), "/")
+                if (d != "") {
+                    ignored := try(fs.mkdir(cwd + "/" + d))
+                }
+            }
+            full := cwd + "/" + p
+            w := try(fs.write_file(full, content))
+            if (!w[0]) {
+                return "Error: " + w[1]
+            }
+            return "wrote " + full + " (" + string(len(content)) + " bytes)"
+        }
+    )
+
+    edit := tools.make_tool(
+        "edit",
+        "Replace the first occurrence of old_string with new_string in a cwd-relative file.",
+        {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "cwd-relative file path"},
+                "old_string": {"type": "string", "description": "text to find (first occurrence only)"},
+                "new_string": {"type": "string", "description": "replacement text"}
+            },
+            "required": ["path", "old_string", "new_string"]
+        },
+        fn(args) {
+            p := args["path"]
+            e := check_path(p)
+            if (e != null) {
+                return e
+            }
+            old := args["old_string"]
+            news := args["new_string"]
+            if (old == null || type(old) != "STRING" || old == "") {
+                return "Error: old_string not found"
+            }
+            if (news == null || type(news) != "STRING") {
+                return "Error: new_string required"
+            }
+            full := cwd + "/" + p
+            r := try(fs.read_file(full))
+            if (!r[0]) {
+                return "Error: " + r[1]
+            }
+            content := r[1]
+            if (!str.contains(content, old)) {
+                return "Error: old_string not found"
+            }
+            idx := str.index_of(content, old)
+            before := str.slice(content, 0, idx)
+            after := str.slice(content, idx + len(old), len(content))
+            updated := before + news + after
+            w := try(fs.write_file(full, updated))
+            if (!w[0]) {
+                return "Error: " + w[1]
+            }
+            return "edited " + full + " replaced " + string(len(old)) + " chars"
+        }
+    )
+
+    glob := tools.make_tool(
+        "glob",
+        "List files under cwd (recursive, depth 8, max 200) matching pattern. Use '*' for all, '*.ext' for suffix, 'pre*' for prefix.",
+        {
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string", "description": "glob pattern, e.g. '*.zd'"},
+                "dir": {"type": "string", "description": "optional cwd-relative subdirectory to search"}
+            },
+            "required": ["pattern"]
+        },
+        fn(args) {
+            pat := args["pattern"]
+            if (pat == null || type(pat) != "STRING" || pat == "") {
+                return "Error: pattern required"
+            }
+            br := resolve_base(args["dir"])
+            if (br[0] != null) {
+                return br[0]
+            }
+            files := walk_files(br[1], br[2])
+            out := []
+            for (i := 0; i < len(files); i += 1) {
+                rel := files[i]
+                if (match_pat(base_name(rel), rel, pat)) {
+                    out = arr.push(out, rel)
+                }
+                if (len(out) >= 200) {
+                    break
+                }
+            }
+            if (len(out) == 0) {
+                return "(no matches)"
+            }
+            return json.stringify(out)
+        }
+    )
+
+    grep := tools.make_tool(
+        "grep",
+        "Search file contents under cwd for a substring. Returns up to 50 hits as full_path:lineno: line. Skips binary and oversized files.",
+        {
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string", "description": "substring to search for"},
+                "dir": {"type": "string", "description": "optional cwd-relative subdirectory to search"},
+                "include": {"type": "string", "description": "optional file filter, e.g. '*.zd'"}
+            },
+            "required": ["pattern"]
+        },
+        fn(args) {
+            pat := args["pattern"]
+            if (pat == null || type(pat) != "STRING" || pat == "") {
+                return "Error: pattern required"
+            }
+            br := resolve_base(args["dir"])
+            if (br[0] != null) {
+                return br[0]
+            }
+            inc := args["include"]
+            if (inc == null) {
+                inc = ""
+            }
+            if (inc != "" && type(inc) != "STRING") {
+                return "Error: include must be a string"
+            }
+            files := walk_files(br[1], br[2])
+            hits := []
+            for (i := 0; i < len(files); i += 1) {
+                if (i >= 100) {
+                    break
+                }
+                rel := files[i]
+                if (inc != "") {
+                    if (!match_pat(base_name(rel), rel, inc)) {
+                        continue
+                    }
+                }
+                full := cwd + "/" + rel
+                fr := try(fs.read_file(full))
+                if (!fr[0]) {
+                    continue
+                }
+                content := fr[1]
+                if (len(content) > 200000) {
+                    content = str.slice(content, 0, 200000)
+                }
+                if (str.contains(content, "\x00")) {
+                    continue
+                }
+                lines := str.split(content, "\n")
+                for (j := 0; j < len(lines); j += 1) {
+                    line := lines[j]
+                    if (str.contains(line, pat)) {
+                        if (len(line) > 300) {
+                            line = str.slice(line, 0, 300)
+                        }
+                        hits = arr.push(hits, full + ":" + string(j + 1) + ": " + line)
+                        if (len(hits) >= 50) {
+                            break
+                        }
+                    }
+                }
+                if (len(hits) >= 50) {
+                    break
+                }
+            }
+            if (len(hits) == 0) {
+                return "(no matches)"
+            }
+            return str.join(hits, "\n")
+        }
+    )
+
+    bash := tools.make_tool(
+        "bash",
+        "Run a shell command with cwd set. Returns exit code, stdout and stderr, truncated to max_bytes.",
+        {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "shell command to run"},
+                "timeout_ms": {"type": "integer", "description": "timeout in milliseconds, default 30000, clamped to 1..120000"}
+            },
+            "required": ["command"]
+        },
+        fn(args) {
+            if (!allow_exec) {
+                return "Error: exec disabled"
+            }
+            cmd := args["command"]
+            if (cmd == null || type(cmd) != "STRING" || cmd == "") {
+                return "Error: command required"
+            }
+            ms := args["timeout_ms"]
+            if (ms == null) {
+                ms = 30000
+            }
+            if (type(ms) != "INTEGER") {
+                return "Error: timeout_ms must be an integer"
+            }
+            if (ms < 1) {
+                ms = 1
+            }
+            if (ms > 120000) {
+                ms = 120000
+            }
+            r := try(process.shell(cmd, {"cwd": cwd, "timeout_ms": ms}))
+            if (!r[0]) {
+                return "Error: " + r[1]
+            }
+            h := r[1]
+            out := "exit " + string(h["code"]) + "\n" + h["stdout"]
+            se := h["stderr"]
+            if (se != null && se != "") {
+                out = out + "\n[stderr]\n" + se
+            }
+            if (h["timed_out"]) {
+                out = out + "\n[timed out]"
+            }
+            if (len(out) > max_bytes) {
+                n := len(out) - max_bytes
+                out = str.slice(out, 0, max_bytes) + "\n...[truncated " + string(n) + " chars]"
+            }
+            return out
+        }
+    )
+
+    state := {"items": [], "next_id": 1}
+    todo := tools.make_tool(
+        "todo",
+        "In-memory todo list. op is one of list/add/done/clear. add needs text, done needs id.",
+        {
+            "type": "object",
+            "properties": {
+                "op": {"type": "string", "description": "one of list, add, done, clear"},
+                "text": {"type": "string", "description": "task text for add"},
+                "id": {"type": "integer", "description": "task id for done"}
+            },
+            "required": ["op"]
+        },
+        fn(args) {
+            op := args["op"]
+            if (op == null || type(op) != "STRING") {
+                return "Error: op required (list/add/done/clear)"
+            }
+            if (op == "list") {
+                items := state["items"]
+                if (len(items) == 0) {
+                    return "todo: (empty)"
+                }
+                lines := []
+                for (i := 0; i < len(items); i += 1) {
+                    it := items[i]
+                    lines = arr.push(lines, string(it["id"]) + " [" + it["status"] + "] " + it["name"])
+                }
+                return str.join(lines, "\n")
+            }
+            if (op == "add") {
+                text := args["text"]
+                if (text == null || type(text) != "STRING" || text == "") {
+                    return "Error: text required"
+                }
+                id := state["next_id"]
+                state["items"] = arr.push(state["items"], {"id": id, "name": text, "status": "pending"})
+                state["next_id"] = id + 1
+                return "added " + string(id) + ": " + text
+            }
+            if (op == "done") {
+                id := args["id"]
+                if (id == null) {
+                    return "Error: id required"
+                }
+                items := state["items"]
+                for (i := 0; i < len(items); i += 1) {
+                    it := items[i]
+                    if (it["id"] == id) {
+                        it["status"] = "done"
+                        return "done " + string(id)
+                    }
+                }
+                return "Error: unknown todo id " + string(id)
+            }
+            if (op == "clear") {
+                state["items"] = []
+                return "cleared"
+            }
+            return "Error: unknown op " + op + " (use list/add/done/clear)"
+        }
+    )
+
+    return [read_file, write_file, edit, glob, grep, bash, todo]
+}
+
+pub make_readonly_tools := fn(cwd) {
+    all := make_coding_tools(cwd, null)
+    by := tools.index_by_name(all)
+    return [by["read_file"], by["glob"], by["grep"]]
+}

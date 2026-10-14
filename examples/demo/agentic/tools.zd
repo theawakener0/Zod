@@ -13,12 +13,12 @@ import "std/fmt" as fmt
 }
 */
 
-pub make_tool := fn(name, description, parameters, fn) {
+pub make_tool := fn(name, description, parameters, tool_fn) {
     {
         "name": name,
         "description": description,
         "parameters": parameters,
-        "fn": fn
+        "fn": tool_fn
     }
 }
 
@@ -38,16 +38,18 @@ pub to_openai := fn(tools) {
     out
 }
 
-pub call_tool := fn(tools_by_name,name, args_json) {
+pub call_tool := fn(tools_by_name, name, args_json) {
+    if (name == null) { name = "" }
     if (!hash.contains(tools_by_name, name)) {
         return "Error: unknown tool " + name
     }
     tool := tools_by_name[name]
+    if (args_json == null || args_json == "") { args_json = "{}" }
     args := try(json.parse(args_json))
     if (!args[0]) {
         return "Error: bad arguments JSON: " + args[1]
     }
-    resp := tool["fn"](args[1])
+    resp := try(tool["fn"](args[1]))
     if (!resp[0]) {
         return "Error: calling tool: " + resp[1]
     }

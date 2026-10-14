@@ -1,0 +1,240 @@
+// ============================================================================
+// Minimal TUI calculator in ZodLang.
+// Usage: zod examples/demo/calc.zd   (or: go run . examples/demo/calc.zd)
+//
+// Type an expression: numbers, + - * / and parentheses.
+// Enter = evaluate (result becomes the next input), Backspace = delete,
+// Esc / Ctrl-C = quit. Precedence: ( ) > unary - > * / > + -.
+// Functions return [ok, value] so errors are plain values (no halting).
+// ============================================================================
+
+import "std/term" as term
+import "std/str" as str
+import "std/os" as os
+import "std/fmt" as fmt
+import "std/array" as arr
+
+ALLOWED := "0123456789.+-*/()"
+
+// ---- tokenizer: returns [true, tokens] or [false, message] -----------------
+// Tokens are strings: operators/parens as-is, numbers as their text.
+tokenize := fn(s) {
+    toks := []
+    n := len(s)
+    i := 0
+    loop {
+        if (i >= n) { break }
+        c := str.slice(s, i, i + 1)
+        if (c == " ") {
+            i += 1
+            continue
+        }
+        if (str.contains("0123456789.", c)) {
+            j := i
+            loop {
+                if (j >= n) { break }
+                d := str.slice(s, j, j + 1)
+                if (!str.contains("0123456789.", d)) { break }
+                j += 1
+            }
+            toks = arr.push(toks, str.slice(s, i, j))
+            i = j
+            continue
+        }
+        if (str.contains("+-*/()", c)) {
+            toks = arr.push(toks, c)
+            i += 1
+            continue
+        }
+        return [false, "bad character '" + c + "'"]
+    }
+    [true, toks]
+}
+
+// ---- recursive-descent parser over state {"t": tokens, "p": pos} ----------
+// parse_expr is forward-declared so parse_factor can call it (the compiler
+// needs the name bound before use); it is assigned below.
+parse_expr := null
+peek := fn(st) {
+    if (st["p"] < len(st["t"])) { return st["t"][st["p"]] }
+    ""
+}
+
+parse_factor := fn(st) {
+    t := peek(st)
+    if (t == "") { return [false, "unexpected end"] }
+    if (t == "-") {
+        st["p"] += 1
+        r := parse_factor(st)
+        if (!r[0]) { return r }
+        return [true, 0 - r[1]]
+    }
+    if (t == "(") {
+        st["p"] += 1
+        r := parse_expr(st)
+        if (!r[0]) { return r }
+        if (peek(st) != ")") { return [false, "missing )"] }
+        st["p"] += 1
+        return r
+    }
+    n := try(float(t))
+    if (!n[0]) { return [false, "unexpected '" + t + "'"] }
+    st["p"] += 1
+    [true, n[1]]
+}
+
+parse_term := fn(st) {
+    r := parse_factor(st)
+    if (!r[0]) { return r }
+    v := r[1]
+    loop {
+        op := peek(st)
+        if (op != "*" && op != "/") { break }
+        st["p"] += 1
+        r2 := parse_factor(st)
+        if (!r2[0]) { return r2 }
+        if (op == "*") {
+            v = v * r2[1]
+        } else {
+            if (r2[1] == 0) { return [false, "division by zero"] }
+            v = v / r2[1]
+        }
+    }
+    [true, v]
+}
+
+parse_expr = fn(st) {
+    r := parse_term(st)
+    if (!r[0]) { return r }
+    v := r[1]
+    loop {
+        op := peek(st)
+        if (op != "+" && op != "-") { break }
+        st["p"] += 1
+        r2 := parse_term(st)
+        if (!r2[0]) { return r2 }
+        if (op == "+") {
+            v = v + r2[1]
+        } else {
+            v = v - r2[1]
+        }
+    }
+    [true, v]
+}
+
+evaluate := fn(s) {
+    tk := tokenize(s)
+    if (!tk[0]) { return tk }
+    if (len(tk[1]) == 0) { return [false, "empty"] }
+    st := {"t": tk[1], "p": 0}
+    r := parse_expr(st)
+    if (!r[0]) { return r }
+    if (st["p"] != len(tk[1])) { return [false, "unexpected '" + peek(st) + "'"] }
+    r
+}
+
+// ---- state & input ---------------------------------------------------------
+new_calc := fn() {
+    {
+        "expr": "",
+        "result": "",
+        "err": "",
+        "quit": false,
+    }
+}
+
+press_enter := fn(c) {
+    if (c["expr"] == "") { return false }
+    r := evaluate(c["expr"])
+    if (r[0]) {
+        c["result"] = string(r[1])
+        c["expr"] = string(r[1])
+        c["err"] = ""
+    } else {
+        c["result"] = ""
+        c["err"] = r[1]
+    }
+}
+
+handle_key := fn(c, k) {
+    if (k == "\x03" || k == "\x1b") {
+        c["quit"] = true
+        return false
+    }
+    if (k == "\r" || k == "\n" || k == "=") {
+        press_enter(c)
+        return false
+    }
+    if (k == "\x7f" || k == "\b") {
+        if (len(c["expr"]) > 0) {
+            c["expr"] = str.slice(c["expr"], 0, len(c["expr"]) - 1)
+        }
+        c["err"] = ""
+        c["result"] = ""
+        return false
+    }
+    if (k == "c" || k == "C") {
+        c["expr"] = ""
+        c["result"] = ""
+        c["err"] = ""
+        return false
+    }
+    if (k != "" && len(k) == 1 && str.contains(ALLOWED, k)) {
+        c["expr"] += k
+        c["err"] = ""
+        c["result"] = ""
+    }
+}
+
+// ---- rendering -------------------------------------------------------------
+render := fn(c) {
+    wr := try(term.width())
+    W := 60
+    if (wr[0]) { W = wr[1] }
+    if (W < 30) { W = 30 }
+
+    out := term.sync_begin() + term.home()
+    out += "\x1b[K\r\n"
+    out += "  " + term.bold() + "ZodCalc" + term.reset() + "\x1b[K\r\n"
+    out += "\x1b[K\r\n"
+
+    shown := c["expr"]
+    if (len(shown) > W - 6) { shown = str.slice(shown, len(shown) - (W - 6), len(shown)) }
+    out += "  " + shown + "_\x1b[K\r\n"
+
+    if (c["err"] != "") {
+        out += "  " + term.dim() + "error: " + c["err"] + term.reset() + "\x1b[K\r\n"
+    } elseif (c["result"] != "") {
+        out += "  " + term.bold() + "= " + c["result"] + term.reset() + "\x1b[K\r\n"
+    } else {
+        out += "\x1b[K\r\n"
+    }
+
+    out += "\x1b[K\r\n"
+    out += "  " + term.dim() + "Enter = eval   Bksp = del   c = clear   Esc = quit" + term.reset() + "\x1b[K"
+    out += "\x1b[J"
+    out += term.sync_end()
+    printf("%s", out)
+}
+
+// ---- main ------------------------------------------------------------------
+wr := try(term.width())
+if (!wr[0]) {
+    fmt.println("calc: need a TTY")
+    os.exit(1)
+}
+
+calc := new_calc()
+term.enable_raw()
+printf("%s%s", "\x1b[?1049h", term.hide_cursor())
+
+loop {
+    if (calc["quit"]) { break }
+    render(calc)
+    k := term.read_key()
+    if (is_error(k) || k == null) { continue }
+    handle_key(calc, k)
+}
+
+printf("%s%s", "\x1b[?1049l", term.show_cursor())
+term.disable_raw()

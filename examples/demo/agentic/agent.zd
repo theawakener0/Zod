@@ -4,6 +4,8 @@ import "tools.zd" as tools
 import "std/fmt" as fmt
 import "std/array" as arr
 import "std/hash" as hash
+import "std/str" as str
+import "std/time" as time
 
 pub new_agent := fn(cli, tool_list, sys_prompt, max_steps) {
     if (sys_prompt == null || sys_prompt == "") {
@@ -29,9 +31,38 @@ pub new_agent := fn(cli, tool_list, sys_prompt, max_steps) {
                 options = {}
             }
 
-            resp := try(cli["chat"](conv["to_api"](conv), options))
+            resp := null
+            for (attempt := 0; attempt < 3; attempt += 1) {
+                r := try(cli["chat"](conv["to_api"](conv), options))
+                if (r[0]) {
+                    if (is_error(r[1])) {
+                        msg := string(r[1])
+                        retryable := str.contains(msg, "failed") || str.contains(msg, "429") || str.contains(msg, "500")
+                        if (retryable && attempt < 2) {
+                            time.sleep(500 * (attempt + 1))
+                            continue
+                        }
+                        resp = r
+                        break
+                    } else {
+                        resp = r
+                        break
+                    }
+                } else {
+                    retryable := str.contains(string(r[1]), "failed") || str.contains(string(r[1]), "429") || str.contains(string(r[1]), "500")
+                    if (retryable && attempt < 2) {
+                        time.sleep(500 * (attempt + 1))
+                        continue
+                    }
+                    resp = r
+                    break
+                }
+            }
             if (!resp[0]) {
                 return "Agent error: " + resp[1]
+            }
+            if (is_error(resp[1])) {
+                return "Agent error: " + string(resp[1])
             }
             data := resp[1]
 
@@ -40,17 +71,31 @@ pub new_agent := fn(cli, tool_list, sys_prompt, max_steps) {
             finish := choice["finish_reason"]
 
             extra := null
-            if (message[tool_calls] != null) {
-                extra = {"tool_calls": message[tool_calls]}
+            if (message["tool_calls"] != null) {
+                extra = {"tool_calls": message["tool_calls"]}
             }
             conv["add"](conv, "assistant", message["content"], extra)
 
             if (message["tool_calls"] != null && len(message["tool_calls"]) > 0) {
                 for (i := 0; i < len(message["tool_calls"]); i++) {
                     tc := message["tool_calls"][i]
-                    name := tc["name"]
-                    args := tc["function"]["arguments"]
+                    name := null
+                    args := "{}"
                     id := tc["id"]
+                    if (tc["function"] != null) {
+                        if (tc["function"]["name"] != null) {
+                            name = tc["function"]["name"]
+                        }
+                        if (tc["function"]["arguments"] != null) {
+                            args = tc["function"]["arguments"]
+                        }
+                    }
+                    if (name == null) {
+                        name = tc["name"]
+                    }
+                    if (args == null || args == "") {
+                        args = "{}"
+                    }
 
                     result := tools.call_tool(tools_by_name, name, args)
 
@@ -76,6 +121,9 @@ pub new_agent := fn(cli, tool_list, sys_prompt, max_steps) {
         text := try(cli["stream"](conv["to_api"](conv), null))
         if (!text[0]) {
             return "Agent stream error: " + text[1]
+        }
+        if (is_error(text[1])) {
+            return "Agent stream error: " + string(text[1])
         }
 
         conv["add"](conv, "assistant", text[1], null)

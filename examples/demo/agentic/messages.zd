@@ -1,7 +1,7 @@
 import "std/array" as arr
 import "std/hash" as hash
 
-pub new_message := fn(system_prompt) {
+pub new_conversation := fn(system_prompt) {
     msgs := []
     if (system_prompt != null && system_prompt != "") {
         msgs = arr.push(msgs, {"role": "system", "content": system_prompt})
@@ -17,7 +17,7 @@ pub new_message := fn(system_prompt) {
                     msg[keys[i]] = extra[keys[i]]
                 }
             }
-            self["messages"] = arr.push(self["messages"], m)
+            self["messages"] = arr.push(self["messages"], msg)
             return self
         },
         "to_api": fn(self) {
@@ -30,4 +30,8 @@ pub new_message := fn(system_prompt) {
             return self["messages"][len(self["messages"]) - 1]
         }
     }
+}
+
+pub new_message := fn(system_prompt) {
+    return new_conversation(system_prompt)
 }

@@ -280,12 +280,23 @@ func (vm *VM) Run() error {
 			numElements := int(ins[ip+1])<<8 | int(ins[ip+2])
 			frame.ip += 2
 
-			// Mirror the evaluator: a single error element propagates as the
-			// error itself instead of an array containing it.
-			if numElements == 1 {
-				if _, ok := vm.stack[vm.sp-1].(*obj.Error); ok {
+			// Mirror the evaluator (evalExpressions): any error element
+			// propagates as the error itself instead of an array
+			// containing it. First error in evaluation order wins.
+			var firstErr obj.Object
+			for i := vm.sp - numElements; i < vm.sp; i++ {
+				if errObj, ok := vm.stack[i].(*obj.Error); ok && errObj != nil {
+					firstErr = errObj
 					break
 				}
+			}
+			if firstErr != nil {
+				vm.sp -= numElements
+				pushErr := vm.push(firstErr)
+				if pushErr != nil {
+					return pushErr
+				}
+				break
 			}
 			array := vm.buildArray(vm.sp-numElements, vm.sp)
 			vm.sp -= numElements
@@ -1638,11 +1649,12 @@ func (vm *VM) executeCall(numArgs int) error {
 		}
 		return vm.push(errObj)
 	}
-	// Mirror the evaluator: a single error argument short-circuits the call
-	// (the callee never executes) unless it is a builtin that accepts errors.
-	if numArgs == 1 {
-		if errObj, ok := vm.stack[vm.sp-1].(*obj.Error); ok && errObj != nil {
-			if !vmBuiltinAcceptsError(callee) {
+	// Mirror the evaluator (evalExpressions): any error argument
+	// short-circuits the call (the callee never executes) unless it is
+	// a builtin that accepts errors. First error in order wins.
+	if numArgs >= 1 && !vmBuiltinAcceptsError(callee) {
+		for i := vm.sp - numArgs; i < vm.sp; i++ {
+			if errObj, ok := vm.stack[i].(*obj.Error); ok && errObj != nil {
 				vm.sp -= numArgs + 1
 				if vm.sp < 0 {
 					vm.sp = 0

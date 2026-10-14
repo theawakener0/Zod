@@ -2,6 +2,8 @@ package object
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	crand "crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -13,6 +15,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -1285,6 +1288,163 @@ var Builtins = []struct {
 			return FALSE
 		},
 	}},
+	{"__exec", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 3 {
+				return newError("wrong number of arguments. got=%d, want=3", len(args))
+			}
+			cmdStr, ok := args[0].(*String)
+			if !ok {
+				return newError("first argument to `__exec` must be STRING. got=%s", args[0].Type())
+			}
+			argArr, ok := args[1].(*Array)
+			if !ok {
+				return newError("second argument to `__exec` must be ARRAY. got=%s", args[1].Type())
+			}
+			optsHash, ok := args[2].(*Hash)
+			if !ok {
+				return newError("third argument to `__exec` must be HASH. got=%s", args[2].Type())
+			}
+			argStrs := make([]string, len(argArr.Elements))
+			for i, e := range argArr.Elements {
+				s, ok := e.(*String)
+				if !ok {
+					return newError("second argument to `__exec` must be ARRAY of STRING. got=%s at index %d", e.Type(), i)
+				}
+				argStrs[i] = s.Value
+			}
+			cwdStr := ""
+			if v, found := lookupHashKey(optsHash, "cwd"); found {
+				s, ok := v.(*String)
+				if !ok {
+					return newError("option \"cwd\" to `__exec` must be STRING. got=%s", v.Type())
+				}
+				cwdStr = s.Value
+			}
+			var timeoutMs int64 = 30000
+			if v, found := lookupHashKey(optsHash, "timeout_ms"); found {
+				n, ok := v.(*Integer)
+				if !ok {
+					return newError("option \"timeout_ms\" to `__exec` must be INTEGER. got=%s", v.Type())
+				}
+				timeoutMs = n.Value
+			}
+			if timeoutMs < 1 || timeoutMs > 300000 {
+				return newError("option \"timeout_ms\" to `__exec` must be between 1 and 300000. got=%d", timeoutMs)
+			}
+			stdinStr := ""
+			if v, found := lookupHashKey(optsHash, "stdin"); found {
+				s, ok := v.(*String)
+				if !ok {
+					return newError("option \"stdin\" to `__exec` must be STRING. got=%s", v.Type())
+				}
+				stdinStr = s.Value
+			}
+			var maxBytes int64 = 1048576
+			if v, found := lookupHashKey(optsHash, "max_bytes"); found {
+				n, ok := v.(*Integer)
+				if !ok {
+					return newError("option \"max_bytes\" to `__exec` must be INTEGER. got=%s", v.Type())
+				}
+				maxBytes = n.Value
+			}
+			if maxBytes < 1 || maxBytes > 10485760 {
+				return newError("option \"max_bytes\" to `__exec` must be between 1 and 10485760. got=%d", maxBytes)
+			}
+			envOverrides := map[string]string{}
+			if v, found := lookupHashKey(optsHash, "env"); found {
+				envHash, ok := v.(*Hash)
+				if !ok {
+					return newError("option \"env\" to `__exec` must be HASH. got=%s", v.Type())
+				}
+				for _, hk := range envHash.Order {
+					pair := envHash.Pairs[hk]
+					ks, ok1 := pair.Key.(*String)
+					vs, ok2 := pair.Value.(*String)
+					if !ok1 || !ok2 {
+						return newError("option \"env\" to `__exec` must be HASH of STRING->STRING")
+					}
+					envOverrides[ks.Value] = vs.Value
+				}
+				if len(envHash.Order) == 0 {
+					for _, pair := range envHash.Pairs {
+						ks, ok1 := pair.Key.(*String)
+						vs, ok2 := pair.Value.(*String)
+						if !ok1 || !ok2 {
+							return newError("option \"env\" to `__exec` must be HASH of STRING->STRING")
+						}
+						envOverrides[ks.Value] = vs.Value
+					}
+				}
+			}
+			cleanDir := ""
+			if cwdStr != "" {
+				cleanDir = filepath.Clean(cwdStr)
+				info, err := os.Stat(cleanDir)
+				if err != nil {
+					return newError("could not stat cwd %q: %s", cwdStr, err.Error())
+				}
+				if !info.IsDir() {
+					return newError("cwd %q is not a directory", cwdStr)
+				}
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMs)*time.Millisecond)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, cmdStr.Value, argStrs...)
+			if cleanDir != "" {
+				cmd.Dir = cleanDir
+			}
+			cmd.Stdin = strings.NewReader(stdinStr)
+			if len(envOverrides) > 0 {
+				base := os.Environ()
+				merged := make(map[string]string, len(base)+len(envOverrides))
+				for _, kv := range base {
+					if i := strings.Index(kv, "="); i >= 0 {
+						merged[kv[:i]] = kv[i+1:]
+					}
+				}
+				for k, v := range envOverrides {
+					merged[k] = v
+				}
+				env := make([]string, 0, len(merged))
+				for k, v := range merged {
+					env = append(env, k+"="+v)
+				}
+				sort.Strings(env)
+				cmd.Env = env
+			}
+			var stdoutBuf, stderrBuf bytes.Buffer
+			cmd.Stdout = &stdoutBuf
+			cmd.Stderr = &stderrBuf
+			runErr := cmd.Run()
+			timedOut := ctx.Err() == context.DeadlineExceeded
+			code := 0
+			if runErr != nil {
+				if exitErr, ok := runErr.(*exec.ExitError); ok {
+					code = exitErr.ExitCode()
+				} else {
+					if timedOut {
+						code = -1
+					} else {
+						return newError("could not execute %q: %s", cmdStr.Value, runErr.Error())
+					}
+				}
+			}
+			outStr := stdoutBuf.String()
+			errStr := stderrBuf.String()
+			if int64(len(outStr)) > maxBytes {
+				outStr = outStr[:int(maxBytes)]
+			}
+			if int64(len(errStr)) > maxBytes {
+				errStr = errStr[:int(maxBytes)]
+			}
+			var timedOutObj Object = FALSE
+			if timedOut {
+				timedOutObj = TRUE
+			}
+			return makeExecHash(int64(code), outStr, errStr, timedOutObj)
+		},
+	}},
 	{"__now_ms", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) != 0 {
@@ -2255,6 +2415,30 @@ func makeStatHash(info os.FileInfo) *Hash {
 	add("mode", &String{Value: info.Mode().String()})
 	add("name", &String{Value: info.Name()})
 	add("mtime", NewInteger(info.ModTime().Unix()))
+	return &Hash{Pairs: pairs, Order: order}
+}
+
+func lookupHashKey(h *Hash, key string) (Object, bool) {
+	ko := &String{Value: key}
+	if pair, ok := h.Pairs[ko.HashKey()]; ok {
+		return pair.Value, true
+	}
+	return nil, false
+}
+
+func makeExecHash(code int64, stdout, stderr string, timedOut Object) *Hash {
+	pairs := make(map[HashKey]HashPair, 4)
+	order := make([]HashKey, 0, 4)
+	add := func(k string, v Object) {
+		ko := &String{Value: k}
+		hk := ko.HashKey()
+		pairs[hk] = HashPair{Key: ko, Value: v}
+		order = append(order, hk)
+	}
+	add("code", NewInteger(code))
+	add("stdout", &String{Value: stdout})
+	add("stderr", &String{Value: stderr})
+	add("timed_out", timedOut)
 	return &Hash{Pairs: pairs, Order: order}
 }
 
