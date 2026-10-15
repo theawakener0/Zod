@@ -6,24 +6,94 @@ import "std/str" as str
 pub Base_URL := "https://ai.hackclub.com/proxy/v1"
 pub DEFAULT_MODEL := "qwen/qwen3-32b"
 
+// models_list(api_key): api_key may be null/"". The /models endpoint needs
+// no auth. NOTE: __http_get(url, ms) takes no headers argument, so an
+// Authorization header cannot be attached here; the key is accepted for API
+// symmetry and ignored. Returns the data[] array with each element reduced
+// to {"id","name","context_length","pricing"} (pricing kept as-is), or an
+// error() value on any structural problem (never halts).
+pub models_list := fn(api_key) {
+    key := api_key
+    if (key == null) { key = "" }
+    endpoint := Base_URL + "/models"
+
+    got := try(__http_get(endpoint, 15000))
+    if (!got[0]) {
+        return error("models failed: " + string(got[1]))
+    }
+    parsed := try(json.parse(got[1]))
+    if (!parsed[0]) {
+        return error("models failed: " + string(parsed[1]))
+    }
+    body := parsed[1]
+    if (is_error(body)) {
+        return error("models failed: " + string(body))
+    }
+    if (type(body) != "HASH") {
+        return error("models failed: unexpected response shape")
+    }
+    raw := body["data"]
+    if (type(raw) != "ARRAY") {
+        return error("models failed: unexpected response shape")
+    }
+    out := []
+    for (i := 0; i < len(raw); i += 1) {
+        item := raw[i]
+        if (type(item) != "HASH") {
+            return error("models failed: unexpected model entry shape")
+        }
+        entry := {
+            "id": item["id"],
+            "name": item["name"],
+            "context_length": item["context_length"],
+            "pricing": item["pricing"]
+        }
+        out = __arr_push(out, entry)
+    }
+    return out
+}
+
 pub new_client := fn(api_key, model) {
     if (api_key == null || api_key == "") { api_key = os.env_get("HACKCLUB_AI_API_KEY") }
     if (api_key == null || api_key == "") { api_key = os.env_get("HACK_CLUB_AI_API_KEY") }
     if (api_key == null || api_key == "") { return error("HACKCLUB_AI_API_KEY is required") }
     if (model == null || model == "") { model = DEFAULT_MODEL }
+    box := {"model": model}
 
     headers := {
         "Authorization": "Bearer " + api_key,
         "Content-Type": "application/json"
     }
 
+    stats := {"prompt": 0, "completion": 0, "calls": 0}
+    out := {
+        "api_key": api_key,
+        "model": model,
+        "stats": stats,
+        "last_usage": null,
+        "models": models_list,
+        "chat": null,
+        "stream": null
+    }
+
     do_post := fn(url, data) {
+        // NOTE: response headers (e.g. Retry-After on 429) are NOT visible
+        // from Zod: __http_post_headers surfaces status + body in the error
+        // message only, so callers must use fixed backoff, never
+        // header-driven retry.
         full_url := Base_URL + url
         body := json.stringify(data)
 
         req := try(__http_post_headers(full_url, body, headers, 30000))
         if (!req[0]) {
-            return error("http post failed: " + req[1])
+            msg := string(req[1])
+            if (str.contains(msg, "402")) {
+                return error("daily spend limit reached (402): " + msg)
+            }
+            if (str.contains(msg, "429")) {
+                return error("rate limited (429), back off and retry: " + msg)
+            }
+            return error("http post failed: " + msg)
         }
         return json.parse(req[1])
     }
@@ -31,7 +101,7 @@ pub new_client := fn(api_key, model) {
     chat := fn(messages, options) {
         if (options == null) { options = {} }
         if (messages == null) { messages = [] }
-        eff_model := model
+        eff_model := box["model"]
         if (eff_model == null || eff_model == "") { eff_model = DEFAULT_MODEL }
 
         payload := {
@@ -42,16 +112,34 @@ pub new_client := fn(api_key, model) {
         }
         if (options["temperature"] != null) { payload["temperature"] = options["temperature"] }
         if (options["max_tokens"] != null) { payload["max_tokens"] = options["max_tokens"] }
+        if (options["top_p"] != null) { payload["top_p"] = options["top_p"] }
         if (options["tools"] != null) { payload["tools"] = options["tools"] }
         if (options["tool_choice"] != null) { payload["tool_choice"] = options["tool_choice"] }
 
-        return do_post("/chat/completions", payload)
+        resp := do_post("/chat/completions", payload)
+        if (is_error(resp)) {
+            return resp
+        }
+        stats["calls"] = stats["calls"] + 1
+        if (type(resp) == "HASH") {
+            usage := resp["usage"]
+            if (!is_error(usage) && usage != null && type(usage) == "HASH") {
+                pt := usage["prompt_tokens"]
+                ct := usage["completion_tokens"]
+                if (type(pt) == "INTEGER") { stats["prompt"] = stats["prompt"] + pt }
+                if (type(ct) == "INTEGER") { stats["completion"] = stats["completion"] + ct }
+                out["last_usage"] = usage
+            } else {
+                out["last_usage"] = null
+            }
+        }
+        return resp
     }
 
     stream := fn(messages, options) {
         if (options == null) { options = {} }
         if (messages == null) { messages = [] }
-        eff_model := model
+        eff_model := box["model"]
         if (eff_model == null || eff_model == "") { eff_model = DEFAULT_MODEL }
         payload := {
             "model": eff_model,
@@ -61,6 +149,7 @@ pub new_client := fn(api_key, model) {
         }
         if (options["temperature"] != null) { payload["temperature"] = options["temperature"] }
         if (options["max_tokens"] != null) { payload["max_tokens"] = options["max_tokens"] }
+        if (options["top_p"] != null) { payload["top_p"] = options["top_p"] }
 
         body := json.stringify(payload)
         req := try(__http_post_stream(Base_URL + "/chat/completions", body, headers, 120000))
@@ -70,11 +159,39 @@ pub new_client := fn(api_key, model) {
         return req[1]
     }
 
-    return {
-        "api_key": api_key,
-        "model": model,
-        "chat": chat,
-        "stream": stream
+    stream_events := fn(messages, options) {
+        if (options == null) { options = {} }
+        if (messages == null) { messages = [] }
+        eff_model := box["model"]
+        if (eff_model == null || eff_model == "") { eff_model = DEFAULT_MODEL }
+        payload := {
+            "model": eff_model,
+            "messages": messages,
+            "temperature": 0.7,
+            "stream": true
+        }
+        if (options["temperature"] != null) { payload["temperature"] = options["temperature"] }
+        if (options["max_tokens"] != null) { payload["max_tokens"] = options["max_tokens"] }
+        if (options["top_p"] != null) { payload["top_p"] = options["top_p"] }
+        if (options["tools"] != null) { payload["tools"] = options["tools"] }
+        if (options["tool_choice"] != null) { payload["tool_choice"] = options["tool_choice"] }
+
+        body := json.stringify(payload)
+        req := try(__stream_start(Base_URL + "/chat/completions", body, headers, 120000))
+        if (!req[0]) {
+            return error("stream failed: " + req[1])
+        }
+        return req[1]
     }
+
+    out["chat"] = chat
+    out["stream"] = stream
+    out["stream_events"] = stream_events
+    out["set_model"] = fn(m) {
+        box["model"] = m
+        out["model"] = m
+        return m
+    }
+    return out
 
 }

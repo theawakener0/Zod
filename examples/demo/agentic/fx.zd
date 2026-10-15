@@ -1,0 +1,159 @@
+// fx.zd — pure-Zod terminal animation kit for the agentic demo harness.
+//
+// Small, dependency-light helpers: spinner frames + state, tty probe,
+// staggered boot splash, tool/status line formatters, fixed-width bar,
+// and an easing demo. No network, no side effects at import time.
+// Every term interaction goes through try(); callers decide what to do.
+
+import "std/anim" as anim
+import "std/term" as term
+import "std/str" as str
+import "std/fmt" as fmt
+
+// Classic ASCII spinner frames (single-char strings).
+pub frames_ascii := ["|", "/", "-", "\\"]
+
+// Minimal trailing-dot pulse frames.
+pub frames_dots := [".  ", ".. ", "..."]
+
+// new_spinner(label) builds spinner state. A null label becomes "".
+pub new_spinner := fn(label) {
+  lbl := label
+  if (lbl == null) {
+    lbl = ""
+  }
+  return {"frames": frames_ascii, "i": 0, "label": lbl}
+}
+
+// spin_tick(sp) renders the current frame + label, then advances the
+// cursor with wraparound. Mutates sp in place via single-level assigns.
+pub spin_tick := fn(sp) {
+  fr := sp["frames"]
+  idx := sp["i"]
+  out := fr[idx] + " " + sp["label"]
+  nxt := idx + 1
+  if (nxt >= len(fr)) {
+    nxt = 0
+  }
+  sp["i"] = nxt
+  return out
+}
+
+// tty() probes for a real terminal. Only this probe, nothing else.
+pub tty := fn() {
+  r := try(term.width())
+  if (r[0]) {
+    return true
+  }
+  return false
+}
+
+// boot_logo() returns 6 splash lines for "ZodPi" in ZodLang style.
+pub boot_logo := fn() {
+  return [
+    "  ╔══════════════╗",
+    "  ║   Z o d P i  ║",
+    "  ║  agentic fx  ║",
+    "  ╚══════════════╝",
+    "   pi-powered agents",
+    "   ready. steady. go."
+  ]
+}
+
+// boot_play(lines, fps) reveals lines with staggered pacing.
+// A null/0 fps means 24; the rate is clamped to 1..60.
+pub boot_play := fn(lines, fps) {
+  rate := fps
+  if (rate == null || rate == 0) {
+    rate = 24
+  }
+  if (rate < 1) {
+    rate = 1
+  }
+  if (rate > 60) {
+    rate = 60
+  }
+  pacer := anim.frame_pacer(rate)
+  for (i := 0; i < len(lines); i += 1) {
+    anim.pacer_wait(pacer)
+    fmt.println(lines[i])
+  }
+  return null
+}
+
+// tool_line(name, detail) formats one tool-call line. A null/empty
+// detail leaves no trailing colon; longer details truncate to 120.
+pub tool_line := fn(name, detail) {
+  suffix := ""
+  if (detail != null && detail != "") {
+    d := detail
+    if (len(d) > 120) {
+      d = str.slice(d, 0, 120)
+    }
+    suffix = ": " + d
+  }
+  return "  ↳ " + name + suffix
+}
+
+// status_text(status) wraps a status word in brackets (coloring is
+// left to the harness).
+pub status_text := fn(status) {
+  return "[" + status + "]"
+}
+
+// bar(text, width, pad) truncates text to width, then pads right to
+// exactly width. A null width means 80; a null pad means " ".
+pub bar := fn(text, width, pad) {
+  w := width
+  if (w == null) {
+    w = 80
+  }
+  filler := pad
+  if (filler == null) {
+    filler = " "
+  }
+  t := text
+  if (t == null) {
+    t = ""
+  }
+  if (len(t) > w) {
+    t = str.slice(t, 0, w)
+  }
+  return str.pad_right(t, w, filler)
+}
+
+// eased_blink(t) demos the easings: smoothstep of the clamped phase.
+pub eased_blink := fn(t) {
+  c := anim.clamp01(t)
+  return anim.ease_in_out(c)
+}
+
+// working_row(elapsed_s) renders a Codex-style working indicator row.
+// A null elapsed becomes 0.
+pub working_row := fn(elapsed_s) {
+  e := elapsed_s
+  if (e == null) {
+    e = 0
+  }
+  return "• Working (" + string(e) + "s • esc to interrupt)"
+}
+
+// separator(width) returns a rule of multibyte "─" chars sized for an
+// 80-column display. A null width means 80. Each "─" is 3 bytes in
+// UTF-8, so the dash count is int(width / 3), floored at 8 dashes.
+pub separator := fn(width) {
+  w := width
+  if (w == null) {
+    w = 80
+  }
+  count := int(w / 3)
+  if (count < 8) {
+    count = 8
+  }
+  return str.repeat("─", count)
+}
+
+// interrupt_marker() marks an interrupted turn (exact string).
+pub interrupt_marker := fn() {
+  return "■ Conversation interrupted."
+}

@@ -6,6 +6,7 @@ import "std/array" as arr
 import "std/hash" as hash
 import "std/str" as str
 import "std/time" as time
+import "std/http" as http
 
 pub new_agent := fn(cli, tool_list, sys_prompt, max_steps) {
     if (sys_prompt == null || sys_prompt == "") {
@@ -37,9 +38,13 @@ pub new_agent := fn(cli, tool_list, sys_prompt, max_steps) {
                 if (r[0]) {
                     if (is_error(r[1])) {
                         msg := string(r[1])
-                        retryable := str.contains(msg, "failed") || str.contains(msg, "429") || str.contains(msg, "500")
+                        retryable := str.contains(msg, "failed") || str.contains(msg, "429") || str.contains(msg, "402") || str.contains(msg, "500")
                         if (retryable && attempt < 2) {
-                            time.sleep(500 * (attempt + 1))
+                            if (str.contains(msg, "429")) {
+                                time.sleep(2000 * (attempt + 1))
+                            } else {
+                                time.sleep(500 * (attempt + 1))
+                            }
                             continue
                         }
                         resp = r
@@ -49,9 +54,13 @@ pub new_agent := fn(cli, tool_list, sys_prompt, max_steps) {
                         break
                     }
                 } else {
-                    retryable := str.contains(string(r[1]), "failed") || str.contains(string(r[1]), "429") || str.contains(string(r[1]), "500")
+                    retryable := str.contains(string(r[1]), "failed") || str.contains(string(r[1]), "429") || str.contains(string(r[1]), "402") || str.contains(string(r[1]), "500")
                     if (retryable && attempt < 2) {
-                        time.sleep(500 * (attempt + 1))
+                        if (str.contains(string(r[1]), "429")) {
+                            time.sleep(2000 * (attempt + 1))
+                        } else {
+                            time.sleep(500 * (attempt + 1))
+                        }
                         continue
                     }
                     resp = r
@@ -130,9 +139,229 @@ pub new_agent := fn(cli, tool_list, sys_prompt, max_steps) {
         return text[1]
     }
 
+    // run_stream(user_message, hooks) mirrors run() turn-for-turn but
+    // consumes the LLM response as SSE events via cli["stream_events"]
+    // + http.stream_poll. hooks is a HASH (or null) with optional keys:
+    //   "on_text": fn(delta)->null — fired per text chunk (inside try,
+    //     hook errors never break the turn),
+    //   "on_tool": fn(name, preview)->null — fired after each tool call
+    //     with the first 120 chars of the result,
+    //   "should_cancel": fn()->bool — polled each drain; returning true
+    //     cancels the stream and ends the turn as "[interrupted]".
+    // The key "cancelled" is set on hooks (true/false) when hooks != null.
+    // NOTE: there is deliberately NO fallback to run() here: the user
+    // message is already appended to conv before the first turn, so a
+    // fallback re-issue would duplicate it in the conversation.
+    run_stream := fn(user_message, hooks) {
+        conv["add"](conv, "user", user_message, null)
+
+        for (step := 0; step < max_steps; step += 1) {
+            options := {
+                "tools": openai_tools,
+                "tool_choice": "auto"
+            }
+            if (len(tool_list) == 0) {
+                options = {}
+            }
+
+            started := null
+            for (attempt := 0; attempt < 3; attempt += 1) {
+                r := try(cli["stream_events"](conv["to_api"](conv), options))
+                if (r[0]) {
+                    if (is_error(r[1])) {
+                        msg := string(r[1])
+                        retryable := str.contains(msg, "failed") || str.contains(msg, "429") || str.contains(msg, "402") || str.contains(msg, "500")
+                        if (retryable && attempt < 2) {
+                            if (str.contains(msg, "429")) {
+                                time.sleep(2000 * (attempt + 1))
+                            } else {
+                                time.sleep(500 * (attempt + 1))
+                            }
+                            continue
+                        }
+                        started = r
+                        break
+                    } else {
+                        started = r
+                        break
+                    }
+                } else {
+                    retryable := str.contains(string(r[1]), "failed") || str.contains(string(r[1]), "429") || str.contains(string(r[1]), "402") || str.contains(string(r[1]), "500")
+                    if (retryable && attempt < 2) {
+                        if (str.contains(string(r[1]), "429")) {
+                            time.sleep(2000 * (attempt + 1))
+                        } else {
+                            time.sleep(500 * (attempt + 1))
+                        }
+                        continue
+                    }
+                    started = r
+                    break
+                }
+            }
+            if (!started[0]) {
+                return "Agent error: " + started[1]
+            }
+            if (is_error(started[1])) {
+                return "Agent error: " + string(started[1])
+            }
+            handle := started[1]
+
+            content := ""
+            calls_by_index := {}
+            cancelled := false
+            iters := 0
+            loop {
+                p := http.stream_poll(handle)
+                text := p["text"]
+                if (text != null && text != "") {
+                    content = content + text
+                    if (hooks != null) {
+                        ontext := hooks["on_text"]
+                        if (ontext != null) {
+                            tr := try(ontext(text))
+                        }
+                    }
+                }
+                chunk_tools := p["tools"]
+                if (chunk_tools != null) {
+                    for (i := 0; i < len(chunk_tools); i += 1) {
+                        t := chunk_tools[i]
+                        idx := string(t["index"])
+                        box := calls_by_index[idx]
+                        if (box == null) {
+                            box = {"id": null, "name": "", "args": ""}
+                            calls_by_index[idx] = box
+                        }
+                        if (t["id"] != null) {
+                            box["id"] = t["id"]
+                        }
+                        if (t["name"] != null && t["name"] != "") {
+                            box["name"] = box["name"] + t["name"]
+                        }
+                        if (t["args"] != null) {
+                            box["args"] = box["args"] + t["args"]
+                        }
+                    }
+                }
+                if (p["done"]) {
+                    break
+                }
+                if (p["error"] != null) {
+                    closed := try(http.stream_close(handle))
+                    est := cli["stats"]
+                    if (est != null) {
+                        est["calls"] = est["calls"] + 1
+                    }
+                    return "Agent error: " + p["error"]
+                }
+                if (hooks != null) {
+                    checker := hooks["should_cancel"]
+                    if (checker != null) {
+                        cr := try(checker())
+                        if (cr[0] && cr[1]) {
+                            cancelled = true
+                            stopped := try(http.stream_cancel(handle))
+                            break
+                        }
+                    }
+                }
+                iters = iters + 1
+                if (iters > 4000) {
+                    break
+                }
+                time.sleep(30)
+            }
+            closed := try(http.stream_close(handle))
+
+            // Count the completed turn. Streaming responses carry no
+            // usage payload, so prompt/completion tokens stay 0; only
+            // the call count advances. Start-failures above return
+            // before this point and are deliberately not counted.
+            st := cli["stats"]
+            if (st != null) {
+                st["calls"] = st["calls"] + 1
+            }
+
+            if (hooks != null) {
+                hooks["cancelled"] = cancelled
+            }
+
+            if (cancelled) {
+                interrupted := content + " [interrupted]"
+                conv["add"](conv, "assistant", interrupted, null)
+                return interrupted
+            }
+
+            keystrs := hash.keys(calls_by_index)
+            intkeys := []
+            for (i := 0; i < len(keystrs); i += 1) {
+                intkeys = arr.push(intkeys, int(keystrs[i]))
+            }
+            intkeys = arr.sort(intkeys)
+
+            if (len(intkeys) == 0 && content != "") {
+                conv["add"](conv, "assistant", content, null)
+                return content
+            }
+
+            if (len(intkeys) > 0) {
+                tcarr := []
+                for (i := 0; i < len(intkeys); i += 1) {
+                    idx := string(intkeys[i])
+                    box := calls_by_index[idx]
+                    bid := box["id"]
+                    bname := box["name"]
+                    bargs := box["args"]
+                    if (bname == null) {
+                        bname = ""
+                    }
+                    if (bargs == null || bargs == "") {
+                        bargs = "{}"
+                    }
+                    tcarr = arr.push(tcarr, {"id": bid, "type": "function", "function": {"name": bname, "arguments": bargs}})
+                }
+                conv["add"](conv, "assistant", content, {"tool_calls": tcarr})
+                for (i := 0; i < len(intkeys); i += 1) {
+                    idx := string(intkeys[i])
+                    box := calls_by_index[idx]
+                    name := box["name"]
+                    if (name == null) {
+                        name = ""
+                    }
+                    args := box["args"]
+                    if (args == null || args == "") {
+                        args = "{}"
+                    }
+                    id := box["id"]
+                    result := tools.call_tool(tools_by_name, name, args)
+                    if (hooks != null) {
+                        watcher := hooks["on_tool"]
+                        if (watcher != null) {
+                            preview := result
+                            if (len(preview) > 120) {
+                                preview = str.slice(preview, 0, 120)
+                            }
+                            tr := try(watcher(name, preview))
+                        }
+                    }
+                    conv["add"](conv, "tool", result, {
+                        "name": name,
+                        "tool_call_id": id
+                    })
+                }
+                continue
+            }
+
+            return ""
+        }
+        return "Reached maximum number of steps without finishing."
+    }
+
     return {
         "run": run,
         "stream": stream,
+        "run_stream": run_stream,
         "conversation": conv
     }
 }

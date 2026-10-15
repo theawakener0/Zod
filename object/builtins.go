@@ -2220,6 +2220,10 @@ var Builtins = []struct {
 			return &String{Value: full.String()}
 		},
 	}},
+	{"__stream_start", &Builtin{Fn: streamStart}},
+	{"__stream_poll", &Builtin{Fn: streamPoll}},
+	{"__stream_cancel", &Builtin{Fn: streamCancel}},
+	{"__stream_close", &Builtin{Fn: streamClose}},
 	{"__term_width", &Builtin{
 		Fn: func(args ...Object) Object {
 			if len(args) != 0 {

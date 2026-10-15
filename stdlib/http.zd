@@ -14,7 +14,7 @@ pub post_headers := fn(url, body, headers) {
   return __http_post_headers(url, body, headers, 10000)
 }
 
-pub post_timeout := fn(url, body, ms) {
+pub post_timeout := fn(url, body, headers, ms) {
   return __http_post_headers(url, body, headers, ms)
 }
 
@@ -24,4 +24,24 @@ pub post_stream := fn(url, body, headers) {
 
 pub post_stream_timeout := fn(url, body, headers, ms) {
   return __http_post_stream(url, body, headers, ms)
+}
+
+pub stream_start := fn(url, body, headers) {
+  return __stream_start(url, body, headers, 120000)
+}
+
+pub stream_start_timeout := fn(url, body, headers, ms) {
+  return __stream_start(url, body, headers, ms)
+}
+
+pub stream_poll := fn(h) {
+  return __stream_poll(h)
+}
+
+pub stream_cancel := fn(h) {
+  return __stream_cancel(h)
+}
+
+pub stream_close := fn(h) {
+  return __stream_close(h)
 }
