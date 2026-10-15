@@ -1,367 +1,487 @@
-import "client.zd" as client
+// agent.zd — Zodex turn engine.
+//
+// new_agent(cli, tool_list, sys_prompt, max_steps, opts) -> agent hash
+//   "run"(user_message)            -> string (convenience, no hooks)
+//   "run_turn"(user_message, hooks) -> result hash
+//   "conversation"                 -> messages.zd conversation
+//   "estimate_tokens"()            -> int
+//   "maybe_compact"()              -> string note or null
+//
+// Result hash: {"ok": bool, "text": string, "error": string|null,
+//               "interrupted": bool, "steps": int,
+//               "usage": hash|null, "finish": string|null}
+//
+// hooks (hash or null), every key optional; hook errors never break a turn:
+//   "on_step"(n)                  int
+//   "on_text"(delta)              str
+//   "on_message"(role, content, extra)  extra hash or null
+//   "on_tool_start"(name, args_text)
+//   "on_tool_result"(name, result)
+//   "on_note"(text)
+//   "on_usage"(usage_hash)
+//   "should_cancel"() -> bool
+//
+// opts (hash or null): "auto_compact" (bool, default true),
+//   "compact_threshold" (float, default 0.8), "context_window" (int,
+//   default 32768), "retries" (int, default 3).
+//
+// Pure Zod: std/* + messages/tools/client. Never halts (error() only
+// through client calls, always wrapped in try()).
+
 import "messages.zd" as messages
 import "tools.zd" as tools
-import "std/fmt" as fmt
-import "std/array" as arr
-import "std/hash" as hash
+import "client.zd" as client
 import "std/str" as str
+import "std/array" as arr
+import "std/json" as json
 import "std/time" as time
 import "std/http" as http
 
-pub new_agent := fn(cli, tool_list, sys_prompt, max_steps) {
-    if (sys_prompt == null || sys_prompt == "") {
-        sys_prompt = "You are a helpful assistant that can use tools if needed when they help answer"
-    }
-    if (max_steps == null || max_steps == 0) {
-        max_steps = 8
-    }
+DEFAULT_SYS := "You are a helpful assistant that can use tools if needed when they help answer."
+
+pub new_agent := fn(cli, tool_list, sys_prompt, max_steps, opts) {
+    if (sys_prompt == null || sys_prompt == "") { sys_prompt = DEFAULT_SYS }
+    if (max_steps == null || max_steps == 0) { max_steps = 32 }
+    if (opts == null) { opts = {} }
+
+    auto_compact := true
+    if (opts["auto_compact"] != null) { auto_compact = opts["auto_compact"] }
+    compact_threshold := 0.8
+    if (opts["compact_threshold"] != null) { compact_threshold = opts["compact_threshold"] }
+    context_window := 32768
+    if (opts["context_window"] != null && type(opts["context_window"]) == "INTEGER") { context_window = opts["context_window"] }
+    max_retries := 3
+    if (opts["retries"] != null && type(opts["retries"]) == "INTEGER") { max_retries = opts["retries"] }
 
     tools_by_name := tools.index_by_name(tool_list)
     openai_tools := tools.to_openai(tool_list)
     conv := messages.new_conversation(sys_prompt)
+    // Agent-local record of the last request's prompt size, used for
+    // compaction budgeting (cli["last_usage"] may belong to another agent
+    // sharing the same client).
+    au := {"prompt": null}
 
-    run := fn(user_message) {
-        conv["add"](conv, "user", user_message, null)
-        
-        for (step := 0; step < max_steps; step += 1) {
-            options := {
-                "tools": openai_tools,
-                "tool_choice": "auto"
-            }
-            if (len(tool_list) == 0) {
-                options = {}
-            }
-
-            resp := null
-            for (attempt := 0; attempt < 3; attempt += 1) {
-                r := try(cli["chat"](conv["to_api"](conv), options))
-                if (r[0]) {
-                    if (is_error(r[1])) {
-                        msg := string(r[1])
-                        retryable := str.contains(msg, "failed") || str.contains(msg, "429") || str.contains(msg, "402") || str.contains(msg, "500")
-                        if (retryable && attempt < 2) {
-                            if (str.contains(msg, "429")) {
-                                time.sleep(2000 * (attempt + 1))
-                            } else {
-                                time.sleep(500 * (attempt + 1))
-                            }
-                            continue
-                        }
-                        resp = r
-                        break
-                    } else {
-                        resp = r
-                        break
-                    }
-                } else {
-                    retryable := str.contains(string(r[1]), "failed") || str.contains(string(r[1]), "429") || str.contains(string(r[1]), "402") || str.contains(string(r[1]), "500")
-                    if (retryable && attempt < 2) {
-                        if (str.contains(string(r[1]), "429")) {
-                            time.sleep(2000 * (attempt + 1))
-                        } else {
-                            time.sleep(500 * (attempt + 1))
-                        }
-                        continue
-                    }
-                    resp = r
-                    break
-                }
-            }
-            if (!resp[0]) {
-                return "Agent error: " + resp[1]
-            }
-            if (is_error(resp[1])) {
-                return "Agent error: " + string(resp[1])
-            }
-            data := resp[1]
-
-            choice := data["choices"][0]
-            message := choice["message"]
-            finish := choice["finish_reason"]
-
-            extra := null
-            if (message["tool_calls"] != null) {
-                extra = {"tool_calls": message["tool_calls"]}
-            }
-            conv["add"](conv, "assistant", message["content"], extra)
-
-            if (message["tool_calls"] != null && len(message["tool_calls"]) > 0) {
-                for (i := 0; i < len(message["tool_calls"]); i++) {
-                    tc := message["tool_calls"][i]
-                    name := null
-                    args := "{}"
-                    id := tc["id"]
-                    if (tc["function"] != null) {
-                        if (tc["function"]["name"] != null) {
-                            name = tc["function"]["name"]
-                        }
-                        if (tc["function"]["arguments"] != null) {
-                            args = tc["function"]["arguments"]
-                        }
-                    }
-                    if (name == null) {
-                        name = tc["name"]
-                    }
-                    if (args == null || args == "") {
-                        args = "{}"
-                    }
-
-                    result := tools.call_tool(tools_by_name, name, args)
-
-                    conv["add"](conv, "tool", result, {
-                        "name": name,
-                        "tool_call_id": id
-                    })
-                }
-                continue
-            }
-
-            if (message["content"] != null) {
-                return message["content"]
-            }
-            return ""
-        }
-        return "Reached maximum number of steps without finishing."
+    // --- hook helpers: never let a hook error break a turn ---
+    h0 := fn(hooks, key) {
+        if (hooks == null) { return null }
+        f := hooks[key]
+        if (f == null) { return null }
+        ignored := try(f())
+        return null
+    }
+    h1 := fn(hooks, key, a) {
+        if (hooks == null) { return null }
+        f := hooks[key]
+        if (f == null) { return null }
+        ignored := try(f(a))
+        return null
+    }
+    h2 := fn(hooks, key, a, b) {
+        if (hooks == null) { return null }
+        f := hooks[key]
+        if (f == null) { return null }
+        ignored := try(f(a, b))
+        return null
+    }
+    h3 := fn(hooks, key, a, b, c) {
+        if (hooks == null) { return null }
+        f := hooks[key]
+        if (f == null) { return null }
+        ignored := try(f(a, b, c))
+        return null
     }
 
-    stream := fn(user_message) {
-        conv["add"](conv, "user", user_message, null)
-
-        text := try(cli["stream"](conv["to_api"](conv), null))
-        if (!text[0]) {
-            return "Agent stream error: " + text[1]
-        }
-        if (is_error(text[1])) {
-            return "Agent stream error: " + string(text[1])
-        }
-
-        conv["add"](conv, "assistant", text[1], null)
-        return text[1]
+    cancelled_hook := fn(hooks) {
+        if (hooks == null) { return false }
+        f := hooks["should_cancel"]
+        if (f == null) { return false }
+        r := try(f())
+        if (!r[0]) { return false }
+        if (r[1] == true) { return true }
+        return false
     }
 
-    // run_stream(user_message, hooks) mirrors run() turn-for-turn but
-    // consumes the LLM response as SSE events via cli["stream_events"]
-    // + http.stream_poll. hooks is a HASH (or null) with optional keys:
-    //   "on_text": fn(delta)->null — fired per text chunk (inside try,
-    //     hook errors never break the turn),
-    //   "on_tool": fn(name, preview)->null — fired after each tool call
-    //     with the first 120 chars of the result,
-    //   "should_cancel": fn()->bool — polled each drain; returning true
-    //     cancels the stream and ends the turn as "[interrupted]".
-    // The key "cancelled" is set on hooks (true/false) when hooks != null.
-    // NOTE: there is deliberately NO fallback to run() here: the user
-    // message is already appended to conv before the first turn, so a
-    // fallback re-issue would duplicate it in the conversation.
-    run_stream := fn(user_message, hooks) {
-        conv["add"](conv, "user", user_message, null)
+    backoff := fn(hooks, attempt, kind) {
+        ms := 500 * (attempt + 1)
+        if (kind == "rate_limit") { ms = 2000 * (attempt + 1) }
+        h1(hooks, "on_note", "retrying in " + string(ms) + "ms (" + kind + ")")
+        try(time.sleep(ms))
+        return null
+    }
 
-        for (step := 0; step < max_steps; step += 1) {
-            options := {
-                "tools": openai_tools,
-                "tool_choice": "auto"
-            }
-            if (len(tool_list) == 0) {
-                options = {}
-            }
+    err_text := fn(x) {
+        return string(x)
+    }
 
-            started := null
-            for (attempt := 0; attempt < 3; attempt += 1) {
-                r := try(cli["stream_events"](conv["to_api"](conv), options))
-                if (r[0]) {
-                    if (is_error(r[1])) {
-                        msg := string(r[1])
-                        retryable := str.contains(msg, "failed") || str.contains(msg, "429") || str.contains(msg, "402") || str.contains(msg, "500")
-                        if (retryable && attempt < 2) {
-                            if (str.contains(msg, "429")) {
-                                time.sleep(2000 * (attempt + 1))
-                            } else {
-                                time.sleep(500 * (attempt + 1))
-                            }
-                            continue
-                        }
-                        started = r
-                        break
-                    } else {
-                        started = r
-                        break
+    // --- token accounting ---
+    estimate_tokens := fn(msgs) {
+        if (type(msgs) != "ARRAY") { return 0 }
+        chars := 0
+        for (i := 0; i < len(msgs); i += 1) {
+            m := msgs[i]
+            if (type(m) != "HASH") { continue }
+            c := m["content"]
+            if (type(c) == "STRING") { chars = chars + len(c) }
+            tc := m["tool_calls"]
+            if (type(tc) == "ARRAY") {
+                s := try(json.stringify(tc))
+                if (s[0]) { chars = chars + len(string(s[1])) }
+            }
+        }
+        return chars / 4 + len(msgs) * 8
+    }
+
+    apply_usage := fn(usage) {
+        if (usage == null || type(usage) != "HASH") { return null }
+        st := cli["stats"]
+        pt := usage["prompt_tokens"]
+        ct := usage["completion_tokens"]
+        if (st != null && type(st) == "HASH") {
+            if (type(pt) == "INTEGER") { st["prompt"] = st["prompt"] + pt }
+            if (type(ct) == "INTEGER") { st["completion"] = st["completion"] + ct }
+        }
+        if (type(pt) == "INTEGER") { au["prompt"] = pt }
+        cli["last_usage"] = usage
+        return null
+    }
+
+    // --- compaction: summarize the middle, keep system + recent tail ---
+    maybe_compact := fn(hooks) {
+        if (!auto_compact) { return null }
+        msgs := conv["to_api"](conv)
+        if (len(msgs) <= 4) { return null }
+
+        cur := estimate_tokens(msgs)
+        lu := au["prompt"]
+        if (type(lu) == "INTEGER" && lu > cur) { cur = lu }
+        budget := int(context_window * compact_threshold)
+        if (budget < 4000) { budget = 4000 }
+        if (cur < budget) { return null }
+
+        // tail must not start with a tool message (orphan tool_call pair)
+        keep := 6
+        if (keep > len(msgs) - 3) { keep = len(msgs) - 3 }
+        if (keep < 1) { return null }
+        start := len(msgs) - keep
+        if (start < 1) { start = 1 }
+        for (start < len(msgs) - 1) {
+            m := msgs[start]
+            if (m["role"] != "tool") { break }
+            start += 1
+        }
+        if (start <= 1) { return null }
+        head := msgs[0]
+        tail := arr.slice(msgs, start, len(msgs))
+        middle := arr.slice(msgs, 1, start)
+        if (len(middle) == 0) { return null }
+        digest := json.stringify(middle)
+        if (len(digest) > 24000) {
+            digest = str.slice(digest, 0, 24000) + "...[truncated]"
+        }
+        prompt := [
+            {"role": "system", "content": "You summarize coding conversations. Keep file paths, decisions, applied patches and open tasks. Be terse."},
+            {"role": "user", "content": "Summarize this conversation excerpt for context compaction:\n" + digest}
+        ]
+        r := cli["chat"](prompt, {"temperature": 0.3})
+        if (r == null || r["ok"] != true) {
+            errmsg := "no response"
+            if (r != null && r["error"] != null) { errmsg = string(r["error"]) }
+            h1(hooks, "on_note", "compaction skipped: " + errmsg)
+            return null
+        }
+        resp := r["resp"]
+        txt := ""
+        if (type(resp) == "HASH") {
+            ch := resp["choices"]
+            if (type(ch) == "ARRAY" && len(ch) > 0 && type(ch[0]) == "HASH") {
+                mm := ch[0]["message"]
+                if (type(mm) == "HASH" && type(mm["content"]) == "STRING") { txt = mm["content"] }
+            }
+        }
+        if (txt == "") {
+            h1(hooks, "on_note", "compaction skipped: empty summary")
+            return null
+        }
+        updated := [head, {"role": "user", "content": "[compacted summary] " + txt}]
+        for (i := 0; i < len(tail); i += 1) {
+            updated = arr.push(updated, tail[i])
+        }
+        conv["messages"] = updated
+        au["prompt"] = null
+        note := "compacted " + string(len(msgs)) + " -> " + string(len(updated)) + " messages"
+        h1(hooks, "on_note", note)
+        return note
+    }
+
+    drain := fn(handle, hooks) {
+        content := ""
+        calls_by_index := {}
+        cancelled := false
+        drain_err := null
+        usage := null
+        finish := null
+        deadline := time.now_ms() + 150000
+        loop {
+            pr := try(http.stream_poll(handle))
+            if (!pr[0]) {
+                drain_err = err_text(pr[1])
+                break
+            }
+            p := pr[1]
+            if (is_error(p)) {
+                drain_err = err_text(p)
+                break
+            }
+            text := p["text"]
+            if (type(text) == "STRING" && text != "") {
+                content = content + text
+                h1(hooks, "on_text", text)
+            }
+            chunk_tools := p["tools"]
+            if (type(chunk_tools) == "ARRAY") {
+                for (i := 0; i < len(chunk_tools); i += 1) {
+                    t := chunk_tools[i]
+                    if (type(t) != "HASH") { continue }
+                    idx := string(t["index"])
+                    box := calls_by_index[idx]
+                    if (box == null) {
+                        box = {"id": null, "name": "", "args": ""}
+                        calls_by_index[idx] = box
                     }
-                } else {
-                    retryable := str.contains(string(r[1]), "failed") || str.contains(string(r[1]), "429") || str.contains(string(r[1]), "402") || str.contains(string(r[1]), "500")
-                    if (retryable && attempt < 2) {
-                        if (str.contains(string(r[1]), "429")) {
-                            time.sleep(2000 * (attempt + 1))
-                        } else {
-                            time.sleep(500 * (attempt + 1))
-                        }
-                        continue
-                    }
-                    started = r
-                    break
+                    if (t["id"] != null) { box["id"] = t["id"] }
+                    if (t["name"] != null && t["name"] != "") { box["name"] = box["name"] + t["name"] }
+                    if (t["args"] != null) { box["args"] = box["args"] + t["args"] }
                 }
             }
-            if (!started[0]) {
-                return "Agent error: " + started[1]
+            if (p["usage"] != null) { usage = p["usage"] }
+            if (p["finish_reason"] != null) { finish = p["finish_reason"] }
+            if (p["error"] != null) {
+                drain_err = string(p["error"])
+                break
             }
-            if (is_error(started[1])) {
-                return "Agent error: " + string(started[1])
+            if (p["done"]) { break }
+            if (cancelled_hook(hooks)) {
+                cancelled = true
+                try(http.stream_cancel(handle))
+                break
             }
-            handle := started[1]
+            if (time.now_ms() > deadline) {
+                drain_err = "stream timed out in drain loop"
+                break
+            }
+            try(time.sleep(25))
+        }
+        return {
+            "content": content,
+            "calls": calls_by_index,
+            "cancelled": cancelled,
+            "error": drain_err,
+            "usage": usage,
+            "finish": finish
+        }
+    }
 
+    finalize_calls := fn(hooks, calls_by_index) {
+        keystrs := __hash_keys(calls_by_index)
+        intkeys := []
+        for (i := 0; i < len(keystrs); i += 1) {
+            k := try(int(keystrs[i]))
+            if (k[0]) { intkeys = arr.push(intkeys, k[1]) }
+        }
+        intkeys = arr.sort(intkeys)
+        tcarr := []
+        for (i := 0; i < len(intkeys); i += 1) {
+            idx := string(intkeys[i])
+            box := calls_by_index[idx]
+            bid := box["id"]
+            bname := box["name"]
+            bargs := box["args"]
+            if (bname == null) { bname = "" }
+            if (bargs == null || bargs == "") { bargs = "{}" }
+            tcarr = arr.push(tcarr, {"id": bid, "type": "function", "function": {"name": bname, "arguments": bargs}})
+        }
+        return tcarr
+    }
+
+    run_calls := fn(hooks, tcarr) {
+        for (i := 0; i < len(tcarr); i += 1) {
+            tc := tcarr[i]
+            fninfo := tc["function"]
+            name := ""
+            args := "{}"
+            if (type(fninfo) == "HASH") {
+                if (fninfo["name"] != null) { name = string(fninfo["name"]) }
+                if (fninfo["arguments"] != null) { args = string(fninfo["arguments"]) }
+            }
+            if (args == "") { args = "{}" }
+            if (name == "") { name = "unknown" }
+            h2(hooks, "on_tool_start", name, args)
+            result := tools.call_tool(tools_by_name, name, args)
+            h2(hooks, "on_tool_result", name, result)
+            conv["add"](conv, "tool", result, {
+                "name": name,
+                "tool_call_id": tc["id"]
+            })
+            h3(hooks, "on_message", "tool", result, {"name": name, "tool_call_id": tc["id"]})
+        }
+        return null
+    }
+
+    run_turn := fn(user_message, hooks) {
+        conv["add"](conv, "user", user_message, null)
+        h3(hooks, "on_message", "user", user_message, null)
+
+        ignored := maybe_compact(hooks)
+
+        steps := 0
+        last_usage := null
+        last_finish := null
+
+        for (step := 1; step <= max_steps; step += 1) {
+            steps = step
+            h1(hooks, "on_step", step)
+
+            options := {"tools": openai_tools, "tool_choice": "auto"}
+            if (len(openai_tools) == 0) { options = {} }
+
+            step_ok := false
+            step_err := "request failed"
+            cancelled := false
             content := ""
             calls_by_index := {}
-            cancelled := false
-            iters := 0
-            loop {
-                p := http.stream_poll(handle)
-                text := p["text"]
-                if (text != null && text != "") {
-                    content = content + text
-                    if (hooks != null) {
-                        ontext := hooks["on_text"]
-                        if (ontext != null) {
-                            tr := try(ontext(text))
-                        }
-                    }
-                }
-                chunk_tools := p["tools"]
-                if (chunk_tools != null) {
-                    for (i := 0; i < len(chunk_tools); i += 1) {
-                        t := chunk_tools[i]
-                        idx := string(t["index"])
-                        box := calls_by_index[idx]
-                        if (box == null) {
-                            box = {"id": null, "name": "", "args": ""}
-                            calls_by_index[idx] = box
-                        }
-                        if (t["id"] != null) {
-                            box["id"] = t["id"]
-                        }
-                        if (t["name"] != null && t["name"] != "") {
-                            box["name"] = box["name"] + t["name"]
-                        }
-                        if (t["args"] != null) {
-                            box["args"] = box["args"] + t["args"]
-                        }
-                    }
-                }
-                if (p["done"]) {
-                    break
-                }
-                if (p["error"] != null) {
-                    closed := try(http.stream_close(handle))
-                    est := cli["stats"]
-                    if (est != null) {
-                        est["calls"] = est["calls"] + 1
-                    }
-                    return "Agent error: " + p["error"]
-                }
-                if (hooks != null) {
-                    checker := hooks["should_cancel"]
-                    if (checker != null) {
-                        cr := try(checker())
-                        if (cr[0] && cr[1]) {
-                            cancelled = true
-                            stopped := try(http.stream_cancel(handle))
-                            break
-                        }
-                    }
-                }
-                iters = iters + 1
-                if (iters > 4000) {
-                    break
-                }
-                time.sleep(30)
-            }
-            closed := try(http.stream_close(handle))
+            usage := null
+            finish := null
 
-            // Count the completed turn. Streaming responses carry no
-            // usage payload, so prompt/completion tokens stay 0; only
-            // the call count advances. Start-failures above return
-            // before this point and are deliberately not counted.
+            for (attempt := 0; attempt < max_retries; attempt += 1) {
+                content = ""
+                calls_by_index = {}
+                cancelled = false
+                usage = null
+                finish = null
+
+                started := cli["stream_events"](conv["to_api"](conv), options)
+                handle := null
+                start_err := null
+                if (started == null) {
+                    start_err = "no response from stream_events"
+                } else if (started["ok"] != true) {
+                    start_err = string(started["error"])
+                } else {
+                    handle = started["handle"]
+                }
+
+                if (start_err != null) {
+                    kind := client.classify(start_err)
+                    if (kind == "payload" && str.contains(start_err, "stream_options")) {
+                        options["stream_usage"] = false
+                        if (attempt + 1 < max_retries) { continue }
+                    }
+                    if (client.retryable(kind) && attempt + 1 < max_retries) {
+                        backoff(hooks, attempt, kind)
+                        continue
+                    }
+                    step_err = start_err
+                    break
+                }
+
+                d := drain(handle, hooks)
+                try(http.stream_close(handle))
+
+                content = d["content"]
+                calls_by_index = d["calls"]
+                cancelled = d["cancelled"]
+                usage = d["usage"]
+                finish = d["finish"]
+
+                if (cancelled) {
+                    step_ok = true
+                    break
+                }
+                if (d["error"] != null) {
+                    derr := string(d["error"])
+                    kind := client.classify(derr)
+                    if (kind == "payload" && str.contains(derr, "stream_options")) {
+                        options["stream_usage"] = false
+                        if (attempt + 1 < max_retries) { continue }
+                    }
+                    if (client.retryable(kind) && attempt + 1 < max_retries) {
+                        backoff(hooks, attempt, kind)
+                        continue
+                    }
+                    step_err = derr
+                    break
+                }
+                step_ok = true
+                break
+            }
+
+            if (!step_ok) {
+                h1(hooks, "on_note", "turn failed: " + step_err)
+                return {"ok": false, "text": "", "error": step_err, "interrupted": false, "steps": steps, "usage": last_usage, "finish": last_finish}
+            }
+
             st := cli["stats"]
-            if (st != null) {
+            if (st != null && type(st) == "HASH") {
                 st["calls"] = st["calls"] + 1
             }
-
-            if (hooks != null) {
-                hooks["cancelled"] = cancelled
+            if (usage != null) {
+                ignored := apply_usage(usage)
+                last_usage = usage
+                h1(hooks, "on_usage", usage)
             }
+            if (finish != null) { last_finish = finish }
 
             if (cancelled) {
-                interrupted := content + " [interrupted]"
-                conv["add"](conv, "assistant", interrupted, null)
-                return interrupted
-            }
-
-            keystrs := hash.keys(calls_by_index)
-            intkeys := []
-            for (i := 0; i < len(keystrs); i += 1) {
-                intkeys = arr.push(intkeys, int(keystrs[i]))
-            }
-            intkeys = arr.sort(intkeys)
-
-            if (len(intkeys) == 0 && content != "") {
-                conv["add"](conv, "assistant", content, null)
-                return content
-            }
-
-            if (len(intkeys) > 0) {
-                tcarr := []
-                for (i := 0; i < len(intkeys); i += 1) {
-                    idx := string(intkeys[i])
-                    box := calls_by_index[idx]
-                    bid := box["id"]
-                    bname := box["name"]
-                    bargs := box["args"]
-                    if (bname == null) {
-                        bname = ""
-                    }
-                    if (bargs == null || bargs == "") {
-                        bargs = "{}"
-                    }
-                    tcarr = arr.push(tcarr, {"id": bid, "type": "function", "function": {"name": bname, "arguments": bargs}})
+                if (content != "") {
+                    conv["add"](conv, "assistant", content, null)
+                    h3(hooks, "on_message", "assistant", content, null)
                 }
+                h1(hooks, "on_note", "interrupted")
+                return {"ok": false, "text": content, "error": null, "interrupted": true, "steps": steps, "usage": last_usage, "finish": last_finish}
+            }
+
+            keystrs := __hash_keys(calls_by_index)
+            has_calls := len(keystrs) > 0
+
+            if (has_calls) {
+                tcarr := finalize_calls(hooks, calls_by_index)
                 conv["add"](conv, "assistant", content, {"tool_calls": tcarr})
-                for (i := 0; i < len(intkeys); i += 1) {
-                    idx := string(intkeys[i])
-                    box := calls_by_index[idx]
-                    name := box["name"]
-                    if (name == null) {
-                        name = ""
-                    }
-                    args := box["args"]
-                    if (args == null || args == "") {
-                        args = "{}"
-                    }
-                    id := box["id"]
-                    result := tools.call_tool(tools_by_name, name, args)
-                    if (hooks != null) {
-                        watcher := hooks["on_tool"]
-                        if (watcher != null) {
-                            preview := result
-                            if (len(preview) > 120) {
-                                preview = str.slice(preview, 0, 120)
-                            }
-                            tr := try(watcher(name, preview))
-                        }
-                    }
-                    conv["add"](conv, "tool", result, {
-                        "name": name,
-                        "tool_call_id": id
-                    })
-                }
+                h3(hooks, "on_message", "assistant", content, {"tool_calls": tcarr})
+                ignored := run_calls(hooks, tcarr)
                 continue
             }
 
-            return ""
+            if (content != "" && finish == "length") {
+                conv["add"](conv, "assistant", content, null)
+                h3(hooks, "on_message", "assistant", content, null)
+                h1(hooks, "on_note", "continuing (finish_reason=length)")
+                continue
+            }
+
+            if (content != "") {
+                conv["add"](conv, "assistant", content, null)
+                h3(hooks, "on_message", "assistant", content, null)
+                return {"ok": true, "text": content, "error": null, "interrupted": false, "steps": steps, "usage": last_usage, "finish": last_finish}
+            }
+
+            return {"ok": true, "text": "", "error": null, "interrupted": false, "steps": steps, "usage": last_usage, "finish": last_finish}
         }
-        return "Reached maximum number of steps without finishing."
+
+        return {"ok": false, "text": "", "error": "reached maximum number of steps (" + string(max_steps) + ")", "interrupted": false, "steps": steps, "usage": last_usage, "finish": last_finish}
+    }
+
+    run := fn(user_message) {
+        r := run_turn(user_message, null)
+        if (r["ok"]) { return r["text"] }
+        if (r["interrupted"]) { return r["text"] }
+        return "Error: " + string(r["error"])
     }
 
     return {
         "run": run,
-        "stream": stream,
-        "run_stream": run_stream,
-        "conversation": conv
+        "run_turn": run_turn,
+        "conversation": conv,
+        "estimate_tokens": fn() { return estimate_tokens(conv["to_api"](conv)) },
+        "maybe_compact": fn(hooks) { return maybe_compact(hooks) }
     }
 }

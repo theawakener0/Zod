@@ -1,0 +1,662 @@
+import "std/fs" as fs
+import "std/str" as str
+import "std/array" as arr
+
+// apply_patch.zd — Codex-style "*** Begin Patch" parser and applier.
+// Pure library: std only, no printing, no error(); every failure is a value.
+//
+// Public API:
+//   parse_patch(text)      -> {"ok": bool, "ops": array, "error": string|null}
+//   apply_text(text, cwd)  -> {"ok": bool, "output": string, "files": array}
+//
+// Ops produced by parse_patch:
+//   {"type": "add",    "path": str, "lines": [str]}
+//   {"type": "update", "path": str, "move": str|null,
+//    "hunks": [{"anchor": str|null,
+//               "rows": [{"kind": "ctx"|"del"|"add", "text": str}]}]}
+//   {"type": "delete", "path": str}
+//
+// apply_text is all-or-nothing: every op is validated in memory first
+// (each touched file is read once); files are written only when the whole
+// patch applies cleanly. A failure means zero writes.
+
+// ---------------------------------------------------------------- text utils
+
+// Split text into lines; a trailing "\r" is dropped so CRLF input parses.
+split_lines := fn(text) {
+    raw := str.split(text, "\n")
+    out := []
+    for (i := 0; i < len(raw); i += 1) {
+        l := raw[i]
+        if (str.ends_with(l, "\r")) {
+            l = str.slice(l, 0, len(l) - 1)
+        }
+        out = arr.push(out, l)
+    }
+    return out
+}
+
+// Right-trim spaces, tabs and CR (used by the tolerant matcher).
+rtrim := fn(s) {
+    n := len(s)
+    for (n > 0) {
+        c := str.slice(s, n - 1, n)
+        if (c == " " || c == "\t" || c == "\r") {
+            n -= 1
+        } else {
+            break
+        }
+    }
+    return str.slice(s, 0, n)
+}
+
+// ---------------------------------------------------------------- path utils
+
+// [reason|null, normalized|null]; rejects empty, absolute and ".." paths.
+norm_path := fn(raw) {
+    p := str.trim(raw)
+    if (p == "") {
+        return ["path is empty", null]
+    }
+    if (str.starts_with(p, "/")) {
+        return ["path must be relative: " + p, null]
+    }
+    if (str.contains(p, "..")) {
+        return ["path escapes cwd: " + p, null]
+    }
+    for (str.starts_with(p, "./")) {
+        p = str.slice(p, 2, len(p))
+    }
+    if (p == "") {
+        return ["path is empty", null]
+    }
+    return [null, p]
+}
+
+// mkdir -p for the directory part of a full path; reason|null.
+ensure_parent := fn(full) {
+    parts := str.split(full, "/")
+    if (len(parts) <= 1) {
+        return null
+    }
+    d := str.join(arr.slice(parts, 0, len(parts) - 1), "/")
+    if (d == "") {
+        return null
+    }
+    r := try(fs.mkdir(d))
+    if (!r[0]) {
+        return "cannot create directory " + d + ": " + string(r[1])
+    }
+    return null
+}
+
+// [reason|null, exists_bool]
+path_exists := fn(full) {
+    r := try(fs.exists(full))
+    if (!r[0]) {
+        return ["cannot stat " + full + ": " + string(r[1]), false]
+    }
+    return [null, r[1]]
+}
+
+// ------------------------------------------------------------ hunk matching
+
+line_matches := fn(a, b, mode) {
+    if (mode == "exact") {
+        return a == b
+    }
+    if (mode == "rtrim") {
+        return rtrim(a) == rtrim(b)
+    }
+    return str.trim(a) == str.trim(b)
+}
+
+block_at := fn(lines, block, s, mode) {
+    for (k := 0; k < len(block); k += 1) {
+        if (!line_matches(lines[s + k], block[k], mode)) {
+            return false
+        }
+    }
+    return true
+}
+
+// First index >= begin where `block` matches under one tolerance mode.
+find_mode := fn(lines, block, begin, mode) {
+    n := len(lines)
+    bl := len(block)
+    s := begin
+    if (s < 0) {
+        s = 0
+    }
+    for (s + bl <= n) {
+        if (block_at(lines, block, s, mode)) {
+            return s
+        }
+        s += 1
+    }
+    return -1
+}
+
+// Exact block first, then trailing-whitespace tolerance, then full trim.
+search_block := fn(lines, block, begin) {
+    s := find_mode(lines, block, begin, "exact")
+    if (s >= 0) {
+        return s
+    }
+    s = find_mode(lines, block, begin, "rtrim")
+    if (s >= 0) {
+        return s
+    }
+    return find_mode(lines, block, begin, "trim")
+}
+
+// Line index of the "@@" anchor text: trimmed equality first, then substring.
+find_anchor := fn(lines, anchor, begin) {
+    s0 := begin
+    if (s0 < 0) {
+        s0 = 0
+    }
+    for (i := s0; i < len(lines); i += 1) {
+        if (str.trim(lines[i]) == anchor) {
+            return i
+        }
+    }
+    for (i := s0; i < len(lines); i += 1) {
+        if (str.contains(lines[i], anchor)) {
+            return i
+        }
+    }
+    return -1
+}
+
+// Locate a hunk's old block (context + deletions, contiguous). When the hunk
+// carries an "@@" anchor that is findable at/after `start`, positions at/after
+// the anchor's own line are preferred. Returns the match index or -1.
+find_block := fn(lines, block, start, anchor) {
+    if (anchor != null) {
+        ai := find_anchor(lines, anchor, start)
+        if (ai >= 0) {
+            s := search_block(lines, block, ai)
+            if (s >= 0) {
+                return s
+            }
+        }
+    }
+    return search_block(lines, block, start)
+}
+
+// Apply one Update File op's hunks to its split lines. Hunks are searched in
+// order; hunk N+1 must match at/after hunk N's match end (no overlap).
+// Returns [reason|null, new_lines|null].
+apply_hunks := fn(path, lines, hunks) {
+    out := []
+    copied := 0
+    pos := 0
+    for (h := 0; h < len(hunks); h += 1) {
+        hunk := hunks[h]
+        rows := hunk["rows"]
+        block := []
+        for (r := 0; r < len(rows); r += 1) {
+            if (rows[r]["kind"] != "add") {
+                block = arr.push(block, rows[r]["text"])
+            }
+        }
+        at := find_block(lines, block, pos, hunk["anchor"])
+        if (at < 0) {
+            msg := "hunk " + string(h + 1) + " for '" + path + "' did not match"
+            if (hunk["anchor"] != null) {
+                msg = msg + " (anchor: " + hunk["anchor"] + ")"
+            }
+            return [msg, null]
+        }
+        for (j := copied; j < at; j += 1) {
+            out = arr.push(out, lines[j])
+        }
+        for (r := 0; r < len(rows); r += 1) {
+            if (rows[r]["kind"] != "del") {
+                out = arr.push(out, rows[r]["text"])
+            }
+        }
+        copied = at + len(block)
+        pos = copied
+    }
+    for (j := copied; j < len(lines); j += 1) {
+        out = arr.push(out, lines[j])
+    }
+    return [null, out]
+}
+
+// ------------------------------------------------------------ file content
+
+// {"lines": [str], "final_newline": bool}
+split_content := fn(content) {
+    if (content == "") {
+        return {"lines": [], "final_newline": true}
+    }
+    ls := str.split(content, "\n")
+    final := false
+    if (ls[len(ls) - 1] == "") {
+        final = true
+        ls = arr.slice(ls, 0, len(ls) - 1)
+    }
+    return {"lines": ls, "final_newline": final}
+}
+
+join_content := fn(lines, final_newline) {
+    if (len(lines) == 0) {
+        return ""
+    }
+    if (final_newline) {
+        return str.join(lines, "\n") + "\n"
+    }
+    return str.join(lines, "\n")
+}
+
+// ------------------------------------------------------------ failure paths
+
+apply_failure := fn(reason) {
+    return {"ok": false, "output": "Error: " + reason, "files": []}
+}
+
+// Best-effort restore after a write error. Entries are {"path", "prev"};
+// prev == null means the path did not exist before.
+rollback := fn(journal) {
+    for (i := len(journal) - 1; i >= 0; i -= 1) {
+        entry := journal[i]
+        if (entry["prev"] == null) {
+            rm_result := try(fs.rm(entry["path"]))
+        } else {
+            wr_result := try(fs.write_file(entry["path"], entry["prev"]))
+        }
+    }
+    return null
+}
+
+write_failure := fn(journal, reason) {
+    rollback(journal)
+    return apply_failure(reason)
+}
+
+// ---------------------------------------------------------------- parse
+
+pub parse_patch := fn(text) {
+    if (text == null || type(text) != "STRING") {
+        return {"ok": false, "ops": [], "error": "Error: patch text must be a string"}
+    }
+    lines := split_lines(text)
+    // A final "\n" just terminates the last line; it is not an extra line.
+    if (len(lines) >= 2 && lines[len(lines) - 1] == "") {
+        lines = arr.slice(lines, 0, len(lines) - 1)
+    }
+    ops := []
+    cur_type := null        // "add" | "update" | "delete" while a section is open
+    cur_path := ""
+    add_lines := []
+    hunks := []             // finished hunks of the open update
+    rows := null            // rows of the hunk currently being filled
+    row_anchor := null      // anchor that belongs to `rows`
+    next_anchor := null     // anchor attached to the next started hunk
+    pending := false        // an "@@" line was seen with no rows yet
+    move_to := null         // move target of the open update
+
+    fail := fn(msg) {
+        return {"ok": false, "ops": [], "error": "Error: " + msg}
+    }
+
+    // Finish the row run: `rows` becomes the next finished hunk.
+    flush_hunk := fn() {
+        if (rows == null) {
+            return null
+        }
+        hunks = arr.push(hunks, {"anchor": row_anchor, "rows": rows})
+        rows = null
+        row_anchor = null
+    }
+
+    // Finish the open section. Returns an error string or null.
+    close_op := fn() {
+        if (cur_type == null) {
+            return null
+        }
+        flush_hunk()
+        if (cur_type == "update") {
+            if (pending) {
+                return "empty hunk in Update File '" + cur_path + "'"
+            }
+            if (len(hunks) == 0 && move_to == null) {
+                return "Update File '" + cur_path + "' has no hunks and no move target"
+            }
+            ops = arr.push(ops, {"type": "update", "path": cur_path, "move": move_to, "hunks": hunks})
+        } else if (cur_type == "add") {
+            ops = arr.push(ops, {"type": "add", "path": cur_path, "lines": add_lines})
+        } else {
+            ops = arr.push(ops, {"type": "delete", "path": cur_path})
+        }
+        cur_type = null
+        cur_path = ""
+        add_lines = []
+        hunks = []
+        move_to = null
+        next_anchor = null
+        pending = false
+        return null
+    }
+
+    // Close the previous section and open a new one for the raw path text.
+    open_op := fn(kind, raw) {
+        e := close_op()
+        if (e != null) {
+            return e
+        }
+        np := norm_path(raw)
+        if (np[0] != null) {
+            return np[0]
+        }
+        cur_type = kind
+        cur_path = np[1]
+        return null
+    }
+
+    // Duplicate-path check; sources and move targets share one namespace.
+    check_dup := fn(seen, op) {
+        p := op["path"]
+        if (seen[p] != null) {
+            return "duplicate path in patch: " + p
+        }
+        seen[p] = true
+        if (op["type"] == "update" && op["move"] != null && op["move"] != p) {
+            m := op["move"]
+            if (seen[m] != null) {
+                return "duplicate path in patch: " + m
+            }
+            seen[m] = true
+        }
+        return null
+    }
+
+    // --- opening marker (leading blank lines are allowed)
+    n := len(lines)
+    i := 0
+    for (i < n && str.trim(lines[i]) == "") {
+        i += 1
+    }
+    if (i >= n || str.trim(lines[i]) != "*** Begin Patch") {
+        return fail("missing *** Begin Patch")
+    }
+    i += 1
+
+    // --- body
+    done := false
+    for (i < n) {
+        line := lines[i]
+        i += 1
+        s := rtrim(line)
+
+        if (done) {
+            if (s != "") {
+                return fail("content after *** End Patch: " + line)
+            }
+            continue
+        }
+
+        if (str.starts_with(s, "***")) {
+            rest := str.trim(str.slice(s, 3, len(s)))
+            if (rest == "End Patch") {
+                e := close_op()
+                if (e != null) {
+                    return fail(e)
+                }
+                done = true
+            } else if (rest == "Begin Patch") {
+                return fail("duplicate *** Begin Patch")
+            } else if (str.starts_with(rest, "Add File:")) {
+                e := open_op("add", str.slice(rest, len("Add File:"), len(rest)))
+                if (e != null) {
+                    return fail(e)
+                }
+            } else if (str.starts_with(rest, "Update File:")) {
+                e := open_op("update", str.slice(rest, len("Update File:"), len(rest)))
+                if (e != null) {
+                    return fail(e)
+                }
+            } else if (str.starts_with(rest, "Delete File:")) {
+                e := open_op("delete", str.slice(rest, len("Delete File:"), len(rest)))
+                if (e != null) {
+                    return fail(e)
+                }
+            } else if (str.starts_with(rest, "Move to:")) {
+                if (cur_type != "update") {
+                    return fail("*** Move to: outside an Update File section")
+                }
+                if (move_to != null) {
+                    return fail("duplicate *** Move to: in Update File '" + cur_path + "'")
+                }
+                np := norm_path(str.slice(rest, len("Move to:"), len(rest)))
+                if (np[0] != null) {
+                    return fail(np[0])
+                }
+                move_to = np[1]
+            } else {
+                return fail("unknown directive: " + s)
+            }
+            continue
+        }
+
+        if (cur_type == null) {
+            return fail("expected a file section header, got: " + line)
+        }
+        if (cur_type == "add") {
+            if (!str.starts_with(line, "+")) {
+                return fail("invalid line in Add File '" + cur_path + "' (must start with '+'): " + line)
+            }
+            add_lines = arr.push(add_lines, str.slice(line, 1, len(line)))
+        } else if (cur_type == "update") {
+            if (str.starts_with(s, "@@")) {
+                if (pending) {
+                    return fail("empty hunk in Update File '" + cur_path + "'")
+                }
+                flush_hunk()
+                a := str.trim(str.slice(s, 2, len(s)))
+                if (a == "") {
+                    next_anchor = null
+                } else {
+                    next_anchor = a
+                }
+                pending = true
+            } else {
+                kind := ""
+                txt := ""
+                if (line == "") {
+                    kind = "ctx"
+                    txt = ""
+                } else if (str.starts_with(line, "+")) {
+                    kind = "add"
+                    txt = str.slice(line, 1, len(line))
+                } else if (str.starts_with(line, "-")) {
+                    kind = "del"
+                    txt = str.slice(line, 1, len(line))
+                } else if (str.starts_with(line, " ")) {
+                    kind = "ctx"
+                    txt = str.slice(line, 1, len(line))
+                } else {
+                    return fail("invalid line in Update File '" + cur_path + "': " + line)
+                }
+                if (rows == null) {
+                    rows = []
+                    row_anchor = next_anchor
+                    next_anchor = null
+                    pending = false
+                }
+                rows = arr.push(rows, {"kind": kind, "text": txt})
+            }
+        } else {
+            return fail("unexpected line in Delete File '" + cur_path + "': " + line)
+        }
+    }
+
+    if (!done) {
+        return fail("missing *** End Patch")
+    }
+
+    seen := {}
+    for (k := 0; k < len(ops); k += 1) {
+        e := check_dup(seen, ops[k])
+        if (e != null) {
+            return fail(e)
+        }
+    }
+    return {"ok": true, "ops": ops, "error": null}
+}
+
+// ---------------------------------------------------------------- apply
+
+pub apply_text := fn(text, cwd) {
+    if (cwd == null || type(cwd) != "STRING") {
+        cwd = ""
+    }
+    for (cwd != "" && str.ends_with(cwd, "/")) {
+        cwd = str.slice(cwd, 0, len(cwd) - 1)
+    }
+
+    parsed := parse_patch(text)
+    if (!parsed["ok"]) {
+        return {"ok": false, "output": parsed["error"], "files": []}
+    }
+    ops := parsed["ops"]
+    if (len(ops) == 0) {
+        return apply_failure("no files were modified")
+    }
+
+    full_of := fn(p) {
+        if (cwd == "") {
+            return p
+        }
+        return cwd + "/" + p
+    }
+
+    // Phase 1: validate every op in memory; each touched file is read once.
+    results := []
+    for (k := 0; k < len(ops); k += 1) {
+        op := ops[k]
+        t := op["type"]
+        p := op["path"]
+        full := full_of(p)
+
+        if (t == "add") {
+            ex := path_exists(full)
+            if (ex[0] != null) {
+                return apply_failure(ex[0])
+            }
+            if (ex[1]) {
+                return apply_failure("file already exists: " + p)
+            }
+            content := ""
+            if (len(op["lines"]) > 0) {
+                content = str.join(op["lines"], "\n") + "\n"
+            }
+            results = arr.push(results, {"kind": "A", "src": p, "dst": null, "content": content, "prev": null})
+        } else if (t == "delete") {
+            ex := path_exists(full)
+            if (ex[0] != null) {
+                return apply_failure(ex[0])
+            }
+            if (!ex[1]) {
+                return apply_failure("file to delete does not exist: " + p)
+            }
+            rf := try(fs.read_file(full))
+            if (!rf[0]) {
+                return apply_failure("cannot delete " + p + ": " + string(rf[1]))
+            }
+            results = arr.push(results, {"kind": "D", "src": p, "dst": null, "content": null, "prev": rf[1]})
+        } else {
+            rf := try(fs.read_file(full))
+            if (!rf[0]) {
+                return apply_failure("cannot read " + p + ": " + string(rf[1]))
+            }
+            sc := split_content(rf[1])
+            ar := apply_hunks(p, sc["lines"], op["hunks"])
+            if (ar[0] != null) {
+                return apply_failure(ar[0])
+            }
+            content := join_content(ar[1], sc["final_newline"])
+            move := op["move"]
+            if (move != null && move != p) {
+                me := path_exists(full_of(move))
+                if (me[0] != null) {
+                    return apply_failure(me[0])
+                }
+                if (me[1]) {
+                    return apply_failure("move target already exists: " + move)
+                }
+                results = arr.push(results, {"kind": "R", "src": p, "dst": move, "content": content, "prev": rf[1]})
+            } else {
+                results = arr.push(results, {"kind": "M", "src": p, "dst": null, "content": content, "prev": rf[1]})
+            }
+        }
+    }
+
+    // Phase 2: write (reached only when every op validated).
+    journal := []
+    for (k := 0; k < len(results); k += 1) {
+        res := results[k]
+        kind := res["kind"]
+        src_full := full_of(res["src"])
+        prev := res["prev"]
+
+        if (kind == "A") {
+            e := ensure_parent(src_full)
+            if (e != null) {
+                return write_failure(journal, e)
+            }
+            w := try(fs.write_file(src_full, res["content"]))
+            if (!w[0]) {
+                return write_failure(journal, "cannot write " + res["src"] + ": " + string(w[1]))
+            }
+            journal = arr.push(journal, {"path": src_full, "prev": null})
+        } else if (kind == "M") {
+            w := try(fs.write_file(src_full, res["content"]))
+            if (!w[0]) {
+                return write_failure(journal, "cannot write " + res["src"] + ": " + string(w[1]))
+            }
+            journal = arr.push(journal, {"path": src_full, "prev": prev})
+        } else if (kind == "D") {
+            d := try(fs.rm(src_full))
+            if (!d[0]) {
+                return write_failure(journal, "cannot delete " + res["src"] + ": " + string(d[1]))
+            }
+            journal = arr.push(journal, {"path": src_full, "prev": prev})
+        } else {
+            dst_full := full_of(res["dst"])
+            e := ensure_parent(dst_full)
+            if (e != null) {
+                return write_failure(journal, e)
+            }
+            w := try(fs.write_file(dst_full, res["content"]))
+            if (!w[0]) {
+                return write_failure(journal, "cannot write " + res["dst"] + ": " + string(w[1]))
+            }
+            journal = arr.push(journal, {"path": dst_full, "prev": null})
+            d := try(fs.rm(src_full))
+            if (!d[0]) {
+                return write_failure(journal, "cannot remove " + res["src"] + ": " + string(d[1]))
+            }
+            journal = arr.push(journal, {"path": src_full, "prev": prev})
+        }
+    }
+
+    // Phase 3: Codex-style summary.
+    out_lines := []
+    files := []
+    for (k := 0; k < len(results); k += 1) {
+        res := results[k]
+        if (res["kind"] == "R") {
+            out_lines = arr.push(out_lines, "R " + res["src"] + " -> " + res["dst"])
+            files = arr.push(files, res["dst"])
+        } else {
+            out_lines = arr.push(out_lines, res["kind"] + " " + res["src"])
+            files = arr.push(files, res["src"])
+        }
+    }
+    output := "Success. Updated the following files:\n" + str.join(out_lines, "\n") + "\n"
+    return {"ok": true, "output": output, "files": files}
+}

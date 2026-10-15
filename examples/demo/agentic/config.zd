@@ -1,0 +1,261 @@
+// config.zd — configuration for Zodex.
+//
+// Layered load: defaults < root_dir()/config.json < cwd/.zodex/config.json < env.
+// Every fs/json access is guarded with try(); invalid types in config files
+// fall back to the previous layer (the default). Never prints, never halts.
+
+import "std/os" as os
+import "std/fs" as fs
+import "std/json" as json
+import "std/hash" as hash
+import "std/str" as str
+
+pub root_dir := fn() {
+    home := os.env_get("ZODEX_HOME")
+    if (home != null && type(home) == "STRING" && home != "") {
+        return home
+    }
+    home = os.env_get("HOME")
+    if (home != null && type(home) == "STRING" && home != "") {
+        return home + "/.zodex"
+    }
+    profile := os.env_get("USERPROFILE")
+    if (profile != null && type(profile) == "STRING" && profile != "") {
+        return profile + "\\.zodex"
+    }
+    return os.cwd() + "/.zodex"
+}
+
+pub defaults := fn() {
+    return {
+        "model": "qwen/qwen3-32b",
+        "base_url": "https://ai.hackclub.com/proxy/v1",
+        "api_key": null,
+        "api_key_env": ["HACKCLUB_AI_API_KEY", "HACK_CLUB_AI_API_KEY", "ZODEX_API_KEY", "OPENAI_API_KEY"],
+        "approvals": "untrusted",
+        "sandbox": "workspace-write",
+        "max_steps": 32,
+        "auto_compact": true,
+        "compact_threshold": 0.8,
+        "stream_usage": true,
+        "allow_exec": true,
+        "max_bytes": 200000,
+        "temperature": 0.7,
+        "timeout_ms": 120000,
+        "theme": "zodex"
+    }
+}
+
+// Shallow merge: keys from `over` win; null values in `over` are skipped.
+pub merge := fn(base, over) {
+    out := {}
+    if (type(base) == "HASH") {
+        ks := hash.keys(base)
+        for (i := 0; i < len(ks); i += 1) {
+            out[ks[i]] = base[ks[i]]
+        }
+    }
+    if (type(over) == "HASH") {
+        ks := hash.keys(over)
+        for (i := 0; i < len(ks); i += 1) {
+            v := over[ks[i]]
+            if (v != null) {
+                out[ks[i]] = v
+            }
+        }
+    }
+    return out
+}
+
+// Type check for a known config key (unknown keys are always accepted).
+value_ok := fn(key, v) {
+    if (v == null) {
+        return key == "api_key"
+    }
+    t := type(v)
+    if (key == "model" || key == "base_url" || key == "approvals" || key == "sandbox" || key == "theme") {
+        return t == "STRING"
+    }
+    if (key == "api_key") {
+        return t == "STRING"
+    }
+    if (key == "api_key_env") {
+        return t == "ARRAY"
+    }
+    if (key == "max_steps" || key == "max_bytes" || key == "timeout_ms") {
+        return t == "INTEGER"
+    }
+    if (key == "auto_compact" || key == "stream_usage" || key == "allow_exec") {
+        return t == "BOOLEAN"
+    }
+    if (key == "compact_threshold" || key == "temperature") {
+        return t == "INTEGER" || t == "FLOAT"
+    }
+    return true
+}
+
+// Read one JSON config file into cfg; missing/corrupt files and mistyped
+// known keys are skipped (the previous layer keeps its value).
+config_file := fn(path, cfg) {
+    r := try(fs.read_file(path))
+    if (!r[0] || type(r[1]) != "STRING") {
+        return cfg
+    }
+    p := try(json.parse(r[1]))
+    if (!p[0] || type(p[1]) != "HASH") {
+        return cfg
+    }
+    h := p[1]
+    ks := hash.keys(h)
+    for (i := 0; i < len(ks); i += 1) {
+        k := ks[i]
+        if (value_ok(k, h[k])) {
+            cfg[k] = h[k]
+        }
+    }
+    return cfg
+}
+
+env_str := fn(name) {
+    v := os.env_get(name)
+    if (v != null && type(v) == "STRING" && v != "") {
+        return v
+    }
+    return null
+}
+
+env_int := fn(name) {
+    v := env_str(name)
+    if (v == null) {
+        return null
+    }
+    r := try(int(v))
+    if (!r[0]) {
+        return null
+    }
+    return r[1]
+}
+
+// "0" / "false" / "no" (case-insensitive) -> false, anything else -> true.
+env_bool := fn(name) {
+    v := env_str(name)
+    if (v == null) {
+        return null
+    }
+    lv := str.lower(v)
+    if (lv == "0" || lv == "false" || lv == "no") {
+        return false
+    }
+    return true
+}
+
+pub apply_env := fn(cfg) {
+    out := merge(cfg, null)
+    v := env_str("ZODEX_MODEL")
+    if (v == null) {
+        v = env_str("OPENAI_MODEL")
+    }
+    if (v != null) {
+        out["model"] = v
+    }
+    v = env_str("ZODEX_BASE_URL")
+    if (v == null) {
+        v = env_str("OPENAI_BASE_URL")
+    }
+    if (v != null) {
+        out["base_url"] = v
+    }
+    v = env_str("ZODEX_API_KEY")
+    if (v != null) {
+        out["api_key"] = v
+    }
+    v = env_str("ZODEX_APPROVALS")
+    if (v != null) {
+        out["approvals"] = v
+    }
+    v = env_str("ZODEX_SANDBOX")
+    if (v != null) {
+        out["sandbox"] = v
+    }
+    n := env_int("ZODEX_MAX_STEPS")
+    if (n != null) {
+        out["max_steps"] = n
+    }
+    b := env_bool("ZODEX_STREAM_USAGE")
+    if (b != null) {
+        out["stream_usage"] = b
+    }
+    b = env_bool("ZODEX_ALLOW_EXEC")
+    if (b != null) {
+        out["allow_exec"] = b
+    }
+    n = env_int("ZODEX_MAX_BYTES")
+    if (n != null) {
+        out["max_bytes"] = n
+    }
+    b = env_bool("ZODEX_AUTO_COMPACT")
+    if (b != null) {
+        out["auto_compact"] = b
+    }
+    return out
+}
+
+pub resolve_key := fn(cfg) {
+    if (type(cfg) != "HASH") {
+        return null
+    }
+    direct := cfg["api_key"]
+    if (direct != null && type(direct) == "STRING" && direct != "") {
+        return direct
+    }
+    names := cfg["api_key_env"]
+    if (type(names) != "ARRAY") {
+        return null
+    }
+    for (i := 0; i < len(names); i += 1) {
+        name := names[i]
+        if (type(name) != "STRING" || name == "") {
+            continue
+        }
+        v := env_str(name)
+        if (v != null) {
+            return v
+        }
+    }
+    return null
+}
+
+pub load := fn(cwd) {
+    cfg := defaults()
+    cfg = config_file(root_dir() + "/config.json", cfg)
+    if (type(cwd) == "STRING" && cwd != "") {
+        cfg = config_file(cwd + "/.zodex/config.json", cfg)
+    }
+    return apply_env(cfg)
+}
+
+// Persist only the project-safe subset of cfg to cwd/.zodex/config.json.
+pub save_project := fn(cwd, cfg) {
+    if (type(cwd) != "STRING" || cwd == "" || type(cfg) != "HASH") {
+        return false
+    }
+    folder := cwd + "/.zodex"
+    m := try(fs.mkdir(folder))
+    if (!m[0]) {
+        return false
+    }
+    sub := {}
+    names := ["model", "approvals", "sandbox", "max_steps"]
+    for (i := 0; i < len(names); i += 1) {
+        name := names[i]
+        v := cfg[name]
+        if (v != null && value_ok(name, v)) {
+            sub[name] = v
+        }
+    }
+    w := try(fs.write_file(folder + "/config.json", json.stringify(sub)))
+    if (!w[0]) {
+        return false
+    }
+    return true
+}

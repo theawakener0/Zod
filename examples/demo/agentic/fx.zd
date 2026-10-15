@@ -48,14 +48,14 @@ pub tty := fn() {
   return false
 }
 
-// boot_logo() returns 6 splash lines for "ZodPi" in ZodLang style.
+// boot_logo() returns 6 splash lines for "Zodex" in ZodLang style.
 pub boot_logo := fn() {
   return [
     "  ╔══════════════╗",
-    "  ║   Z o d P i  ║",
+    "  ║    Z o d e x ║",
     "  ║  agentic fx  ║",
     "  ╚══════════════╝",
-    "   pi-powered agents",
+    "   zod-powered agents",
     "   ready. steady. go."
   ]
 }

@@ -1,0 +1,298 @@
+// session.zd — rollout sessions (append-only JSONL files).
+//
+// Layout: <root_dir>/sessions/<YYYYMMDD-HHMMSS-xxxxxx>.jsonl
+// Records: {"ts": ms, "kind": kind, ...data}. The first record of a session
+// is kind "meta". All fs/json access is guarded; nothing here prints.
+
+import "config.zd" as config
+import "std/fs" as fs
+import "std/hash" as hash
+import "std/str" as str
+import "std/time" as time
+import "std/rand" as rand
+import "std/array" as arr
+import "std/json" as json
+
+pub dir := fn() {
+    return config.root_dir() + "/sessions"
+}
+
+pad2 := fn(n) {
+    return str.pad_left(string(n), 2, "0")
+}
+
+pad4 := fn(n) {
+    return str.pad_left(string(n), 4, "0")
+}
+
+// UTC timestamp "YYYYMMDD-HHMMSS" from epoch milliseconds
+// (civil-from-days, Howard Hinnant's algorithm).
+stamp_ms := fn(ms) {
+    days := ms / 86400000
+    sod := (ms / 1000) % 86400
+    z := days + 719468
+    era := z / 146097
+    doe := z - era * 146097
+    yoe := (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+    y := yoe + era * 400
+    doy := doe - (365 * yoe + yoe / 4 - yoe / 100)
+    mp := (5 * doy + 2) / 153
+    d := doy - (153 * mp + 2) / 5 + 1
+    m := mp + 3
+    if (mp >= 10) {
+        m = mp - 9
+    }
+    if (m <= 2) {
+        y = y + 1
+    }
+    return pad4(y) + pad2(m) + pad2(d) + "-" + pad2(sod / 3600) + pad2((sod % 3600) / 60) + pad2(sod % 60)
+}
+
+// sess is either a session hash (with "path") or a raw path string.
+session_path := fn(sess) {
+    if (type(sess) == "STRING" && sess != "") {
+        return sess
+    }
+    if (type(sess) == "HASH") {
+        p := sess["path"]
+        if (p != null && type(p) == "STRING" && p != "") {
+            return p
+        }
+    }
+    return null
+}
+
+// mkdir -p the sessions dir and, when the path lives elsewhere, its parent.
+guard_dirs := fn(path) {
+    ignored := try(fs.mkdir(dir()))
+    last := -1
+    total := len(path)
+    for (i := 0; i < total; i += 1) {
+        if (str.slice(path, i, i + 1) == "/") {
+            last = i
+        }
+    }
+    if (last > 0) {
+        ignored = try(fs.mkdir(str.slice(path, 0, last)))
+    }
+}
+
+// Append one JSONL record; creates the sessions dir (and the file's parent).
+// Lazy meta: a session file is only created by its first real record, with
+// the meta record written first. Brand-new sessions without content leave no
+// file behind (so "resume latest" can never pick an empty stub).
+pub append := fn(sess, kind, data) {
+    path := session_path(sess)
+    if (path == null) {
+        return false
+    }
+    guard_dirs(path)
+    if (kind != "meta" && type(sess) == "HASH") {
+        ex := try(fs.exists(path))
+        if (!ex[0] || ex[1] != true) {
+            m := sess["meta"]
+            if (type(m) == "HASH") {
+                meta_rec := {"ts": time.now_ms(), "kind": "meta"}
+                ks := hash.keys(m)
+                for (mi := 0; mi < len(ks); mi += 1) {
+                    mk := ks[mi]
+                    if (!hash.has(meta_rec, mk)) {
+                        meta_rec[mk] = m[mk]
+                    }
+                }
+                mr := try(fs.append_file(path, json.stringify(meta_rec) + "\n"))
+            }
+        }
+    }
+    rec := {"ts": time.now_ms(), "kind": kind}
+    if (type(data) == "HASH") {
+        ks := hash.keys(data)
+        for (i := 0; i < len(ks); i += 1) {
+            k := ks[i]
+            if (!hash.has(rec, k)) {
+                rec[k] = data[k]
+            }
+        }
+    }
+    r := try(fs.append_file(path, json.stringify(rec) + "\n"))
+    if (!r[0]) {
+        return false
+    }
+    return true
+}
+
+pub new_session := fn(cwd, meta) {
+    ms := time.now_ms()
+    id := stamp_ms(ms) + "-" + str.pad_left(string(rand.int(1000000)), 6, "0")
+    path := dir() + "/" + id + ".jsonl"
+    m := {}
+    if (type(meta) == "HASH") {
+        ks := hash.keys(meta)
+        for (i := 0; i < len(ks); i += 1) {
+            k := ks[i]
+            if (k != "ts" && k != "kind") {
+                m[k] = meta[k]
+            }
+        }
+    }
+    if (cwd != null && type(cwd) == "STRING") {
+        m["cwd"] = cwd
+    }
+    m["created"] = ms
+    sess := {"id": id, "path": path, "meta": m}
+    return sess
+}
+
+pub record_message := fn(sess, msg) {
+    return append(sess, "message", {"message": msg})
+}
+
+// Flatten a message's content to a one-line preview (max 80 chars).
+preview_text := fn(msg) {
+    c := msg["content"]
+    text := ""
+    if (type(c) == "STRING") {
+        text = c
+    } else if (type(c) == "ARRAY") {
+        for (i := 0; i < len(c); i += 1) {
+            part := c[i]
+            if (type(part) == "HASH") {
+                t := part["text"]
+                if (t != null && type(t) == "STRING") {
+                    if (text != "") {
+                        text = text + " "
+                    }
+                    text = text + t
+                }
+            }
+        }
+    }
+    text = str.replace(text, "\n", " ")
+    text = str.replace(text, "\r", " ")
+    if (len(text) > 80) {
+        text = str.slice(text, 0, 80)
+    }
+    return text
+}
+
+// Bubble sort by mtime, newest first (arr.sort is ints only).
+sort_desc := fn(rows) {
+    total := len(rows)
+    for (a := 0; a < total; a += 1) {
+        for (b := 0; b < total - 1 - a; b += 1) {
+            x := rows[b]
+            y := rows[b + 1]
+            if (x["mtime"] < y["mtime"]) {
+                rows[b] = y
+                rows[b + 1] = x
+            }
+        }
+    }
+}
+
+// Sessions, newest first, capped at 50.
+pub list := fn() {
+    out := []
+    r := try(fs.ls(dir()))
+    if (!r[0] || type(r[1]) != "ARRAY") {
+        return out
+    }
+    names := r[1]
+    for (i := 0; i < len(names); i += 1) {
+        name := names[i]
+        if (type(name) != "STRING" || !str.ends_with(name, ".jsonl")) {
+            continue
+        }
+        path := dir() + "/" + name
+        mtime := 0
+        sr := try(fs.stat(path))
+        if (sr[0] && type(sr[1]) == "HASH" && type(sr[1]["mtime"]) == "INTEGER") {
+            mtime = sr[1]["mtime"]
+        }
+        model := null
+        preview := ""
+        fr := try(fs.read_file(path))
+        if (fr[0] && type(fr[1]) == "STRING") {
+            lines := str.split(fr[1], "\n")
+            head := len(lines)
+            if (head > 8) {
+                head = 8
+            }
+            for (j := 0; j < head; j += 1) {
+                pr := try(json.parse(lines[j]))
+                if (!pr[0] || type(pr[1]) != "HASH") {
+                    continue
+                }
+                rec := pr[1]
+                if (rec["kind"] == "meta" && model == null) {
+                    mv := rec["model"]
+                    if (mv != null && type(mv) == "STRING") {
+                        model = mv
+                    }
+                }
+                if (rec["kind"] == "message" && preview == "") {
+                    msg := rec["message"]
+                    if (type(msg) == "HASH" && msg["role"] == "user") {
+                        preview = preview_text(msg)
+                    }
+                }
+            }
+        }
+        id := str.slice(name, 0, len(name) - 6)
+        out = arr.push(out, {"id": id, "path": path, "mtime": mtime, "model": model, "preview": preview})
+    }
+    sort_desc(out)
+    if (len(out) > 50) {
+        out = arr.slice(out, 0, 50)
+    }
+    return out
+}
+
+// Read a session file; corrupt lines are skipped, never halts.
+pub load := fn(path) {
+    res := {"ok": false, "messages": [], "meta": {}, "error": null}
+    if (type(path) != "STRING" || path == "") {
+        res["error"] = "no path"
+        return res
+    }
+    r := try(fs.read_file(path))
+    if (!r[0] || type(r[1]) != "STRING") {
+        res["error"] = "could not read " + path
+        return res
+    }
+    msgs := []
+    meta := {}
+    have_meta := false
+    lines := str.split(r[1], "\n")
+    for (i := 0; i < len(lines); i += 1) {
+        line := str.trim(lines[i])
+        if (line == "") {
+            continue
+        }
+        p := try(json.parse(line))
+        if (!p[0] || type(p[1]) != "HASH") {
+            continue
+        }
+        rec := p[1]
+        kind := rec["kind"]
+        if (kind == "meta" && !have_meta) {
+            have_meta = true
+            ks := hash.keys(rec)
+            for (j := 0; j < len(ks); j += 1) {
+                k := ks[j]
+                if (k != "ts" && k != "kind") {
+                    meta[k] = rec[k]
+                }
+            }
+        } else if (kind == "message") {
+            msg := rec["message"]
+            if (msg != null) {
+                msgs = arr.push(msgs, msg)
+            }
+        }
+    }
+    res["ok"] = true
+    res["messages"] = msgs
+    res["meta"] = meta
+    return res
+}

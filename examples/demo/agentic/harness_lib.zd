@@ -1,0 +1,1805 @@
+// harness_lib.zd — Zodex: alt-screen TUI + exec mode + line fallback.
+//
+// Launched by examples/demo/harness.zd (a 4-line runner). Import-safe: no
+// top-level side effects; everything behind pub main().
+//
+// Modes:
+//   zod harness.zd                      full-screen TUI (TTY) / line mode
+//   zod harness.zd -p "task"            exec mode (stream to stdout)
+//   zod harness.zd exec "task"          same
+//   zod harness.zd exec "task" --json   JSONL events on stdout
+//   zod harness.zd --self-test          UI self-test, exit 1 on failure
+//   zod harness.zd --resume [id|latest] resume a rollout session
+//
+// Keys: enter send · ctrl-j newline · esc clear / interrupt · ctrl-c
+// clear-then-quit (during a turn: interrupt) · ctrl-d quit when empty ·
+// ctrl-l clear transcript · ctrl-u clear line · ctrl-w delete word ·
+// ctrl-a/e home/end · up/down history · tab complete command · pgup/pgdn
+// scroll · left/right arrows move the cursor.
+// Approval overlay: y allow · a allow for session · n/esc/enter deny ·
+// v expand args.  Model picker: /model with no argument.
+//
+// All module APIs used here are envelope-based (no error() values cross
+// function boundaries on the VM). Definitions precede their call sites
+// throughout this file (required by the VM bytecode compiler).
+
+import "agent.zd" as agent
+import "client.zd" as client
+import "tools.zd" as tools
+import "coding_tools.zd" as coding_tools
+import "commands.zd" as commands
+import "approvals.zd" as approvals
+import "session.zd" as session
+import "history.zd" as history
+import "config.zd" as config
+import "cli.zd" as cli
+import "render.zd" as render
+import "pi.zd" as pi
+import "fx.zd" as fx
+import "std/fmt" as fmt
+import "std/term" as term
+import "std/str" as str
+import "std/array" as arr
+import "std/json" as json
+import "std/os" as os
+import "std/fs" as fs
+import "std/time" as time
+
+// eprintln writes a line to stderr (std/fmt has no eprintln; eprint takes
+// one argument).
+eprintln := fn(s) {
+    fmt.eprint(string(s) + "\n")
+    return null
+}
+
+// --------------------------------------------------------------------------
+// text helpers
+// --------------------------------------------------------------------------
+
+// chars_of splits a string into single-character strings (UTF-8 safe via
+// str.split(s, "")). Never returns null.
+chars_of := fn(s) {
+    if (s == null || type(s) != "STRING" || s == "") { return [] }
+    parts := str.split(s, "")
+    if (len(parts) == 0) { return [s] }
+    return parts
+}
+
+char_len_of := fn(s) {
+    return len(chars_of(s))
+}
+
+char_slice := fn(s, a, b) {
+    cs := chars_of(s)
+    n := len(cs)
+    if (a < 0) { a = 0 }
+    if (b > n) { b = n }
+    if (a >= b) { return "" }
+    return str.join(arr.slice(cs, a, b), "")
+}
+
+basename_of := fn(p) {
+    if (p == null || type(p) != "STRING" || p == "") { return "" }
+    parts := str.split(p, "/")
+    last := parts[len(parts) - 1]
+    if (last == "" && len(parts) > 1) { last = parts[len(parts) - 2] }
+    return last
+}
+
+sec_since := fn(start_ms) {
+    if (start_ms == null || type(start_ms) != "INTEGER" || start_ms <= 0) { return 0 }
+    d := time.now_ms() - start_ms
+    if (d < 0) { d = 0 }
+    return d / 1000
+}
+
+is_tty := fn() {
+    r := try(term.size())
+    if (!r[0]) { return false }
+    return true
+}
+
+// arg_preview summarizes tool call arguments for one-line display.
+arg_preview := fn(name, args_text) {
+    txt := args_text
+    if (type(txt) != "STRING") { txt = "" }
+    p := try(json.parse(txt))
+    if (p[0] && type(p[1]) == "HASH") {
+        h := p[1]
+        if (name == "shell") {
+            c := h["command"]
+            if (c != null && type(c) == "STRING") { return render.truncate(c, 80, "…") }
+            return render.truncate(txt, 60, "…")
+        }
+        if (name == "read_file" || name == "write_file" || name == "edit") {
+            pt := h["path"]
+            if (pt != null && type(pt) == "STRING") { return render.truncate("path=" + pt, 80, "…") }
+            return render.truncate(txt, 60, "…")
+        }
+        if (name == "glob" || name == "grep") {
+            base := ""
+            pat := h["pattern"]
+            if (pat != null && type(pat) == "STRING") { base = "pattern=" + pat }
+            d := h["dir"]
+            if (d != null && type(d) == "STRING" && d != "") { base = base + " dir=" + d }
+            inc := h["include"]
+            if (inc != null && type(inc) == "STRING" && inc != "") { base = base + " include=" + inc }
+            if (base == "") { base = render.truncate(txt, 60, "…") }
+            return render.truncate(base, 80, "…")
+        }
+        if (name == "apply_patch") {
+            patch := h["patch"]
+            if (patch != null && type(patch) == "STRING") {
+                n := len(str.split(patch, "\n"))
+                return "patch (" + string(n) + " lines)"
+            }
+            return "patch"
+        }
+        if (name == "update_plan") {
+            steps := h["steps"]
+            if (type(steps) == "ARRAY") { return string(len(steps)) + " steps" }
+            return "plan"
+        }
+        return render.truncate(txt, 60, "…")
+    }
+    return render.truncate(txt, 60, "…")
+}
+
+// expand_mentions appends the content of up to 3 "@path" referenced files
+// (8000 chars each) to the message. Unknown refs are left alone.
+expand_mentions := fn(cwd, text) {
+    if (type(text) != "STRING" || text == "") { return text }
+    if (!str.contains(text, "@")) { return text }
+    words := str.split(text, " ")
+    additions := ""
+    count := 0
+    for (i := 0; i < len(words); i += 1) {
+        if (count >= 3) { break }
+        w := words[i]
+        if (type(w) != "STRING" || !str.starts_with(w, "@") || len(w) < 2) { continue }
+        p := str.slice(w, 1, len(w))
+        if (str.starts_with(p, "/") || str.contains(p, "..") || p == "") { continue }
+        full := cwd + "/" + p
+        sr := try(fs.stat(full))
+        if (!sr[0] || type(sr[1]) != "HASH") { continue }
+        st := sr[1]
+        if (st["is_dir"] == true) { continue }
+        fr := try(fs.read_file(full))
+        if (!fr[0] || type(fr[1]) != "STRING") { continue }
+        c := fr[1]
+        if (len(c) > 8000) { c = str.slice(c, 0, 8000) + "\n...[truncated]" }
+        additions = additions + "\n\n# file: " + p + "\n" + c
+        count += 1
+    }
+    if (additions == "") { return text }
+    return text + additions
+}
+
+// --------------------------------------------------------------------------
+// transcript cell pushers
+// --------------------------------------------------------------------------
+
+push_note := fn(ui, text) {
+    ui["log"] = arr.push(ui["log"], {"kind": "note", "text": text})
+    ui["scroll"] = 0
+    ui["dirty"] = true
+    return null
+}
+
+push_error := fn(ui, text) {
+    ui["log"] = arr.push(ui["log"], {"kind": "error", "text": text})
+    ui["scroll"] = 0
+    ui["dirty"] = true
+    return null
+}
+
+push_user := fn(ui, text) {
+    ui["log"] = arr.push(ui["log"], {"kind": "user", "text": text})
+    ui["scroll"] = 0
+    ui["dirty"] = true
+    return null
+}
+
+push_banner := fn(ui, text) {
+    ui["log"] = arr.push(ui["log"], {"kind": "banner", "text": text})
+    ui["dirty"] = true
+    return null
+}
+
+new_assistant_cell := fn(ui) {
+    cell := {"kind": "assistant", "text": ""}
+    ui["log"] = arr.push(ui["log"], cell)
+    ui["scroll"] = 0
+    ui["dirty"] = true
+    return cell
+}
+
+new_tool_cell := fn(ui, name, args) {
+    cell := {"kind": "tool", "name": name, "args": args, "result": null, "status": "running", "expanded": false}
+    ui["log"] = arr.push(ui["log"], cell)
+    ui["scroll"] = 0
+    ui["dirty"] = true
+    return cell
+}
+
+finish_tool_cell := fn(ui, cell, result) {
+    cell["result"] = result
+    st := "ok"
+    if (str.starts_with(result, "Error")) { st = "error" }
+    cell["status"] = st
+    ui["dirty"] = true
+    return null
+}
+
+push_plan_cell := fn(ui, steps) {
+    ui["log"] = arr.push(ui["log"], {"kind": "plan", "steps": steps})
+    ui["scroll"] = 0
+    ui["dirty"] = true
+    return null
+}
+
+// --------------------------------------------------------------------------
+// UI state
+// --------------------------------------------------------------------------
+
+pub new_ui := fn(cwd, model) {
+    return {
+        "cwd": cwd,
+        "model": model,
+        "log": [],
+        "input": "",
+        "cursor": 0,
+        "history": [],
+        "hidx": 0,
+        "draft": "",
+        "scroll": 0,
+        "dirty": true,
+        "quit": false,
+        "running": false,
+        "cancel": {"v": false},
+        "turn_start": 0,
+        "overlay": null,
+        "picker": null,
+        "width": 80,
+        "height": 24,
+        "approvals": "",
+        "sandbox": "",
+        "tokens": "",
+        "session_id": "",
+        "branch": "main",
+        "plan_sig": ""
+    }
+}
+
+// --------------------------------------------------------------------------
+// composer editing primitives (cursor is a CHARACTER index)
+// --------------------------------------------------------------------------
+
+insert_text := fn(ui, t) {
+    if (type(t) != "STRING" || t == "") { return null }
+    cs := chars_of(ui["input"])
+    cur := ui["cursor"]
+    if (type(cur) != "INTEGER" || cur < 0) { cur = 0 }
+    if (cur > len(cs)) { cur = len(cs) }
+    before := str.join(arr.slice(cs, 0, cur), "")
+    after := str.join(arr.slice(cs, cur, len(cs)), "")
+    ui["input"] = before + t + after
+    ui["cursor"] = cur + char_len_of(t)
+    ui["dirty"] = true
+    return null
+}
+
+backspace_text := fn(ui) {
+    cs := chars_of(ui["input"])
+    cur := ui["cursor"]
+    if (type(cur) != "INTEGER" || cur <= 0) { return null }
+    if (cur > len(cs)) { cur = len(cs) }
+    before := str.join(arr.slice(cs, 0, cur - 1), "")
+    after := str.join(arr.slice(cs, cur, len(cs)), "")
+    ui["input"] = before + after
+    ui["cursor"] = cur - 1
+    ui["dirty"] = true
+    return null
+}
+
+delete_fwd := fn(ui) {
+    cs := chars_of(ui["input"])
+    cur := ui["cursor"]
+    if (type(cur) != "INTEGER" || cur < 0) { cur = 0 }
+    if (cur >= len(cs)) { return null }
+    before := str.join(arr.slice(cs, 0, cur), "")
+    after := str.join(arr.slice(cs, cur + 1, len(cs)), "")
+    ui["input"] = before + after
+    ui["dirty"] = true
+    return null
+}
+
+del_word_back := fn(ui) {
+    cs := chars_of(ui["input"])
+    cur := ui["cursor"]
+    if (type(cur) != "INTEGER" || cur <= 0) { return null }
+    if (cur > len(cs)) { cur = len(cs) }
+    i := cur
+    loop {
+        if (i <= 0) { break }
+        c := cs[i - 1]
+        if (c != " " && c != "\t") { break }
+        i -= 1
+    }
+    loop {
+        if (i <= 0) { break }
+        c := cs[i - 1]
+        if (c == " " || c == "\t" || c == "\n") { break }
+        i -= 1
+    }
+    before := str.join(arr.slice(cs, 0, i), "")
+    after := str.join(arr.slice(cs, cur, len(cs)), "")
+    ui["input"] = before + after
+    ui["cursor"] = i
+    ui["dirty"] = true
+    return null
+}
+
+kill_to_end := fn(ui) {
+    cs := chars_of(ui["input"])
+    cur := ui["cursor"]
+    if (type(cur) != "INTEGER" || cur < 0) { cur = 0 }
+    if (cur > len(cs)) { cur = len(cs) }
+    ui["input"] = str.join(arr.slice(cs, 0, cur), "")
+    ui["dirty"] = true
+    return null
+}
+
+move_left := fn(ui) {
+    cur := ui["cursor"]
+    if (type(cur) != "INTEGER" || cur < 0) { cur = 0 }
+    if (cur > 0) { cur -= 1 }
+    ui["cursor"] = cur
+    ui["dirty"] = true
+    return null
+}
+
+move_right := fn(ui) {
+    n := char_len_of(ui["input"])
+    cur := ui["cursor"]
+    if (type(cur) != "INTEGER" || cur < 0) { cur = 0 }
+    if (cur < n) { cur += 1 }
+    ui["cursor"] = cur
+    ui["dirty"] = true
+    return null
+}
+
+scroll_up := fn(ui, n) {
+    s := ui["scroll"]
+    if (type(s) != "INTEGER") { s = 0 }
+    ui["scroll"] = s + n
+    ui["dirty"] = true
+    return null
+}
+
+scroll_down := fn(ui, n) {
+    s := ui["scroll"]
+    if (type(s) != "INTEGER") { s = 0 }
+    s = s - n
+    if (s < 0) { s = 0 }
+    ui["scroll"] = s
+    ui["dirty"] = true
+    return null
+}
+
+hist_back := fn(ui) {
+    h := ui["history"]
+    if (type(h) != "ARRAY" || len(h) == 0) { return null }
+    idx := ui["hidx"]
+    if (type(idx) != "INTEGER" || idx > len(h)) { idx = len(h) }
+    if (idx == len(h)) { ui["draft"] = ui["input"] }
+    if (idx > 0) { idx -= 1 }
+    ui["hidx"] = idx
+    if (idx < len(h)) { ui["input"] = string(h[idx]) }
+    ui["cursor"] = char_len_of(ui["input"])
+    ui["dirty"] = true
+    return null
+}
+
+hist_fwd := fn(ui) {
+    h := ui["history"]
+    if (type(h) != "ARRAY" || len(h) == 0) { return null }
+    idx := ui["hidx"]
+    if (type(idx) != "INTEGER") { idx = len(h) }
+    if (idx < len(h)) {
+        idx += 1
+        ui["hidx"] = idx
+        if (idx == len(h)) { ui["input"] = ui["draft"] } else { ui["input"] = string(h[idx]) }
+        ui["cursor"] = char_len_of(ui["input"])
+        ui["dirty"] = true
+    }
+    return null
+}
+
+// complete_cmd expands "/he" to the first matching "/name" command.
+complete_cmd := fn(ui, ctx) {
+    inp := ui["input"]
+    if (type(inp) != "STRING" || !str.starts_with(inp, "/") || str.contains(inp, " ")) { return null }
+    if (ctx == null) { return null }
+    reg := ctx["reg"]
+    if (reg == null) { return null }
+    cmds := reg["commands"]
+    if (type(cmds) != "ARRAY") { return null }
+    best := ""
+    found := false
+    for (i := 0; i < len(cmds); i += 1) {
+        c := cmds[i]
+        if (type(c) != "HASH" || c["name"] == null) { continue }
+        nm := string(c["name"])
+        if (nm == "!") { continue }
+        full := "/" + nm
+        if (str.starts_with(full, inp)) {
+            if (!found || len(full) < len(best)) {
+                best = full
+                found = true
+            }
+        }
+    }
+    if (found) {
+        ui["input"] = best
+        ui["cursor"] = char_len_of(best)
+        ui["dirty"] = true
+    }
+    return null
+}
+
+// --------------------------------------------------------------------------
+// views
+// --------------------------------------------------------------------------
+
+// composer_view builds the input area rows and cursor position (1-based
+// col). Shows at most 3 logical lines ending at the cursor line.
+composer_view := fn(ui, w) {
+    inp := ui["input"]
+    if (type(inp) != "STRING") { inp = "" }
+    cs := chars_of(inp)
+    cur := ui["cursor"]
+    if (type(cur) != "INTEGER" || cur < 0) { cur = 0 }
+    if (cur > len(cs)) { cur = len(cs) }
+
+    lines := []
+    line := ""
+    cl := 0
+    ccol := 0
+    found := false
+    for (i := 0; i < len(cs); i += 1) {
+        if (!found && i == cur) {
+            cl = len(lines)
+            ccol = char_len_of(line)
+            found = true
+        }
+        c := cs[i]
+        if (c == "\n") {
+            lines = arr.push(lines, line)
+            line = ""
+            continue
+        }
+        line = line + c
+    }
+    if (!found) {
+        cl = len(lines)
+        ccol = char_len_of(line)
+    }
+    lines = arr.push(lines, line)
+
+    start_line := cl - 2
+    if (start_line < 0) { start_line = 0 }
+    end_line := start_line + 3
+    if (end_line > len(lines)) { end_line = len(lines) }
+
+    maxw := w - 2
+    if (maxw < 1) { maxw = 1 }
+
+    out := []
+    cursor_idx := null
+    cursor_col := 1
+    if (start_line > 0) {
+        out = arr.push(out, render.pad("…", w))
+    }
+    first_visible := true
+    for (j := start_line; j < end_line; j += 1) {
+        txt := lines[j]
+        dtext := ""
+        if (j == cl) {
+            win := 0
+            if (ccol >= maxw) { win = ccol - (maxw - 1) }
+            dtext = char_slice(txt, win, win + maxw)
+            cursor_col = 3 + (ccol - win)
+            cursor_idx = len(out)
+        } else {
+            dtext = char_slice(txt, 0, maxw)
+        }
+        prefix := "  "
+        if (first_visible) { prefix = "› " }
+        first_visible = false
+        out = arr.push(out, render.pad(prefix + dtext, w))
+    }
+    if (len(out) == 0) {
+        out = arr.push(out, render.pad("› ", w))
+        cursor_idx = 0
+        cursor_col = 3
+    }
+    return {"lines": out, "idx": cursor_idx, "col": cursor_col}
+}
+
+overlay_view := fn(ov, w, th) {
+    out := []
+    if (type(ov) != "HASH") { return {"lines": out, "idx": null, "col": 1} }
+    nm := "tool"
+    if (ov["name"] != null) { nm = string(ov["name"]) }
+    args := ""
+    if (type(ov["args"]) == "STRING") { args = ov["args"] }
+    if (ov["kind"] == "approval") {
+        out = arr.push(out, th["yellow"] + "! approval required: " + th["bold"] + nm + th["reset"])
+        if (ov["expanded"] == true) {
+            al := str.split(args, "\n")
+            cap := 6
+            for (i := 0; i < cap; i += 1) {
+                if (i >= len(al)) { break }
+                out = arr.push(out, th["dim"] + "  " + render.truncate(al[i], w - 2, "…") + th["reset"])
+            }
+            if (len(al) > cap) {
+                out = arr.push(out, th["dim"] + "  … (+" + string(len(al) - cap) + " lines)" + th["reset"])
+            }
+            out = arr.push(out, th["dim"] + "y allow · a allow session · n deny · v collapse" + th["reset"])
+        } else {
+            out = arr.push(out, th["dim"] + "  " + render.truncate(args, w - 2, "…") + th["reset"])
+            out = arr.push(out, th["dim"] + "y allow · a allow session · n deny · v expand" + th["reset"])
+        }
+        return {"lines": out, "idx": null, "col": 1}
+    }
+    out = arr.push(out, th["dim"] + "(unknown overlay)" + th["reset"])
+    return {"lines": out, "idx": null, "col": 1}
+}
+
+picker_view := fn(pk, w, th) {
+    out := []
+    if (type(pk) != "HASH") { return {"lines": out, "idx": null, "col": 1} }
+    title := "select"
+    if (pk["title"] != null && type(pk["title"]) == "STRING") { title = pk["title"] }
+    out = arr.push(out, th["bold"] + "select " + title + th["reset"] + th["dim"] + "  (↑↓ · enter · esc)" + th["reset"])
+    items := []
+    if (type(pk["items"]) == "ARRAY") { items = pk["items"] }
+    n := len(items)
+    sel := pk["sel"]
+    if (type(sel) != "INTEGER" || sel < 0) { sel = 0 }
+    if (n == 0) { sel = 0 } else if (sel >= n) { sel = n - 1 }
+    max_rows := 8
+    win := 0
+    if (sel >= max_rows) { win = sel - max_rows + 1 }
+    shown_end := win + max_rows
+    if (shown_end > n) { shown_end = n }
+    for (i := win; i < shown_end; i += 1) {
+        mark := "  "
+        if (i == sel) { mark = "› " }
+        line := render.truncate(mark + string(items[i]), w, "…")
+        if (i == sel) { line = th["bold"] + line + th["reset"] } else { line = th["dim"] + line + th["reset"] }
+        out = arr.push(out, line)
+    }
+    if (n == 0) {
+        out = arr.push(out, th["dim"] + "  (no items)" + th["reset"])
+    }
+    return {"lines": out, "idx": null, "col": 1}
+}
+
+compose_status := fn(ui, w, th) {
+    left := ""
+    if (ui["running"] == true) {
+        el := sec_since(ui["turn_start"])
+        left = th["yellow"] + fx.working_row(el) + th["reset"]
+    } else {
+        left = th["dim"] + "enter send · /help · ! shell · esc clear" + th["reset"]
+    }
+    rparts := []
+    if (ui["tokens"] != null && string(ui["tokens"]) != "") { rparts = arr.push(rparts, string(ui["tokens"])) }
+    if (ui["session_id"] != null && string(ui["session_id"]) != "") { rparts = arr.push(rparts, string(ui["session_id"])) }
+    right := ""
+    if (len(rparts) > 0) {
+        right = th["dim"] + str.join(rparts, " · ") + th["reset"]
+    }
+    lw := render.display_width(left)
+    rw := render.display_width(right)
+    if (lw + rw + 2 > w) {
+        right = ""
+        rw = 0
+    }
+    if (lw > w) {
+        left = render.truncate(left, w, "…")
+        lw = render.display_width(left)
+    }
+    gap := w - lw - rw
+    if (gap < 0) { gap = 0 }
+    return left + str.repeat(" ", gap) + right
+}
+
+// draw_ui renders the whole frame from ui state. Pure: returns
+// {"lines": [...exactly height lines...], "cursor_r", "cursor_c"}
+// (cursor fields are null when hidden). Mutates only ui["scroll"] (clamp).
+pub draw_ui := fn(ui) {
+    th := render.theme()
+    w := ui["width"]
+    h := ui["height"]
+    if (type(w) != "INTEGER" || w < 20) { w = 20 }
+    if (w > 400) { w = 400 }
+    if (type(h) != "INTEGER" || h < 6) { h = 6 }
+    if (h > 200) { h = 200 }
+
+    ov := ui["overlay"]
+    pk := ui["picker"]
+    comp := {"lines": [], "idx": null, "col": 1}
+    if (ov != null) {
+        comp = overlay_view(ov, w, th)
+    } else if (pk != null) {
+        comp = picker_view(pk, w, th)
+    } else {
+        comp = composer_view(ui, w)
+    }
+    ch := len(comp["lines"])
+    if (ch > h - 3) { ch = h - 3 }
+    if (ch < 1) { ch = 1 }
+    if (len(comp["lines"]) > ch) {
+        comp["lines"] = arr.slice(comp["lines"], 0, ch)
+    }
+    sort_cursor := comp["idx"]
+    if (type(sort_cursor) == "INTEGER" && sort_cursor >= ch) { sort_cursor = null }
+    avail := h - 2 - ch
+
+    // transcript
+    flat := []
+    log := ui["log"]
+    if (type(log) == "ARRAY") {
+        for (i := 0; i < len(log); i += 1) {
+            cl := render.cell_lines(log[i], w, th)
+            for (j := 0; j < len(cl); j += 1) {
+                flat = arr.push(flat, cl[j])
+            }
+            flat = arr.push(flat, "")
+        }
+    }
+    total := len(flat)
+    scroll := ui["scroll"]
+    if (type(scroll) != "INTEGER" || scroll < 0) { scroll = 0 }
+    maxs := total - avail
+    if (maxs < 0) { maxs = 0 }
+    if (scroll > maxs) { scroll = maxs }
+    ui["scroll"] = scroll
+    end := total - scroll
+    if (end > total) { end = total }
+    start := end - avail
+    if (start < 0) { start = 0 }
+    win := arr.slice(flat, start, end)
+
+    header := th["bold"] + "Zodex" + th["reset"] + th["dim"]
+    if (ui["model"] != null && string(ui["model"]) != "") { header = header + " · " + string(ui["model"]) }
+    if (ui["sandbox"] != null && string(ui["sandbox"]) != "") { header = header + " · " + string(ui["sandbox"]) }
+    if (ui["approvals"] != null && string(ui["approvals"]) != "") { header = header + " · " + string(ui["approvals"]) }
+    b := ui["branch"]
+    if (b != null && string(b) != "" && string(b) != "main") { header = header + " · " + string(b) }
+    header = header + th["reset"] + "  " + th["dim"] + basename_of(ui["cwd"]) + th["reset"]
+
+    rows := [header]
+    top_pad := avail - len(win)
+    for (i := 0; i < top_pad; i += 1) {
+        rows = arr.push(rows, "")
+    }
+    for (i := 0; i < len(win); i += 1) {
+        rows = arr.push(rows, win[i])
+    }
+    for (i := 0; i < ch; i += 1) {
+        rows = arr.push(rows, comp["lines"][i])
+    }
+    rows = arr.push(rows, compose_status(ui, w, th))
+
+    out := []
+    for (i := 0; i < len(rows); i += 1) {
+        out = arr.push(out, render.pad(rows[i], w))
+    }
+
+    cr := null
+    cc := null
+    idx := comp["idx"]
+    if (type(idx) == "INTEGER" && idx < ch) {
+        cr = (h - ch) + idx
+        col := comp["col"]
+        if (type(col) != "INTEGER") { col = 1 }
+        cc = col
+    }
+    return {"lines": out, "cursor_r": cr, "cursor_c": cc}
+}
+
+// --------------------------------------------------------------------------
+// status sync + terminal rendering
+// --------------------------------------------------------------------------
+
+sync_ui := fn(app) {
+    ui := app["ui"]
+    if (ui == null) { return null }
+    cli := app["cli"]
+    if (cli != null && cli["model"] != null) { ui["model"] = cli["model"] }
+    pol := app["policy"]
+    if (type(pol) == "HASH" && pol["mode"] != null) { ui["approvals"] = string(pol["mode"]) }
+    gd := app["guard"]
+    if (type(gd) == "HASH" && gd["sandbox"] != null) { ui["sandbox"] = string(gd["sandbox"]) }
+    if (cli != null) {
+        st := cli["stats"]
+        if (type(st) == "HASH") {
+            ui["tokens"] = string(st["prompt"]) + "→" + string(st["completion"]) + " tok · " + string(st["calls"]) + " calls"
+        }
+    }
+    sess := app["sess"]
+    if (type(sess) == "HASH" && sess["id"] != null) { ui["session_id"] = string(sess["id"]) }
+    plan := app["plan"]
+    if (type(plan) == "HASH" && type(plan["steps"]) == "ARRAY") {
+        steps := plan["steps"]
+        if (len(steps) > 0) {
+            sig := ""
+            sj := try(json.stringify(steps))
+            if (sj[0]) { sig = sj[1] }
+            if (sig != ui["plan_sig"]) {
+                ui["plan_sig"] = sig
+                push_plan_cell(ui, steps)
+            }
+        }
+    }
+    return null
+}
+
+// render_app draws the frame to the terminal. force != true throttles:
+// idle frames are skipped; active frames at most one per 80ms.
+render_app := fn(app, force) {
+    ui := app["ui"]
+    if (ui == null) { return null }
+    sr := try(term.size())
+    if (sr[0] && type(sr[1]) == "ARRAY") {
+        sz := sr[1]
+        if (len(sz) >= 2) {
+            w := sz[0]
+            h := sz[1]
+            if (w != ui["width"] || h != ui["height"]) {
+                ui["width"] = w
+                ui["height"] = h
+                ui["dirty"] = true
+            }
+        }
+    }
+    now := time.now_ms()
+    if (force != true) {
+        idle := ui["dirty"] != true && ui["running"] != true
+        if (idle) { return null }
+        if (now - app["last_draw"] < 80) { return null }
+    }
+    app["last_draw"] = now
+    ui["dirty"] = false
+    sync_ui(app)
+    fr := draw_ui(ui)
+    rows := fr["lines"]
+    out := term.sync_begin() + term.hide_cursor()
+    for (i := 0; i < len(rows); i += 1) {
+        out = out + term.move(1, i + 1) + rows[i]
+    }
+    cr := fr["cursor_r"]
+    cc := fr["cursor_c"]
+    if (cr != null && cc != null) {
+        out = out + term.move(cc, cr) + term.show_cursor()
+    }
+    out = out + term.sync_end()
+    fmt.print(out)
+    return null
+}
+
+// record_turn_message appends assistant/tool messages to the rollout
+// session (user messages are recorded by the callers). Never halts.
+record_turn_message := fn(app, role, content, extra) {
+    sess := app["sess"]
+    if (sess == null) { return null }
+    if (role != "assistant" && role != "tool") { return null }
+    msg := {"role": role, "content": content}
+    if (role == "assistant") {
+        if (extra != null && type(extra) == "HASH" && extra["tool_calls"] != null) {
+            msg["tool_calls"] = extra["tool_calls"]
+        }
+    } else {
+        if (extra != null && type(extra) == "HASH") {
+            if (extra["name"] != null) { msg["name"] = extra["name"] }
+            if (extra["tool_call_id"] != null) { msg["tool_call_id"] = extra["tool_call_id"] }
+        }
+    }
+    ignored := session.record_message(sess, msg)
+    return null
+}
+
+// --------------------------------------------------------------------------
+// interactive turn
+// --------------------------------------------------------------------------
+
+// run_turn_ui runs one turn with full TUI hooks: streaming cell, tool
+// cells, notes, live cancel (esc) and redraws via app["pump_keys"] /
+// app["render"] (hash indirection avoids static forward references).
+run_turn_ui := fn(app, text) {
+    ui := app["ui"]
+    ag := app["ag"]
+    if (ag == null) {
+        push_error(ui, "Error: no agent")
+        return null
+    }
+    ui["running"] = true
+    ui["cancel"]["v"] = false
+    ui["turn_start"] = time.now_ms()
+    ui["dirty"] = true
+    acell := {"c": null}
+    tcell := {"c": null}
+    hooks := {
+        "on_step": fn(n) {
+            acell["c"] = null
+            return null
+        },
+        "on_text": fn(delta) {
+            if (acell["c"] == null) { acell["c"] = new_assistant_cell(ui) }
+            c := acell["c"]
+            c["text"] = string(c["text"]) + delta
+            ui["scroll"] = 0
+            ui["dirty"] = true
+            return null
+        },
+        "on_message": fn(role, content, extra) {
+            return record_turn_message(app, role, content, extra)
+        },
+        "on_tool_start": fn(name, args) {
+            preview := arg_preview(name, args)
+            cell := new_tool_cell(ui, name, preview)
+            tcell["c"] = cell
+            return null
+        },
+        "on_tool_result": fn(name, result) {
+            c := tcell["c"]
+            if (c != null) { ignored := finish_tool_cell(ui, c, result) }
+            tcell["c"] = null
+            return null
+        },
+        "on_note": fn(note) {
+            push_note(ui, note)
+            return null
+        },
+        "on_usage": fn(usage) {
+            ui["dirty"] = true
+            return null
+        },
+        "should_cancel": fn() {
+            pk := app["pump_keys"]
+            if (pk != null) { i1 := try(pk(app)) }
+            rd := app["render"]
+            if (rd != null) { i2 := try(rd(app, false)) }
+            return ui["cancel"]["v"] == true
+        }
+    }
+    res := ag["run_turn"](text, hooks)
+    ui["running"] = false
+    ui["overlay"] = null
+    ui["dirty"] = true
+    if (res == null || type(res) != "HASH") {
+        push_error(ui, "Error: no result from agent")
+        return null
+    }
+    if (res["interrupted"] == true) {
+        push_note(ui, fx.interrupt_marker())
+    } else if (res["ok"] != true) {
+        emsg := "turn failed"
+        if (res["error"] != null) { emsg = string(res["error"]) }
+        if (!str.starts_with(emsg, "Error:")) { emsg = "Error: " + emsg }
+        push_error(ui, emsg)
+    } else if (string(res["text"]) == "" && acell["c"] == null) {
+        push_note(ui, "(no output)")
+    }
+    return null
+}
+
+// --------------------------------------------------------------------------
+// submit + modal key handling
+// --------------------------------------------------------------------------
+
+submit_ui := fn(ui, ctx) {
+    raw := ui["input"]
+    if (type(raw) != "STRING") { raw = "" }
+    trimmed := str.trim(raw)
+    ui["input"] = ""
+    ui["cursor"] = 0
+    ui["draft"] = ""
+    ui["dirty"] = true
+    if (trimmed == "") {
+        ui["hidx"] = len(ui["history"])
+        return null
+    }
+    ui["history"] = history.add(ui["history"], trimmed)
+    ui["hidx"] = len(ui["history"])
+    if (ctx == null) {
+        push_note(ui, "submitted: " + trimmed)
+        return null
+    }
+    app := ctx["app"]
+    if (app == null) {
+        push_note(ui, "submitted: " + trimmed)
+        return null
+    }
+    ignored := history.append(trimmed)
+    if (str.starts_with(trimmed, "/") || str.starts_with(trimmed, "!")) {
+        d := commands.dispatch(ctx["reg"], ctx, trimmed)
+        if (d[0] == true && d[1] != null && string(d[1]) != "") {
+            out := string(d[1])
+            if (str.starts_with(out, "Error:")) {
+                push_error(ui, out)
+            } else {
+                ui["log"] = arr.push(ui["log"], {"kind": "assistant", "text": out})
+                ui["scroll"] = 0
+                ui["dirty"] = true
+            }
+        }
+        return null
+    }
+    push_user(ui, trimmed)
+    if (app["sess"] != null) {
+        ignored2 := session.record_message(app["sess"], {"role": "user", "content": trimmed})
+    }
+    expanded := expand_mentions(app["cwd"], trimmed)
+    run_turn_ui(app, expanded)
+    return null
+}
+
+open_model_picker := fn(app) {
+    cl := app["cli"]
+    if (cl == null) { return "Error: no client" }
+    ml := cl["models"](null)
+    if (ml == null || ml["ok"] != true) {
+        emsg := "models unavailable"
+        if (ml != null && ml["error"] != null) { emsg = string(ml["error"]) }
+        return "Error: " + emsg
+    }
+    models := ml["models"]
+    items := []
+    if (type(models) == "ARRAY") {
+        for (i := 0; i < len(models); i += 1) {
+            m := models[i]
+            if (type(m) == "HASH" && m["id"] != null) { items = arr.push(items, string(m["id"])) }
+        }
+    }
+    if (len(items) == 0) { return "Error: no models returned" }
+    sel := 0
+    cur := string(cl["model"])
+    for (i := 0; i < len(items); i += 1) {
+        if (items[i] == cur) { sel = i }
+    }
+    ui := app["ui"]
+    ui["picker"] = {"kind": "model", "title": "model", "items": items, "sel": sel}
+    ui["dirty"] = true
+    ctx := app["ctx"]
+    if (ctx != null) { ctx["models_cache"] = models }
+    return "model picker: ↑↓ move · enter apply · esc cancel"
+}
+
+handle_picker_key := fn(ui, ctx, key) {
+    pk := ui["picker"]
+    if (pk == null) { return null }
+    items := pk["items"]
+    n := 0
+    if (type(items) == "ARRAY") { n = len(items) }
+    if (key == "\x1b[A") {
+        sel := pk["sel"]
+        if (type(sel) != "INTEGER") { sel = 0 }
+        if (sel > 0) { sel -= 1 }
+        pk["sel"] = sel
+        ui["dirty"] = true
+        return null
+    }
+    if (key == "\x1b[B") {
+        sel := pk["sel"]
+        if (type(sel) != "INTEGER") { sel = 0 }
+        if (sel + 1 < n) { sel += 1 }
+        pk["sel"] = sel
+        ui["dirty"] = true
+        return null
+    }
+    if (key == "\x1b" || key == "\x03") {
+        ui["picker"] = null
+        ui["dirty"] = true
+        push_note(ui, "picker cancelled")
+        return null
+    }
+    if (key == "\r" || key == "\n") {
+        if (n == 0) {
+            ui["picker"] = null
+            ui["dirty"] = true
+            return null
+        }
+        sel := pk["sel"]
+        if (type(sel) != "INTEGER" || sel < 0) { sel = 0 }
+        if (sel >= n) { sel = n - 1 }
+        item := string(items[sel])
+        kind := pk["kind"]
+        ui["picker"] = null
+        ui["dirty"] = true
+        if (kind == "model") {
+            app := null
+            if (ctx != null) { app = ctx["app"] }
+            cl := null
+            if (app != null) { cl = app["cli"] }
+            if (cl != null) {
+                r := try(cl["set_model"](item))
+                if (!r[0]) {
+                    push_error(ui, "Error: " + string(r[1]))
+                    return null
+                }
+                ui["model"] = item
+                push_note(ui, "model -> " + item)
+            } else {
+                push_note(ui, "picked: " + item)
+            }
+        } else {
+            push_note(ui, "picked: " + item)
+        }
+        return null
+    }
+    return null
+}
+
+// handle_key applies one raw key sequence from __read_key to ui state.
+// ctx may be null (headless tests): enter then records a note instead of
+// submitting to a runner.
+pub handle_key := fn(ui, ctx, key) {
+    if (key == null || type(key) != "STRING" || key == "") { return null }
+    if (ui["quit"] == true) { return null }
+    if (ui["picker"] != null) {
+        handle_picker_key(ui, ctx, key)
+        return null
+    }
+    if (ui["running"] == true) {
+        if (key == "\x1b" || key == "\x03") {
+            ui["cancel"]["v"] = true
+            ui["dirty"] = true
+            return null
+        }
+        if (key == "\x1b[5~") { scroll_up(ui, 6); return null }
+        if (key == "\x1b[6~") { scroll_down(ui, 6); return null }
+        return null
+    }
+    if (str.starts_with(key, "\x1b[200~")) {
+        body := str.slice(key, 6, len(key))
+        endi := str.index_of(body, "\x1b[201~")
+        if (endi >= 0) { body = str.slice(body, 0, endi) }
+        body = str.replace(body, "\r", "")
+        insert_text(ui, body)
+        return null
+    }
+    if (key == "\x1b[D") { move_left(ui); return null }
+    if (key == "\x1b[C") { move_right(ui); return null }
+    if (key == "\x1b[A") { hist_back(ui); return null }
+    if (key == "\x1b[B") { hist_fwd(ui); return null }
+    if (key == "\x1b[H" || key == "\x1b[1~" || key == "\x1bOH") {
+        ui["cursor"] = 0
+        ui["dirty"] = true
+        return null
+    }
+    if (key == "\x1b[F" || key == "\x1b[4~" || key == "\x1bOF") {
+        ui["cursor"] = char_len_of(ui["input"])
+        ui["dirty"] = true
+        return null
+    }
+    if (key == "\x1b[3~") { delete_fwd(ui); return null }
+    if (key == "\x1b[5~") { scroll_up(ui, 6); return null }
+    if (key == "\x1b[6~") { scroll_down(ui, 6); return null }
+    if (key == "\r") { submit_ui(ui, ctx); return null }
+    if (key == "\n") { insert_text(ui, "\n"); return null }
+    if (key == "\x7f" || key == "\x08") { backspace_text(ui); return null }
+    if (key == "\t") { complete_cmd(ui, ctx); return null }
+    if (key == "\x15") { ui["input"] = ""; ui["cursor"] = 0; ui["dirty"] = true; return null }
+    if (key == "\x17") { del_word_back(ui); return null }
+    if (key == "\x0b") { kill_to_end(ui); return null }
+    if (key == "\x01") { ui["cursor"] = 0; ui["dirty"] = true; return null }
+    if (key == "\x05") { ui["cursor"] = char_len_of(ui["input"]); ui["dirty"] = true; return null }
+    if (key == "\x02") { move_left(ui); return null }
+    if (key == "\x06") { move_right(ui); return null }
+    if (key == "\x10") { hist_back(ui); return null }
+    if (key == "\x0e") { hist_fwd(ui); return null }
+    if (key == "\x0c") { ui["log"] = []; ui["dirty"] = true; return null }
+    if (key == "\x1b") {
+        if (ui["input"] != "") {
+            ui["input"] = ""
+            ui["cursor"] = 0
+        } else {
+            ui["scroll"] = 0
+        }
+        ui["dirty"] = true
+        return null
+    }
+    if (key == "\x03") {
+        if (ui["input"] != "") {
+            ui["input"] = ""
+            ui["cursor"] = 0
+            ui["dirty"] = true
+            return null
+        }
+        ui["quit"] = true
+        ui["dirty"] = true
+        return null
+    }
+    if (key == "\x04") {
+        if (ui["input"] == "") {
+            ui["quit"] = true
+            ui["dirty"] = true
+            return null
+        }
+        delete_fwd(ui)
+        return null
+    }
+    if (str.starts_with(key, "\x1b")) { return null }
+    insert_text(ui, key)
+    return null
+}
+
+// pump_keys drains all pending input, feeding handle_key. Bounded so a
+// stuck producer cannot hang a turn.
+pump_keys := fn(app) {
+    ui := app["ui"]
+    if (ui == null) { return null }
+    ctx := app["ctx"]
+    guard := 0
+    loop {
+        hr := try(term.has_input())
+        if (!hr[0] || hr[1] != true) { break }
+        guard += 1
+        if (guard > 500) { break }
+        kr := try(term.read_key())
+        if (!kr[0]) { break }
+        k := kr[1]
+        if (k == null) { break }
+        handle_key(ui, ctx, string(k))
+        if (ui["quit"] == true) { break }
+    }
+    return null
+}
+
+// --------------------------------------------------------------------------
+// approval overlay
+// --------------------------------------------------------------------------
+
+// ask_approval shows the approval overlay and blocks until the user
+// decides. Returns "allow" | "allow-session" | "deny".
+ask_approval := fn(app, req) {
+    ui := app["ui"]
+    name := "tool"
+    args := ""
+    if (type(req) == "HASH") {
+        if (req["name"] != null) { name = string(req["name"]) }
+        if (req["args_text"] != null) { args = string(req["args_text"]) }
+    }
+    ui["overlay"] = {"kind": "approval", "name": name, "args": args, "expanded": false}
+    ui["dirty"] = true
+    decision := "deny"
+    loop {
+        render_app(app, true)
+        wr := try(term.wait_key(80))
+        if (!wr[0]) { break }
+        k := wr[1]
+        if (k == null) { continue }
+        key := string(k)
+        if (key == "y" || key == "Y") { decision = "allow"; break }
+        if (key == "a" || key == "A") { decision = "allow-session"; break }
+        if (key == "n" || key == "N" || key == "\x1b" || key == "\r" || key == "\n") { decision = "deny"; break }
+        if (key == "\x03") {
+            decision = "deny"
+            ui["cancel"]["v"] = true
+            break
+        }
+        if (key == "v" || key == "V") {
+            ov := ui["overlay"]
+            if (ov != null) { ov["expanded"] = ov["expanded"] != true }
+            ui["dirty"] = true
+            continue
+        }
+    }
+    ui["overlay"] = null
+    ui["dirty"] = true
+    render_app(app, true)
+    return decision
+}
+
+// --------------------------------------------------------------------------
+// resume
+// --------------------------------------------------------------------------
+
+// do_resume(app, arg) loads a session ("latest", id prefix, or path)
+// into the agent conversation and switches the rollout target.
+do_resume := fn(app, arg) {
+    rows := session.list()
+    target := null
+    a := arg
+    if (a == null || a == "" || a == "latest") {
+        for (i := 0; i < len(rows); i += 1) {
+            r := rows[i]
+            if (string(r["preview"]) != "") { target = r; break }
+        }
+        if (target == null && len(rows) > 0) { target = rows[0] }
+    } else {
+        for (i := 0; i < len(rows); i += 1) {
+            r := rows[i]
+            if (string(r["id"]) == a) { target = r; break }
+        }
+        if (target == null) {
+            for (i := 0; i < len(rows); i += 1) {
+                r := rows[i]
+                if (str.starts_with(string(r["id"]), a)) { target = r; break }
+            }
+        }
+        if (target == null) {
+            ex := try(fs.exists(a))
+            if (ex[0] && ex[1] == true) {
+                target = {"id": basename_of(a), "path": a, "meta": {}, "model": null, "preview": ""}
+            }
+        }
+    }
+    if (target == null) { return "Error: session not found: " + string(a) }
+    loaded := session.load(target["path"])
+    if (loaded["ok"] != true) { return "Error: " + string(loaded["error"]) }
+    msgs := loaded["messages"]
+    if (type(msgs) != "ARRAY") { return "Error: session has no messages" }
+    ag := app["ag"]
+    if (ag != null) {
+        cv := ag["conversation"]
+        if (cv != null) { cv["messages"] = msgs }
+    }
+    sess := {"id": target["id"], "path": target["path"], "meta": loaded["meta"]}
+    app["sess"] = sess
+    ctx := app["ctx"]
+    if (ctx != null) { ctx["session"] = sess }
+    ui := app["ui"]
+    if (ui != null) {
+        ui["log"] = []
+        ui["session_id"] = string(target["id"])
+        ui["plan_sig"] = ""
+        ui["dirty"] = true
+    }
+    return "resumed " + string(target["id"]) + " (" + string(len(msgs)) + " messages)"
+}
+
+// --------------------------------------------------------------------------
+// plain (non-TUI) hooks: exec + line mode
+// --------------------------------------------------------------------------
+
+plain_hooks := fn(app, opts) {
+    json_mode := false
+    echo := false
+    if (type(opts) == "HASH") {
+        if (opts["json"] == true) { json_mode = true }
+        if (opts["echo"] == true) { echo = true }
+    }
+    hooks := {
+        "on_text": fn(delta) {
+            if (json_mode) {
+                fmt.println(json.stringify({"type": "text", "delta": delta}))
+            } else if (echo) {
+                fmt.print(delta)
+            }
+            return null
+        },
+        "on_tool_start": fn(name, args) {
+            prev := arg_preview(name, args)
+            if (json_mode) {
+                fmt.println(json.stringify({"type": "tool.start", "name": name, "args": prev}))
+            } else {
+                fmt.eprint("• " + name + " " + prev + "\n")
+            }
+            return null
+        },
+        "on_tool_result": fn(name, result) {
+            if (json_mode) {
+                short := string(result)
+                if (len(short) > 4000) { short = str.slice(short, 0, 4000) + "...[truncated]" }
+                fmt.println(json.stringify({"type": "tool.result", "name": name, "result": short}))
+            }
+            return null
+        },
+        "on_note": fn(text) {
+            if (json_mode) {
+                fmt.println(json.stringify({"type": "note", "text": text}))
+            } else {
+                fmt.eprint("• " + text + "\n")
+            }
+            return null
+        },
+        "on_message": fn(role, content, extra) {
+            return record_turn_message(app, role, content, extra)
+        },
+        "should_cancel": fn() {
+            return false
+        }
+    }
+    return hooks
+}
+
+plain_turn := fn(app, text, opts) {
+    ag := app["ag"]
+    if (ag == null) {
+        eprintln("Error: no agent")
+        return null
+    }
+    hooks := plain_hooks(app, opts)
+    return ag["run_turn"](text, hooks)
+}
+
+// run_line is the interactive fallback without a TTY: prompt/read on
+// stdin, stream deltas to stdout, commands on slash/bang.
+run_line := fn(app) {
+    ui := app["ui"]
+    ctx := app["ctx"]
+    fmt.println(cli.version_string() + " — line mode (no TTY; blank line or EOF exits)")
+    loop {
+        rr := try(term.input("› "))
+        if (!rr[0]) { break }
+        line := rr[1]
+        if (line == null) { break }
+        t := str.trim(string(line))
+        if (t == "") { break }
+        if (str.starts_with(t, "/") || str.starts_with(t, "!")) {
+            d := commands.dispatch(ctx["reg"], ctx, t)
+            if (d[0] == true && d[1] != null && string(d[1]) != "") {
+                fmt.println(string(d[1]))
+            }
+            continue
+        }
+        push_user(ui, t)
+        if (app["sess"] != null) {
+            irm := session.record_message(app["sess"], {"role": "user", "content": t})
+        }
+        expanded := expand_mentions(app["cwd"], t)
+        res := plain_turn(app, expanded, {"echo": true})
+        if (res != null && type(res) == "HASH") {
+            if (res["ok"] != true) {
+                msg := "turn failed"
+                if (res["error"] != null) { msg = string(res["error"]) }
+                eprintln("Error: " + msg)
+            } else {
+                fmt.println("")
+            }
+            if (res["interrupted"] == true) {
+                eprintln(fx.interrupt_marker())
+            }
+        }
+    }
+    return 0
+}
+
+// run_exec runs one prompt; returns the process exit code (0 ok / 1 fail).
+run_exec := fn(app, prompt, json_mode) {
+    p := ""
+    if (prompt != null && type(prompt) == "STRING") { p = str.trim(prompt) }
+    if (p == "") {
+        eprintln("Error: empty prompt")
+        return 1
+    }
+    if (app["sess"] != null) {
+        irm := session.record_message(app["sess"], {"role": "user", "content": p})
+    }
+    expanded := expand_mentions(app["cwd"], p)
+    opts := {"json": json_mode == true, "echo": json_mode != true}
+    res := plain_turn(app, expanded, opts)
+    ok := false
+    if (res != null && type(res) == "HASH" && res["ok"] == true) { ok = true }
+    if (json_mode == true) {
+        ev := {"type": "turn.completed", "ok": ok, "interrupted": false, "steps": 0, "error": null, "text": ""}
+        if (res != null && type(res) == "HASH") {
+            ev["interrupted"] = res["interrupted"]
+            ev["steps"] = res["steps"]
+            ev["error"] = res["error"]
+            ev["text"] = res["text"]
+        }
+        fmt.println(json.stringify(ev))
+    } else {
+        fmt.println("")
+        if (!ok) {
+            msg := "turn failed"
+            if (res != null && type(res) == "HASH" && res["error"] != null) { msg = string(res["error"]) }
+            eprintln("Error: " + msg)
+        }
+    }
+    if (ok) { return 0 }
+    return 1
+}
+
+// --------------------------------------------------------------------------
+// TUI main loop
+// --------------------------------------------------------------------------
+
+run_tui := fn(app) {
+    ui := app["ui"]
+    term.enable_raw()
+    fmt.print("\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l")
+    sr := try(term.size())
+    if (sr[0] && type(sr[1]) == "ARRAY") {
+        sz := sr[1]
+        if (len(sz) >= 2) {
+            ui["width"] = sz[0]
+            ui["height"] = sz[1]
+        }
+    }
+    banner := render.banner_lines(ui["width"])
+    push_banner(ui, str.join(banner, "\n"))
+    push_note(ui, "tip: /help lists commands · /model opens the picker")
+    bn := app["boot_note"]
+    if (bn != null && type(bn) == "STRING" && bn != "") {
+        if (str.starts_with(bn, "Error:")) { push_error(ui, bn) } else { push_note(ui, bn) }
+    }
+    render_app(app, true)
+    loop {
+        pump_keys(app)
+        if (ui["quit"] == true) { break }
+        render_app(app, false)
+        sl := try(time.sleep(30))
+        if (!sl[0]) { break }
+    }
+    ts := try(pi.session_save(app["tree"], app["cwd"]))
+    fmt.print(term.sync_begin() + term.show_cursor() + term.sync_end())
+    fmt.print("\x1b[?1049l")
+    term.disable_raw()
+    return 0
+}
+
+// --------------------------------------------------------------------------
+// app construction
+// --------------------------------------------------------------------------
+
+// build_app(cli_opts, mode) assembles config, client, sandbox guard, tools
+// (wrapped with approvals), agent, session and the command ctx. Returns
+// null (after printing an error) when no API key or client is available.
+pub build_app := fn(cli_opts, mode) {
+    cwd := null
+    if (cli_opts != null) { cwd = cli_opts["cwd"] }
+    if (cwd == null || type(cwd) != "STRING" || cwd == "") { cwd = os.cwd() }
+    cfg := config.load(cwd)
+    if (cli_opts != null) {
+        if (cli_opts["model"] != null) { cfg["model"] = cli_opts["model"] }
+        if (cli_opts["approvals"] != null) { cfg["approvals"] = cli_opts["approvals"] }
+        if (cli_opts["sandbox"] != null) { cfg["sandbox"] = cli_opts["sandbox"] }
+    }
+    key := config.resolve_key(cfg)
+    if (key == null) {
+        eprintln("Error: no API key. Set ZODEX_API_KEY / HACKCLUB_AI_API_KEY / OPENAI_API_KEY, or api_key in ~/.zodex/config.json.")
+        return null
+    }
+    cr := try(client.new_client(key, cfg["model"], {"base_url": cfg["base_url"], "stream_usage": cfg["stream_usage"], "timeout_ms": cfg["timeout_ms"]}))
+    if (!cr[0]) {
+        eprintln("Error: " + string(cr[1]))
+        return null
+    }
+    cl := cr[1]
+    if (is_error(cl)) {
+        eprintln("Error: " + string(cl))
+        return null
+    }
+    guard := coding_tools.make_guard(cfg["sandbox"])
+    plan_state := coding_tools.make_plan_state()
+    ui := new_ui(cwd, cfg["model"])
+    tty := is_tty()
+    app := {
+        "mode": mode, "cwd": cwd, "cfg": cfg, "cli": cl, "ui": ui,
+        "guard": guard, "plan": plan_state, "sess": null, "tree": null,
+        "reg": null, "ctx": null, "policy": null, "ag": null,
+        "tty": tty, "last_draw": 0, "pump_keys": null, "render": null
+    }
+    ask := fn(req) {
+        if (app["tty"] == true) { return ask_approval(app, req) }
+        return "deny"
+    }
+    base_tools := coding_tools.make_coding_tools(cwd, {"allow_exec": cfg["allow_exec"], "max_bytes": cfg["max_bytes"], "guard": guard, "plan_state": plan_state})
+    appr_mode := cfg["approvals"]
+    if (mode == "exec") {
+        if (cli_opts == null || cli_opts["approvals"] == null) {
+            if (appr_mode == "untrusted" || appr_mode == "on-request") { appr_mode = "on-failure" }
+        }
+    }
+    policy := approvals.new_policy(appr_mode, cfg["approvals_rules"])
+    wrapped := approvals.wrap(base_tools, policy, ask)
+    by_name := tools.index_by_name(wrapped)
+    ctx_files := pi.load_context(cwd)
+    base_sys := "You are Zodex, a coding agent. You help with software engineering tasks in the user's working directory.\n\nGuidance:\n- Read files before editing them; prefer apply_patch for edits.\n- Use shell for builds and tests; keep replies concise and in markdown.\n- When a task has multiple steps, keep the plan updated with update_plan.\n- Current sandbox mode: " + string(cfg["sandbox"]) + "."
+    sys := pi.build_system(base_sys, ctx_files["system_extra"])
+    if (string(ctx_files["system_extra"]) != "") {
+        push_note(ui, "context: " + str.join(ctx_files["sources"], ", "))
+    }
+    ag := agent.new_agent(cl, wrapped, sys, cfg["max_steps"], {"auto_compact": cfg["auto_compact"], "compact_threshold": cfg["compact_threshold"], "context_window": cfg["context_window"], "retries": cfg["retries"]})
+    sess := session.new_session(cwd, {"model": cl["model"]})
+    tree := pi.session_load(cwd)
+    hist := history.load()
+    ui["history"] = hist
+    ui["hidx"] = len(hist)
+    reg := commands.make_registry(commands.all_commands())
+    app["cli"] = cl
+    app["ag"] = ag
+    app["policy"] = policy
+    app["base_tools"] = base_tools
+    app["tools"] = wrapped
+    app["by_name"] = by_name
+    app["sess"] = sess
+    app["tree"] = tree
+    app["reg"] = reg
+    app["pump_keys"] = pump_keys
+    app["render"] = render_app
+    ctx := {
+        "ui": ui, "ag": ag, "cli": cl, "tools": wrapped, "by_name": by_name,
+        "models_cache": [], "policy": policy, "guard": guard, "plan": plan_state,
+        "session": sess, "tree": tree, "cwd": cwd, "reg": reg, "app": app,
+        "base_tools": base_tools, "base_by": tools.index_by_name(base_tools),
+        "on_new": null, "on_resume": null, "on_picker": null
+    }
+    on_new := fn() {
+        ns := session.new_session(cwd, {"model": cl["model"]})
+        app["sess"] = ns
+        ctx["session"] = ns
+        ag2 := app["ag"]
+        if (ag2 != null) {
+            cv := ag2["conversation"]
+            if (cv != null) { cv["messages"] = [{"role": "system", "content": sys}] }
+        }
+        ps := app["plan"]
+        if (ps != null) { ps["steps"] = [] }
+        ui["plan_sig"] = ""
+        ui["log"] = []
+        ui["scroll"] = 0
+        ui["session_id"] = string(ns["id"])
+        ui["dirty"] = true
+        return "new session " + string(ns["id"])
+    }
+    on_resume := fn(arg) {
+        return do_resume(app, arg)
+    }
+    on_picker := fn(kind) {
+        if (app["tty"] != true) { return "Error: picker needs a TTY (use /model <id>)" }
+        if (kind == "model") { return open_model_picker(app) }
+        return "Error: unknown picker: " + string(kind)
+    }
+    ctx["on_new"] = on_new
+    ctx["on_resume"] = on_resume
+    ctx["on_picker"] = on_picker
+    app["ctx"] = ctx
+    return app
+}
+
+// --------------------------------------------------------------------------
+// self test
+// --------------------------------------------------------------------------
+
+// self_test_ui exercises the pure UI core (typing, keys, picker, draw,
+// mentions, previews). Returns {"pass", "fail", "lines"}.
+pub self_test_ui := fn() {
+    res := {"pass": 0, "fail": 0, "lines": []}
+    check := fn(name, cond) {
+        if (cond == true) {
+            res["pass"] = res["pass"] + 1
+            res["lines"] = arr.push(res["lines"], "PASS " + name)
+        } else {
+            res["fail"] = res["fail"] + 1
+            res["lines"] = arr.push(res["lines"], "FAIL " + name)
+        }
+        return null
+    }
+
+    // --- typing / editing ---
+    ui := new_ui("/tmp", "m1")
+    check("ui_defaults", ui["width"] == 80 && ui["height"] == 24 && ui["quit"] == false)
+    handle_key(ui, null, "h")
+    handle_key(ui, null, "i")
+    check("type_hi", ui["input"] == "hi" && ui["cursor"] == 2)
+    handle_key(ui, null, "\x1b[D")
+    handle_key(ui, null, "X")
+    check("insert_mid", ui["input"] == "hXi" && ui["cursor"] == 2)
+    handle_key(ui, null, "\x7f")
+    check("backspace", ui["input"] == "hi")
+    handle_key(ui, null, "\x01")
+    handle_key(ui, null, "\x7f")
+    check("home_noop_bs", ui["input"] == "hi" && ui["cursor"] == 0)
+    handle_key(ui, null, "\x05")
+    handle_key(ui, null, "\x15")
+    check("ctrl_u", ui["input"] == "" && ui["cursor"] == 0)
+    handle_key(ui, null, "é")
+    check("unicode_insert", ui["input"] == "é" && ui["cursor"] == 1)
+    handle_key(ui, null, "\x7f")
+    check("unicode_bs", ui["input"] == "" && ui["cursor"] == 0)
+    handle_key(ui, null, "a")
+    handle_key(ui, null, "b")
+    handle_key(ui, null, " ")
+    handle_key(ui, null, "c")
+    handle_key(ui, null, "d")
+    handle_key(ui, null, "\x17")
+    check("ctrl_w", ui["input"] == "ab ")
+    handle_key(ui, null, "\x0b")
+    check("ctrl_k", ui["input"] == "ab ")
+    handle_key(ui, null, "\x15")
+
+    // --- history ---
+    ui["history"] = ["one", "two"]
+    ui["hidx"] = 2
+    handle_key(ui, null, "\x1b[A")
+    check("hist_back", ui["input"] == "two" && ui["hidx"] == 1)
+    handle_key(ui, null, "\x1b[A")
+    check("hist_back2", ui["input"] == "one" && ui["hidx"] == 0)
+    handle_key(ui, null, "\x1b[B")
+    check("hist_fwd", ui["input"] == "two" && ui["hidx"] == 1)
+    handle_key(ui, null, "\x1b[B")
+    check("hist_fwd2", ui["input"] == "" && ui["hidx"] == 2)
+
+    // --- submit (headless) ---
+    handle_key(ui, null, "hello")
+    handle_key(ui, null, "\r")
+    lg := ui["log"]
+    last := lg[len(lg) - 1]
+    check("submit_note", last["kind"] == "note" && last["text"] == "submitted: hello")
+    check("submit_reset", ui["input"] == "" && ui["cursor"] == 0)
+    hcur := ui["history"]
+    check("submit_history", hcur[len(hcur) - 1] == "hello")
+
+    // --- tab completion ---
+    ui2 := new_ui("/tmp", "m")
+    ctx2 := {"reg": {"commands": [{"name": "help"}, {"name": "hello"}, {"name": "!"}]}}
+    handle_key(ui2, ctx2, "/")
+    handle_key(ui2, ctx2, "h")
+    handle_key(ui2, ctx2, "e")
+    handle_key(ui2, ctx2, "l")
+    handle_key(ui2, ctx2, "p")
+    handle_key(ui2, ctx2, "\t")
+    check("tab_help", ui2["input"] == "/help")
+    ui2["input"] = "/hell"
+    ui2["cursor"] = 5
+    handle_key(ui2, ctx2, "\t")
+    check("tab_hello", ui2["input"] == "/hello")
+
+    // --- picker ---
+    ui3 := new_ui("/tmp", "m")
+    ui3["picker"] = {"kind": "x", "title": "t", "items": ["a", "b", "c"], "sel": 0}
+    pk3 := ui3["picker"]
+    handle_key(ui3, null, "\x1b[B")
+    check("picker_down", pk3["sel"] == 1)
+    handle_key(ui3, null, "\x1b[A")
+    handle_key(ui3, null, "\x1b[A")
+    check("picker_clamp", pk3["sel"] == 0)
+    handle_key(ui3, null, "\r")
+    lg3 := ui3["log"]
+    last3 := lg3[len(lg3) - 1]
+    check("picker_commit", ui3["picker"] == null && last3["text"] == "picked: a")
+
+    // --- draw ---
+    ui4 := new_ui("/tmp/work", "qwen/x")
+    ui4["width"] = 80
+    ui4["height"] = 24
+    push_user(ui4, "hello there")
+    ac := new_assistant_cell(ui4)
+    ac["text"] = "# Title\n\nSome **bold** text and `code`."
+    tc := new_tool_cell(ui4, "shell", "echo hi")
+    finish_tool_cell(ui4, tc, "exit 0\nhi")
+    push_note(ui4, "a note")
+    push_error(ui4, "Error: boom")
+    push_plan_cell(ui4, [{"step": "one", "status": "completed"}, {"step": "two", "status": "pending"}])
+    push_banner(ui4, str.join(render.banner_lines(80), "\n"))
+    fr := draw_ui(ui4)
+    lines := fr["lines"]
+    check("draw_rows_80x24", len(lines) == 24)
+    okw := true
+    for (i := 0; i < len(lines); i += 1) {
+        if (render.display_width(lines[i]) != 80) { okw = false }
+    }
+    check("draw_widths_80", okw)
+    check("draw_cursor", fr["cursor_r"] == 23 && fr["cursor_c"] == 3)
+
+    ui4["width"] = 40
+    ui4["height"] = 10
+    fr2 := draw_ui(ui4)
+    check("draw_rows_40x10", len(fr2["lines"]) == 10)
+    okw2 := true
+    for (i := 0; i < len(fr2["lines"]); i += 1) {
+        if (render.display_width(fr2["lines"][i]) != 40) { okw2 = false }
+    }
+    check("draw_widths_40", okw2)
+
+    ui4["overlay"] = {"kind": "approval", "name": "shell", "args": "{\"command\":\"ls\"}", "expanded": false}
+    fr3 := draw_ui(ui4)
+    check("overlay_no_cursor", fr3["cursor_r"] == null && len(fr3["lines"]) == 10)
+    ui4["overlay"] = {"kind": "approval", "name": "shell", "args": "{\"command\":\"ls\"}", "expanded": true}
+    fr3b := draw_ui(ui4)
+    check("overlay_expanded", len(fr3b["lines"]) == 10)
+    ui4["overlay"] = null
+
+    uio := new_ui("/tmp", "")
+    uio["width"] = 60
+    uio["height"] = 12
+    uio["picker"] = {"kind": "model", "title": "model", "items": ["m1", "m2"], "sel": 0}
+    fr4 := draw_ui(uio)
+    check("picker_draw", len(fr4["lines"]) == 12 && fr4["cursor_r"] == null)
+    uio["scroll"] = 100000
+    fr5 := draw_ui(uio)
+    check("scroll_clamp", len(fr5["lines"]) == 12 && uio["scroll"] == 0)
+
+    // --- multiline composer ---
+    uim := new_ui("/tmp", "m")
+    uim["width"] = 60
+    uim["height"] = 12
+    uim["input"] = "line1\nline2\nline3\nline4"
+    uim["cursor"] = char_len_of(uim["input"])
+    frm := draw_ui(uim)
+    check("multiline_draw", len(frm["lines"]) == 12 && frm["cursor_r"] == 11 && frm["cursor_c"] == 8)
+    check("multiline_width", render.display_width(frm["lines"][8]) == 60)
+
+    // --- mentions ---
+    wp := try(fs.write_file("/tmp/opencode/_zodex_st_m.txt", "mention-body-123"))
+    if (wp[0]) {
+        ex := expand_mentions("/tmp/opencode", "see @_zodex_st_m.txt")
+        check("mention_expand", str.contains(ex, "mention-body-123"))
+        check("mention_plain", expand_mentions("/tmp/opencode", "no refs here") == "no refs here")
+        check("mention_missing", expand_mentions("/tmp/opencode", "see @does_not_exist_zzz.txt") == "see @does_not_exist_zzz.txt")
+        rmd := try(fs.rm("/tmp/opencode/_zodex_st_m.txt"))
+    } else {
+        res["lines"] = arr.push(res["lines"], "SKIP mention tests (temp write failed)")
+    }
+
+    // --- arg preview ---
+    check("preview_shell", arg_preview("shell", "{\"command\":\"echo hi\"}") == "echo hi")
+    check("preview_read", arg_preview("read_file", "{\"path\":\"a/b.txt\"}") == "path=a/b.txt")
+    check("preview_plan", arg_preview("update_plan", "{\"steps\":[1,2,3]}") == "3 steps")
+    check("preview_json_fail", arg_preview("shell", "not json") == "not json")
+
+    return res
+}
+
+// --------------------------------------------------------------------------
+// entry point
+// --------------------------------------------------------------------------
+
+pub main := fn() {
+    argv := os.args()
+    opts := cli.parse(argv)
+    if (opts["help"] == true) {
+        fmt.println(cli.usage())
+        return 0
+    }
+    if (opts["version"] == true) {
+        fmt.println(cli.version_string())
+        return 0
+    }
+    if (opts["mode"] == "self_test") {
+        r := self_test_ui()
+        ls := r["lines"]
+        for (i := 0; i < len(ls); i += 1) {
+            fmt.println(ls[i])
+        }
+        fmt.println("SUMMARY pass=" + string(r["pass"]) + " fail=" + string(r["fail"]))
+        if (r["fail"] > 0) { return 1 }
+        return 0
+    }
+    unk := opts["unknown"]
+    if (type(unk) == "ARRAY" && len(unk) > 0) {
+        eprintln("warning: unknown flags ignored: " + str.join(unk, " "))
+    }
+    mode := "interactive"
+    if (opts["mode"] == "exec") { mode = "exec" }
+    app := build_app(opts, mode)
+    if (app == null) { return 1 }
+    if (opts["resume"] != null) {
+        msg := do_resume(app, opts["resume"])
+        if (app["tty"] == true) {
+            app["boot_note"] = msg
+        } else {
+            if (str.starts_with(msg, "Error:")) { eprintln(msg) } else { eprintln("• " + msg) }
+        }
+    }
+    if (mode == "exec") {
+        return run_exec(app, opts["prompt"], opts["json"] == true)
+    }
+    if (app["tty"] == true) {
+        return run_tui(app)
+    }
+    return run_line(app)
+}
+
+
+
+

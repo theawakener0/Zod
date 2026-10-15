@@ -1,0 +1,163 @@
+// cli.zd — start-up argument parsing for Zodex.
+//
+// Pure: no imports beyond std/str; never touches fs/env/network, never prints.
+// parse() receives raw os.args() (script path and --eng=... flags included).
+
+import "std/str" as str
+import "std/array" as arr
+
+pub version_string := fn() {
+    return "zodex 0.1.0"
+}
+
+pub usage := fn() {
+    lines := [
+        "Zodex - a Codex-style coding agent.",
+        "",
+        "Usage:",
+        "  zodex [options]                 start the interactive session",
+        "  zodex [options] exec <prompt>   run one prompt and print the result",
+        "  zodex [options] -p <prompt>     same as exec",
+        "  zodex --self-test               run built-in checks and exit",
+        "",
+        "Options:",
+        "  -h, --help            show this help",
+        "  -v, --version         print the version",
+        "  --json                machine-readable output",
+        "  --resume [id]         resume a session (default: latest)",
+        "  --model <id>          model to use",
+        "  --approvals <mode>    untrusted | on-failure | on-request | never",
+        "  --sandbox <mode>      read-only | workspace-write | danger-full-access",
+        "  --cwd <dir>           working directory for the session",
+        "",
+        "Session commands: /help /model /approvals /sandbox /new /resume /compact /quit",
+        "",
+        "Environment:",
+        "  ZODEX_HOME, ZODEX_MODEL, ZODEX_BASE_URL, ZODEX_API_KEY, ZODEX_APPROVALS,",
+        "  ZODEX_SANDBOX, ZODEX_MAX_STEPS, ZODEX_MAX_BYTES, ZODEX_ALLOW_EXEC,",
+        "  ZODEX_AUTO_COMPACT, ZODEX_STREAM_USAGE"
+    ]
+    return str.join(lines, "\n")
+}
+
+flag_like := fn(tok) {
+    return str.starts_with(tok, "-")
+}
+
+pub parse := fn(argv) {
+    out := {
+        "mode": "interactive",
+        "prompt": "",
+        "json": false,
+        "resume": null,
+        "model": null,
+        "approvals": null,
+        "sandbox": null,
+        "cwd": null,
+        "help": false,
+        "version": false,
+        "unknown": []
+    }
+    if (type(argv) != "ARRAY") {
+        return out
+    }
+    kept := []
+    for (i := 0; i < len(argv); i += 1) {
+        t := argv[i]
+        if (type(t) != "STRING") {
+            continue
+        }
+        if (str.starts_with(t, "--eng=")) {
+            continue
+        }
+        kept = arr.push(kept, t)
+    }
+    rest := []
+    dropped := false
+    for (i := 0; i < len(kept); i += 1) {
+        t := kept[i]
+        if (!dropped && str.ends_with(t, ".zd")) {
+            dropped = true
+            continue
+        }
+        rest = arr.push(rest, t)
+    }
+    positionals := []
+    prompt_set := false
+    skip_next := false
+    for (i := 0; i < len(rest); i += 1) {
+        t := rest[i]
+        if (skip_next) {
+            skip_next = false
+            continue
+        }
+        if (t == "--help" || t == "-h") {
+            out["help"] = true
+            continue
+        }
+        if (t == "--version" || t == "-v") {
+            out["version"] = true
+            continue
+        }
+        if (t == "--self-test") {
+            if (out["mode"] == "interactive") {
+                out["mode"] = "self_test"
+            }
+            continue
+        }
+        if (t == "--json") {
+            out["json"] = true
+            continue
+        }
+        if (t == "--resume") {
+            rv := "latest"
+            if (i + 1 < len(rest) && !flag_like(rest[i + 1])) {
+                rv = rest[i + 1]
+                skip_next = true
+            }
+            out["resume"] = rv
+            continue
+        }
+        if (t == "--model" || t == "--approvals" || t == "--sandbox" || t == "--cwd") {
+            v := null
+            if (i + 1 < len(rest) && !flag_like(rest[i + 1])) {
+                v = rest[i + 1]
+                skip_next = true
+            }
+            if (t == "--model") {
+                out["model"] = v
+            } else if (t == "--approvals") {
+                out["approvals"] = v
+            } else if (t == "--sandbox") {
+                out["sandbox"] = v
+            } else {
+                out["cwd"] = v
+            }
+            continue
+        }
+        if (t == "-p" || t == "--prompt") {
+            tail := []
+            for (j := i + 1; j < len(rest); j += 1) {
+                tail = arr.push(tail, rest[j])
+            }
+            out["mode"] = "exec"
+            out["prompt"] = str.join(tail, " ")
+            prompt_set = true
+            break
+        }
+        if (flag_like(t)) {
+            out["unknown"] = arr.push(out["unknown"], t)
+            continue
+        }
+        positionals = arr.push(positionals, t)
+    }
+    if (!prompt_set && out["mode"] == "interactive" && len(positionals) > 0 && positionals[0] == "exec") {
+        tail := []
+        for (j := 1; j < len(positionals); j += 1) {
+            tail = arr.push(tail, positionals[j])
+        }
+        out["mode"] = "exec"
+        out["prompt"] = str.join(tail, " ")
+    }
+    return out
+}

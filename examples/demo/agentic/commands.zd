@@ -1,10 +1,12 @@
-// commands.zd — Pi-style slash-command system for the agentic harness.
+// commands.zd — slash-command system for Zodex.
 //
-// Pure Zod: only tools + std imports (no network imports; all network
-// goes through the cli hash in ctx).
+// Pure Zod: tools + pi + approvals + session + std (no network imports; all
+// network goes through the cli hash in ctx).
 //
-// ctx shape (built by harness):
-//   {"ui":ui,"ag":ag,"cli":cli,"tools":tool_list,"by_name":index,"models_cache":[]}
+// ctx shape (built by harness; commands must tolerate missing keys):
+//   {"ui":ui,"ag":ag,"cli":cli,"tools":tool_list,"by_name":index,
+//    "models_cache":[],"policy":policy,"guard":guard,"session":sess,
+//    "tree":tree,"on_new":fn,"on_resume":fn}
 // Each command run := fn(ctx, args) -> output STRING.
 // Runs return "Error: ..." strings on failure, never error().
 // Command names are stored WITHOUT the "/" prefix ("help", "model", ...);
@@ -12,6 +14,8 @@
 
 import "tools.zd" as tools
 import "pi.zd" as pi
+import "approvals.zd" as approvals
+import "session.zd" as session
 import "std/str" as str
 import "std/array" as arr
 import "std/json" as json
@@ -39,7 +43,6 @@ pub dispatch := fn(reg, ctx, line) {
             if (c["name"] == "!") {
                 r := try(c["run"](ctx, rest))
                 if (!r[0]) { return [true, "Error: " + string(r[1])] }
-                if (is_error(r[1])) { return [true, "Error: " + string(r[1])] }
                 return [true, string(r[1])]
             }
         }
@@ -64,16 +67,18 @@ pub dispatch := fn(reg, ctx, line) {
         if (hit) {
             s := try(d["run"](ctx, tail))
             if (!s[0]) { return [true, "Error: " + string(s[1])] }
-            if (is_error(s[1])) { return [true, "Error: " + string(s[1])] }
             return [true, string(s[1])]
         }
     }
     return [true, "unknown command " + line + " (try /help)"]
 }
 
-// Extract assistant text from a chat-completion response hash.
+// Extract assistant text from a chat-completion envelope response.
 // Returns "" when the shape is unexpected.
-chat_text := fn(resp) {
+chat_text := fn(env) {
+    if (type(env) != "HASH") { return "" }
+    if (env["ok"] != true) { return "" }
+    resp := env["resp"]
     if (type(resp) != "HASH") { return "" }
     ch := resp["choices"]
     if (type(ch) != "ARRAY" || len(ch) == 0) { return "" }
@@ -85,6 +90,12 @@ chat_text := fn(resp) {
     return string(mm["content"])
 }
 
+chat_error := fn(env) {
+    if (type(env) != "HASH") { return "unexpected client response" }
+    if (env["error"] == null) { return "request failed" }
+    return string(env["error"])
+}
+
 // Format a per-token USD price string as "$X/1k". Raw on parse failure.
 price1k := fn(raw) {
     if (raw == null) { return "?" }
@@ -94,17 +105,24 @@ price1k := fn(raw) {
     return "$" + string(p[1] * 1000) + "/1k"
 }
 
+call_shell := fn(ctx, command) {
+    by := ctx["base_by"]
+    if (by == null) { by = ctx["by_name"] }
+    if (by == null) { return "Error: no tools" }
+    return tools.call_tool(by, "shell", json.stringify({"command": command}))
+}
+
 models_run := fn(ctx, args) {
     cache := ctx["models_cache"]
     if (cache == null || len(cache) == 0) {
         cli := ctx["cli"]
         ml := cli["models"]
         if (ml == null) { return "Error: cli has no models fn" }
-        r := try(ml(null))
-        if (!r[0]) { return "Error: " + string(r[1]) }
-        if (is_error(r[1])) { return "Error: " + string(r[1]) }
-        if (type(r[1]) != "ARRAY") { return "Error: unexpected models shape" }
-        ctx["models_cache"] = r[1]
+        r := ml(null)
+        if (r == null || r["ok"] != true) {
+            return "Error: " + chat_error(r)
+        }
+        ctx["models_cache"] = r["models"]
     }
     models := ctx["models_cache"]
     total := len(models)
@@ -135,14 +153,23 @@ models_run := fn(ctx, args) {
 
 model_run := fn(ctx, args) {
     want := str.trim(args)
-    if (want == "") { return "usage: /model <id>" }
+    if (want == "") {
+        pf := ctx["on_picker"]
+        if (pf != null) {
+            r := try(pf("model"))
+            if (!r[0]) { return "Error: " + string(r[1]) }
+            return string(r[1])
+        }
+        return "usage: /model <id>"
+    }
     cli := ctx["cli"]
     sm := cli["set_model"]
     if (sm == null) { return "Error: cli does not support set_model" }
     r := try(sm(want))
     if (!r[0]) { return "Error: " + string(r[1]) }
-    if (is_error(r[1])) { return "Error: " + string(r[1]) }
-    return "model → " + want
+    ui := ctx["ui"]
+    if (ui != null) { ui["model"] = want }
+    return "model -> " + want
 }
 
 stats_run := fn(ctx, args) {
@@ -183,9 +210,54 @@ stats_run := fn(ctx, args) {
     return "model: " + mid + "\ntokens: " + string(p) + " prompt / " + string(c) + " completion in " + string(n) + " calls\n" + cost_line + " " + last
 }
 
+status_run := fn(ctx, args) {
+    cli := ctx["cli"]
+    lines := []
+    mid := ""
+    if (cli != null && cli["model"] != null) { mid = string(cli["model"]) }
+    lines = arr.push(lines, "model: " + mid)
+    pol := ctx["policy"]
+    if (pol != null) {
+        lines = arr.push(lines, string(approvals.describe(pol)))
+    }
+    guard := ctx["guard"]
+    if (guard != null && guard["sandbox"] != null) {
+        lines = arr.push(lines, "sandbox: " + string(guard["sandbox"]))
+    }
+    ui := ctx["ui"]
+    if (ui != null && ui["cwd"] != null) {
+        lines = arr.push(lines, "cwd: " + string(ui["cwd"]))
+    }
+    sess := ctx["session"]
+    if (sess != null && sess["id"] != null) {
+        lines = arr.push(lines, "session: " + string(sess["id"]))
+    }
+    br := call_shell(ctx, "git rev-parse --abbrev-ref HEAD 2>/dev/null")
+    if (!str.starts_with(br, "Error") && !str.contains(br, "fatal")) {
+        first := str.split(str.trim(br), "\n")
+        if (len(first) > 1) {
+            line1 := first[1]
+            if (line1 != null && str.trim(line1) != "") {
+                lines = arr.push(lines, "branch: " + str.trim(line1))
+            }
+        }
+    }
+    pl := ctx["plan"]
+    if (pl != null && type(pl["steps"]) == "ARRAY") {
+        done := 0
+        steps := pl["steps"]
+        for (i := 0; i < len(steps); i += 1) {
+            it := steps[i]
+            if (type(it) == "HASH" && it["status"] == "completed") { done += 1 }
+        }
+        lines = arr.push(lines, "plan: " + string(done) + "/" + string(len(steps)) + " steps completed")
+    }
+    return str.join(lines, "\n")
+}
+
 clear_run := fn(ctx, args) {
     ui := ctx["ui"]
-    ui["log"] = []
+    if (ui != null) { ui["log"] = [] }
     return "cleared"
 }
 
@@ -193,30 +265,37 @@ compact_run := fn(ctx, args) {
     ag := ctx["ag"]
     conv := ag["conversation"]
     if (conv == null) { return "Error: no conversation" }
-    m := try(conv["to_api"](conv))
-    if (!m[0]) { return "Error: " + string(m[1]) }
-    if (is_error(m[1])) { return "Error: " + string(m[1]) }
-    list := m[1]
+    list := conv["to_api"](conv)
     if (type(list) != "ARRAY") { return "Error: unexpected conversation shape" }
     before := len(list)
     if (before <= 6) { return "nothing to compact" }
     head := list[0]
-    tail := arr.slice(list, before - 4, before)
-    digest := json.stringify({"head": head, "tail": tail})
-    if (len(digest) > 4000) { digest = str.slice(digest, 0, 4000) }
+    // keep the last 4 messages, stepping back over leading tool replies so
+    // tool_call/assistant pairs stay intact
+    start := before - 4
+    for (start > 1) {
+        m := list[start]
+        if (type(m) != "HASH" || m["role"] != "tool") { break }
+        start -= 1
+    }
+    tail := arr.slice(list, start, before)
+    middle := arr.slice(list, 1, start)
+    digest := json.stringify(middle)
+    if (len(digest) > 16000) { digest = str.slice(digest, 0, 16000) + "...[truncated]" }
     cli := ctx["cli"]
     prompt := [
-        {"role": "system", "content": "Summarize the conversation briefly, keeping key facts, decisions, and open tasks."},
+        {"role": "system", "content": "You summarize coding conversations. Keep file paths, decisions, applied patches and open tasks. Be terse."},
         {"role": "user", "content": "Summarize this conversation for context compaction:\n" + digest}
     ]
-    r := try(cli["chat"](prompt, {}))
-    if (!r[0]) { return "Error: " + string(r[1]) }
-    if (is_error(r[1])) { return "Error: " + string(r[1]) }
-    txt := chat_text(r[1])
-    if (txt == "") { return "Error: empty summary response" }
+    env := cli["chat"](prompt, {"temperature": 0.3})
+    txt := chat_text(env)
+    if (txt == "") { return "Error: " + chat_error(env) }
     updated := [head, {"role": "user", "content": "[compacted summary] " + txt}]
+    for (i := 0; i < len(tail); i += 1) {
+        updated = arr.push(updated, tail[i])
+    }
     conv["messages"] = updated
-    return "compacted " + string(before) + " → 2 (saved ~" + string(before - 2) + " msgs)"
+    return "compacted " + string(before) + " -> " + string(len(updated)) + " messages"
 }
 
 btw_run := fn(ctx, args) {
@@ -226,26 +305,22 @@ btw_run := fn(ctx, args) {
     ag := ctx["ag"]
     conv := ag["conversation"]
     if (conv == null) { return "Error: no conversation" }
-    m := try(conv["to_api"](conv))
-    if (!m[0]) { return "Error: " + string(m[1]) }
-    if (is_error(m[1])) { return "Error: " + string(m[1]) }
-    list := m[1]
+    list := conv["to_api"](conv)
     if (type(list) != "ARRAY") { return "Error: unexpected conversation shape" }
     start := 0
     if (len(list) > 10) { start = len(list) - 10 }
     base := arr.slice(list, start, len(list))
     withq := arr.push(base, {"role": "user", "content": q})
     cli := ctx["cli"]
-    r := try(cli["chat"](withq, {}))
-    if (!r[0]) { return "Error: " + string(r[1]) }
-    if (is_error(r[1])) { return "Error: " + string(r[1]) }
-    txt := chat_text(r[1])
-    if (txt == "") { return "Error: empty response" }
+    env := cli["chat"](withq, {})
+    txt := chat_text(env)
+    if (txt == "") { return "Error: " + chat_error(env) }
     return "btw: " + txt
 }
 
 init_run := fn(ctx, args) {
-    by := ctx["by_name"]
+    by := ctx["base_by"]
+    if (by == null) { by = ctx["by_name"] }
     if (by == null) { return "Error: no tools" }
     ui := ctx["ui"]
     cwd := ""
@@ -258,27 +333,23 @@ init_run := fn(ctx, args) {
         if (len(items) > 30) { items = arr.slice(items, 0, 30) }
         files_text = str.join(items, "\n")
     }
-    content := "# ZODPI\ncwd=" + cwd + "\nfiles:\n" + files_text + "\n"
-    w := tools.call_tool(by, "write_file", json.stringify({"path": "ZODPI.md", "content": content}))
+    content := "# AGENTS.md\n\n<!-- Project notes for coding agents (written by /init). -->\n\n## Project\ncwd: " + cwd + "\n\n## Files\n" + files_text + "\n\n## Conventions\n- Describe build/test commands here.\n- Describe code style and review expectations here.\n"
+    w := tools.call_tool(by, "write_file", json.stringify({"path": "AGENTS.md", "content": content}))
     if (str.starts_with(w, "Error")) { return w }
-    return "wrote ZODPI.md"
+    return "wrote AGENTS.md"
 }
 
 bang_run := fn(ctx, cmdrest) {
     rest := ""
     if (cmdrest != null) { rest = str.trim(cmdrest) }
     if (rest == "") { return "usage: !<command>" }
-    by := ctx["by_name"]
-    if (by == null) { return "Error: no tools" }
-    return tools.call_tool(by, "bash", json.stringify({"command": rest}))
+    return call_shell(ctx, rest)
 }
 
 // tree_run implements "/tree" over the ctx tree (built by the harness via
 // pi.session_load) plus the agent conversation: "" lists branches;
 // "checkout <b>" restores a branch into the conversation and switches;
 // "branch <b>" snapshots the conversation to a new branch and switches.
-// The ui branch label follows tree current. Pi fns never error(); bad
-// input returns usage/"Error: ..." strings instead.
 tree_run := fn(ctx, args) {
     tree := ctx["tree"]
     if (tree == null) { return "Error: no tree in ctx" }
@@ -319,8 +390,137 @@ tree_run := fn(ctx, args) {
     return "usage: /tree [checkout <branch> | branch <name>]"
 }
 
+approval_modes := fn() {
+    return ["untrusted", "on-failure", "on-request", "never"]
+}
+
+approvals_run := fn(ctx, args) {
+    pol := ctx["policy"]
+    if (pol == null) { return "Error: no policy in ctx" }
+    want := str.trim(args)
+    modes := approval_modes()
+    if (want == "") {
+        cur := pol["mode"]
+        idx := 0
+        for (i := 0; i < len(modes); i += 1) {
+            if (modes[i] == cur) { idx = i }
+        }
+        want = modes[(idx + 1) % 4]
+    }
+    ok := false
+    for (i := 0; i < len(modes); i += 1) {
+        if (modes[i] == want) { ok = true }
+    }
+    if (!ok) { return "Error: unknown mode " + want + " (untrusted|on-failure|on-request|never)" }
+    pol["mode"] = want
+    return string(approvals.describe(pol))
+}
+
+sandbox_modes := fn() {
+    return ["read-only", "workspace-write", "danger-full-access"]
+}
+
+sandbox_run := fn(ctx, args) {
+    guard := ctx["guard"]
+    if (guard == null) { return "Error: no guard in ctx" }
+    want := str.trim(args)
+    modes := sandbox_modes()
+    if (want == "") {
+        cur := guard["sandbox"]
+        idx := 1
+        for (i := 0; i < len(modes); i += 1) {
+            if (modes[i] == cur) { idx = i }
+        }
+        want = modes[(idx + 1) % 3]
+    }
+    ok := false
+    for (i := 0; i < len(modes); i += 1) {
+        if (modes[i] == want) { ok = true }
+    }
+    if (!ok) { return "Error: unknown sandbox " + want + " (read-only|workspace-write|danger-full-access)" }
+    guard["sandbox"] = want
+    return "sandbox -> " + want
+}
+
+diff_run := fn(ctx, args) {
+    out := call_shell(ctx, "git --no-pager diff")
+    if (str.starts_with(out, "Error")) { return out }
+    if (str.starts_with(out, "exit 128") || str.starts_with(out, "exit 129")) {
+        return "not a git repository"
+    }
+    body := out
+    if (str.starts_with(out, "exit 0\n")) { body = str.slice(out, 7, len(out)) }
+    if (str.trim(body) == "") {
+        return "no changes"
+    }
+    if (len(body) > 30000) {
+        n := len(body) - 30000
+        body = str.slice(body, 0, 30000) + "\n...[truncated " + string(n) + " chars]"
+    }
+    return body
+}
+
+review_run := fn(ctx, args) {
+    raw := call_shell(ctx, "git --no-pager diff")
+    if (str.starts_with(raw, "Error")) { return raw }
+    if (str.starts_with(raw, "exit 128") || str.starts_with(raw, "exit 129")) {
+        return "not a git repository"
+    }
+    diff := raw
+    if (str.starts_with(diff, "exit 0\n")) { diff = str.slice(diff, 7, len(diff)) }
+    if (str.trim(diff) == "") { return "nothing to review (no diff)" }
+    if (len(diff) > 24000) { diff = str.slice(diff, 0, 24000) + "...[truncated]" }
+    cli := ctx["cli"]
+    prompt := [
+        {"role": "system", "content": "You are a meticulous code reviewer. Point out real bugs, race conditions, missing edge cases and missing tests as concise markdown bullets. Do not restate the diff."},
+        {"role": "user", "content": "Review this diff:\n" + diff}
+    ]
+    env := cli["chat"](prompt, {"temperature": 0.3})
+    txt := chat_text(env)
+    if (txt == "") { return "Error: " + chat_error(env) }
+    return txt
+}
+
+new_run := fn(ctx, args) {
+    nf := ctx["on_new"]
+    if (nf == null) { return "Error: new session not wired" }
+    r := try(nf())
+    if (!r[0]) { return "Error: " + string(r[1]) }
+    return string(r[1])
+}
+
+resume_run := fn(ctx, args) {
+    want := str.trim(args)
+    rf := ctx["on_resume"]
+    if (want != "") {
+        if (rf == null) { return "Error: resume not wired" }
+        r := try(rf(want))
+        if (!r[0]) { return "Error: " + string(r[1]) }
+        return string(r[1])
+    }
+    sessions := session.list()
+    if (type(sessions) != "ARRAY" || len(sessions) == 0) {
+        return "sessions: (none yet)"
+    }
+    cap := len(sessions)
+    if (cap > 10) { cap = 10 }
+    lines := ["recent sessions (newest first):"]
+    for (i := 0; i < cap; i += 1) {
+        s := sessions[i]
+        if (type(s) != "HASH") { continue }
+        id := ""
+        pv := ""
+        if (s["id"] != null) { id = string(s["id"]) }
+        if (s["preview"] != null) { pv = string(s["preview"]) }
+        if (len(pv) > 60) { pv = str.slice(pv, 0, 60) }
+        lines = arr.push(lines, id + "  " + pv)
+    }
+    lines = arr.push(lines, "resume with /resume <id> or /resume latest")
+    return str.join(lines, "\n")
+}
+
 pub builtin_names := fn() {
-    return ["/help", "/models", "/model", "/stats", "/clear", "/compact", "/btw", "/init", "/tree"]
+    return ["/help", "/models", "/model", "/stats", "/status", "/clear", "/compact", "/btw", "/init", "/new", "/diff", "/review", "/resume", "/approvals", "/sandbox", "/tree"]
 }
 
 pub all_commands := fn() {
@@ -328,10 +528,17 @@ pub all_commands := fn() {
         make_command("models", "list available models (cached)", models_run),
         make_command("model", "switch model: /model <id>", model_run),
         make_command("stats", "show token usage and est. cost", stats_run),
-        make_command("clear", "clear screen log", clear_run),
-        make_command("compact", "summarize history into 2 msgs", compact_run),
+        make_command("status", "model, approvals, sandbox, cwd, session", status_run),
+        make_command("clear", "clear the transcript", clear_run),
+        make_command("compact", "summarize history into fewer messages", compact_run),
         make_command("btw", "side question, history untouched: /btw <q>", btw_run),
-        make_command("init", "write ZODPI.md project notes", init_run),
+        make_command("init", "write AGENTS.md project notes", init_run),
+        make_command("new", "start a fresh session", new_run),
+        make_command("diff", "show git diff for review", diff_run),
+        make_command("review", "review the current diff with the model", review_run),
+        make_command("resume", "list/resume sessions: /resume [id|latest]", resume_run),
+        make_command("approvals", "get/set approvals: /approvals [mode]", approvals_run),
+        make_command("sandbox", "get/set sandbox: /sandbox [mode]", sandbox_run),
         make_command("tree", "list/switch branches: /tree [checkout|branch <b>]", tree_run),
         make_command("!", "run shell: !<cmd>", bang_run)
     ]

@@ -1,33 +1,100 @@
+// coding_tools.zd — pure-Zod coding tools for Zodex.
+//
+// make_coding_tools(cwd, opts) -> [read_file, write_file, edit, glob,
+//   grep, shell, apply_patch, update_plan]
+// make_readonly_tools(cwd)    -> [read_file, glob, grep, update_plan]
+//
+// opts (hash or null):
+//   "allow_exec" (bool, default true)   disable the shell tool
+//   "max_bytes"  (int,  default 200000) tool output cap
+//   "guard"      (hash) shared sandbox state {"sandbox": mode}; mutating
+//                guard["sandbox"] changes behavior live. Modes:
+//                "workspace-write" (default), "read-only",
+//                "danger-full-access". This is an advisory path guard,
+//                NOT an OS-level sandbox.
+//   "plan_state" (hash) shared {"steps":[...]} used by update_plan so the
+//                UI can render the checklist; a private one is used when
+//                omitted.
+//
+// All tools return strings; failures are "Error: ..." strings. Never halt.
+
 import "tools.zd" as tools
+import "apply_patch.zd" as apply_patch
 import "std/fs" as fs
 import "std/str" as str
 import "std/array" as arr
 import "std/json" as json
 import "std/process" as process
 
-// Pure-Zod coding tools for the AI harness.
-// No Go changes; only std/* + tools.zd (+ __exec indirectly via std/process).
+pub SANDBOX_DEFAULT := "workspace-write"
+
+pub valid_sandbox := fn(mode) {
+    if (mode == "read-only" || mode == "workspace-write" || mode == "danger-full-access") {
+        return true
+    }
+    return false
+}
+
+// make_guard(mode) builds a fresh shared guard hash.
+pub make_guard := fn(mode) {
+    m := mode
+    if (!valid_sandbox(m)) { m = SANDBOX_DEFAULT }
+    return {"sandbox": m}
+}
+
+// make_plan_state() builds a fresh shared plan hash.
+pub make_plan_state := fn() {
+    return {"steps": []}
+}
 
 pub make_coding_tools := fn(cwd, opts) {
-    if (opts == null) {
-        opts = {}
-    }
+    if (opts == null) { opts = {} }
+
     allow_exec := true
-    if (opts["allow_exec"] != null) {
-        allow_exec = opts["allow_exec"]
-    }
+    if (opts["allow_exec"] != null) { allow_exec = opts["allow_exec"] }
     max_bytes := 200000
-    if (opts["max_bytes"] != null && type(opts["max_bytes"]) == "INTEGER") {
-        max_bytes = opts["max_bytes"]
+    if (opts["max_bytes"] != null && type(opts["max_bytes"]) == "INTEGER") { max_bytes = opts["max_bytes"] }
+
+    guard := opts["guard"]
+    if (type(guard) != "HASH") { guard = make_guard(null) }
+
+    plan_state := opts["plan_state"]
+    if (type(plan_state) != "HASH") { plan_state = make_plan_state() }
+
+    sandbox := fn() {
+        s := guard["sandbox"]
+        if (!valid_sandbox(s)) { s = SANDBOX_DEFAULT }
+        return s
     }
 
-    // Returns null when path is usable, else an error string.
-    check_path := fn(p) {
+    // join_path resolves a user-supplied path; absolute paths only pass
+    // through under danger-full-access.
+    join_path := fn(p) {
+        if (sandbox() == "danger-full-access" && str.starts_with(p, "/")) {
+            return p
+        }
+        return cwd + "/" + p
+    }
+
+    // path_err(p, for_write): null when usable, else an "Error: ..." string.
+    path_err := fn(p, for_write) {
         if (p == null || type(p) != "STRING" || p == "") {
             return "Error: path required"
         }
-        if (str.contains(p, "..")) {
-            return "Error: path escapes cwd: " + p
+        s := sandbox()
+        if (s != "danger-full-access") {
+            if (str.starts_with(p, "/")) {
+                return "Error: absolute path blocked by sandbox: " + p
+            }
+            parts := str.split(p, "/")
+            for (i := 0; i < len(parts); i += 1) {
+                if (parts[i] == "..") {
+                    return "Error: path escapes sandbox: " + p
+                }
+            }
+        }
+        if (for_write == true && s == "read-only") {
+            return "Error: sandbox \"read-only\" blocks writes"
         }
         return null
     }
@@ -94,7 +161,6 @@ pub make_coding_tools := fn(cwd, opts) {
     // Recursively list files under base. root is base's cwd-relative path
     // ("" when base == cwd). Returns cwd-relative paths. Depth capped at 8,
     // entries capped at 200. Skips dot-dirs and node_modules/.git/target.
-    // Every fs call is guarded with try; errors are skipped.
     walk_files := fn(base, root) {
         out := []
         dirs := [base]
@@ -151,48 +217,74 @@ pub make_coding_tools := fn(cwd, opts) {
         return out
     }
 
-    // Resolve optional dir arg to [base, root]; returns null pair on error.
+    // Resolve optional dir arg to [error, base, root].
     resolve_base := fn(d) {
-        if (d == null) {
-            d = ""
-        }
+        if (d == null) { d = "" }
         if (type(d) != "STRING") {
             return ["Error: dir must be a string", null, null]
         }
-        if (str.contains(d, "..")) {
-            return ["Error: path escapes cwd: " + d, null, null]
+        if (d == "") {
+            return [null, cwd, ""]
         }
-        base := cwd
-        root := ""
-        if (d != "") {
-            base = cwd + "/" + d
-            root = d
+        e := path_err(d, false)
+        if (e != null) {
+            return [e, null, null]
         }
-        return [null, base, root]
+        if (sandbox() == "danger-full-access" && str.starts_with(d, "/")) {
+            return [null, d, d]
+        }
+        return [null, cwd + "/" + d, d]
     }
 
     read_file := tools.make_tool(
         "read_file",
-        "Read a file relative to cwd. Returns the file content, truncated to max_bytes with a marker when too large.",
+        "Read a file. Plain call returns content (capped at max_bytes). With offset/limit returns at most limit lines (max 4000) starting at 1-based line offset, each prefixed with \"  N| \".",
         {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "cwd-relative file path"}
+                "path": {"type": "string", "description": "file path relative to cwd"},
+                "offset": {"type": "integer", "description": "1-based first line (optional)"},
+                "limit": {"type": "integer", "description": "max lines to return (optional)"}
             },
             "required": ["path"]
         },
         fn(args) {
             p := args["path"]
-            e := check_path(p)
-            if (e != null) {
-                return e
-            }
-            full := cwd + "/" + p
+            e := path_err(p, false)
+            if (e != null) { return e }
+            full := join_path(p)
             r := try(fs.read_file(full))
             if (!r[0]) {
                 return "Error: " + r[1]
             }
             c := r[1]
+            off := args["offset"]
+            lim := args["limit"]
+            if (off != null || lim != null) {
+                o := 1
+                if (type(off) == "INTEGER" && off > 0) { o = off }
+                l := 2000
+                if (type(lim) == "INTEGER" && lim > 0) { l = lim }
+                if (l > 4000) { l = 4000 }
+                lines := str.split(c, "\n")
+                total := len(lines)
+                start := o - 1
+                if (start > total) { start = total }
+                end := start + l
+                if (end > total) { end = total }
+                out := []
+                for (i := start; i < end; i += 1) {
+                    numstr := string(i + 1)
+                    padn := 6 - len(numstr)
+                    if (padn < 1) { padn = 1 }
+                    out = arr.push(out, str.repeat(" ", padn) + numstr + "| " + lines[i])
+                }
+                body := str.join(out, "\n")
+                if (end < total) {
+                    body = body + "\n...[showing lines " + string(start + 1) + "-" + string(end) + " of " + string(total) + "]"
+                }
+                return body
+            }
             if (len(c) > max_bytes) {
                 n := len(c) - max_bytes
                 c = str.slice(c, 0, max_bytes) + "\n...[truncated " + string(n) + " chars]"
@@ -201,35 +293,38 @@ pub make_coding_tools := fn(cwd, opts) {
         }
     )
 
+    mkdir_parents := fn(p) {
+        parts := str.split(p, "/")
+        if (len(parts) > 1) {
+            d := str.join(arr.slice(parts, 0, len(parts) - 1), "/")
+            if (d != "" && d != p) {
+                ignored := try(fs.mkdir(join_path(d)))
+            }
+        }
+        return null
+    }
+
     write_file := tools.make_tool(
         "write_file",
-        "Write content to a file relative to cwd, creating parent directories as needed.",
+        "Write content to a file, creating parent directories as needed. Overwrites existing files.",
         {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "cwd-relative file path"},
+                "path": {"type": "string", "description": "file path relative to cwd"},
                 "content": {"type": "string", "description": "file content to write"}
             },
             "required": ["path", "content"]
         },
         fn(args) {
             p := args["path"]
-            e := check_path(p)
-            if (e != null) {
-                return e
-            }
+            e := path_err(p, true)
+            if (e != null) { return e }
             content := args["content"]
             if (content == null || type(content) != "STRING") {
                 return "Error: content required"
             }
-            parts := str.split(p, "/")
-            if (len(parts) > 1) {
-                d := str.join(arr.slice(parts, 0, len(parts) - 1), "/")
-                if (d != "") {
-                    ignored := try(fs.mkdir(cwd + "/" + d))
-                }
-            }
-            full := cwd + "/" + p
+            ignored := mkdir_parents(p)
+            full := join_path(p)
             w := try(fs.write_file(full, content))
             if (!w[0]) {
                 return "Error: " + w[1]
@@ -240,11 +335,11 @@ pub make_coding_tools := fn(cwd, opts) {
 
     edit := tools.make_tool(
         "edit",
-        "Replace the first occurrence of old_string with new_string in a cwd-relative file.",
+        "Replace the first occurrence of old_string with new_string in a file. old_string must be non-empty and must match exactly.",
         {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "cwd-relative file path"},
+                "path": {"type": "string", "description": "file path relative to cwd"},
                 "old_string": {"type": "string", "description": "text to find (first occurrence only)"},
                 "new_string": {"type": "string", "description": "replacement text"}
             },
@@ -252,10 +347,8 @@ pub make_coding_tools := fn(cwd, opts) {
         },
         fn(args) {
             p := args["path"]
-            e := check_path(p)
-            if (e != null) {
-                return e
-            }
+            e := path_err(p, true)
+            if (e != null) { return e }
             old := args["old_string"]
             news := args["new_string"]
             if (old == null || type(old) != "STRING" || old == "") {
@@ -264,7 +357,7 @@ pub make_coding_tools := fn(cwd, opts) {
             if (news == null || type(news) != "STRING") {
                 return "Error: new_string required"
             }
-            full := cwd + "/" + p
+            full := join_path(p)
             r := try(fs.read_file(full))
             if (!r[0]) {
                 return "Error: " + r[1]
@@ -292,7 +385,7 @@ pub make_coding_tools := fn(cwd, opts) {
             "type": "object",
             "properties": {
                 "pattern": {"type": "string", "description": "glob pattern, e.g. '*.zd'"},
-                "dir": {"type": "string", "description": "optional cwd-relative subdirectory to search"}
+                "dir": {"type": "string", "description": "optional subdirectory to search"}
             },
             "required": ["pattern"]
         },
@@ -330,7 +423,7 @@ pub make_coding_tools := fn(cwd, opts) {
             "type": "object",
             "properties": {
                 "pattern": {"type": "string", "description": "substring to search for"},
-                "dir": {"type": "string", "description": "optional cwd-relative subdirectory to search"},
+                "dir": {"type": "string", "description": "optional subdirectory to search"},
                 "include": {"type": "string", "description": "optional file filter, e.g. '*.zd'"}
             },
             "required": ["pattern"]
@@ -345,9 +438,7 @@ pub make_coding_tools := fn(cwd, opts) {
                 return br[0]
             }
             inc := args["include"]
-            if (inc == null) {
-                inc = ""
-            }
+            if (inc == null) { inc = "" }
             if (inc != "" && type(inc) != "STRING") {
                 return "Error: include must be a string"
             }
@@ -363,7 +454,7 @@ pub make_coding_tools := fn(cwd, opts) {
                         continue
                     }
                 }
-                full := cwd + "/" + rel
+                full := br[1] + "/" + rel
                 fr := try(fs.read_file(full))
                 if (!fr[0]) {
                     continue
@@ -399,14 +490,36 @@ pub make_coding_tools := fn(cwd, opts) {
         }
     )
 
-    bash := tools.make_tool(
-        "bash",
-        "Run a shell command with cwd set. Returns exit code, stdout and stderr, truncated to max_bytes.",
+    // Commands allowed by the advisory "read-only" sandbox for the shell.
+    read_only_cmd_ok := fn(cmd) {
+        raw := str.split(str.trim(cmd), " ")
+        toks := []
+        for (i := 0; i < len(raw); i += 1) {
+            if (raw[i] != "") { toks = arr.push(toks, raw[i]) }
+        }
+        if (len(toks) == 0) { return false }
+        t0 := toks[0]
+        if (t0 == "git") {
+            if (len(toks) < 2) { return false }
+            t1 := toks[1]
+            if (t1 == "status" || t1 == "diff" || t1 == "log" || t1 == "branch" || t1 == "show" || t1 == "rev-parse" || t1 == "remote" || t1 == "describe" || t1 == "blame" || t1 == "ls-files") {
+                return true
+            }
+            return false
+        }
+        simple := ["ls", "cat", "pwd", "head", "tail", "wc", "which", "echo", "grep", "rg", "find", "tree", "stat", "file", "diff", "sed", "awk", "sort", "uniq", "date", "env", "uname"]
+        return arr.contains(simple, t0)
+    }
+
+    shell := tools.make_tool(
+        "shell",
+        "Run a shell command (via sh -c) with cwd set. Returns exit code, stdout and stderr; very long output is truncated head+tail. Optional timeout_ms (default 30000, max 120000) and workdir.",
         {
             "type": "object",
             "properties": {
                 "command": {"type": "string", "description": "shell command to run"},
-                "timeout_ms": {"type": "integer", "description": "timeout in milliseconds, default 30000, clamped to 1..120000"}
+                "timeout_ms": {"type": "integer", "description": "timeout in milliseconds, default 30000, clamped to 1..120000"},
+                "workdir": {"type": "string", "description": "optional working directory"}
             },
             "required": ["command"]
         },
@@ -419,19 +532,23 @@ pub make_coding_tools := fn(cwd, opts) {
                 return "Error: command required"
             }
             ms := args["timeout_ms"]
-            if (ms == null) {
-                ms = 30000
-            }
+            if (ms == null) { ms = 30000 }
             if (type(ms) != "INTEGER") {
                 return "Error: timeout_ms must be an integer"
             }
-            if (ms < 1) {
-                ms = 1
+            if (ms < 1) { ms = 1 }
+            if (ms > 120000) { ms = 120000 }
+            wd := cwd
+            wdarg := args["workdir"]
+            if (wdarg != null && type(wdarg) == "STRING" && wdarg != "") {
+                we := path_err(wdarg, false)
+                if (we != null) { return we }
+                wd = join_path(wdarg)
             }
-            if (ms > 120000) {
-                ms = 120000
+            if (sandbox() == "read-only" && !read_only_cmd_ok(cmd)) {
+                return "Error: sandbox \"read-only\" blocks shell command: " + cmd
             }
-            r := try(process.shell(cmd, {"cwd": cwd, "timeout_ms": ms}))
+            r := try(process.shell(cmd, {"cwd": wd, "timeout_ms": ms}))
             if (!r[0]) {
                 return "Error: " + r[1]
             }
@@ -445,81 +562,95 @@ pub make_coding_tools := fn(cwd, opts) {
                 out = out + "\n[timed out]"
             }
             if (len(out) > max_bytes) {
+                head_keep := (max_bytes * 3) / 5
+                tail_keep := max_bytes - head_keep
                 n := len(out) - max_bytes
-                out = str.slice(out, 0, max_bytes) + "\n...[truncated " + string(n) + " chars]"
+                out = str.slice(out, 0, head_keep) + "\n...[truncated " + string(n) + " chars]...\n" + str.slice(out, len(out) - tail_keep, len(out))
             }
             return out
         }
     )
 
-    state := {"items": [], "next_id": 1}
-    todo := tools.make_tool(
-        "todo",
-        "In-memory todo list. op is one of list/add/done/clear. add needs text, done needs id.",
+    apply_patch_tool := tools.make_tool(
+        "apply_patch",
+        "Apply a Codex-style patch. Format: *** Begin Patch ... *** End Patch with *** Add File / *** Update File (optional @@ anchors, - / + lines, *** Move to:) / *** Delete File sections. All-or-nothing.",
         {
             "type": "object",
             "properties": {
-                "op": {"type": "string", "description": "one of list, add, done, clear"},
-                "text": {"type": "string", "description": "task text for add"},
-                "id": {"type": "integer", "description": "task id for done"}
+                "patch": {"type": "string", "description": "patch text in the *** Begin Patch format"}
             },
-            "required": ["op"]
+            "required": ["patch"]
         },
         fn(args) {
-            op := args["op"]
-            if (op == null || type(op) != "STRING") {
-                return "Error: op required (list/add/done/clear)"
+            p := args["patch"]
+            if (p == null || type(p) != "STRING" || p == "") {
+                return "Error: patch required"
             }
-            if (op == "list") {
-                items := state["items"]
-                if (len(items) == 0) {
-                    return "todo: (empty)"
-                }
-                lines := []
-                for (i := 0; i < len(items); i += 1) {
-                    it := items[i]
-                    lines = arr.push(lines, string(it["id"]) + " [" + it["status"] + "] " + it["name"])
-                }
-                return str.join(lines, "\n")
+            if (sandbox() == "read-only") {
+                return "Error: sandbox \"read-only\" blocks writes"
             }
-            if (op == "add") {
-                text := args["text"]
-                if (text == null || type(text) != "STRING" || text == "") {
-                    return "Error: text required"
-                }
-                id := state["next_id"]
-                state["items"] = arr.push(state["items"], {"id": id, "name": text, "status": "pending"})
-                state["next_id"] = id + 1
-                return "added " + string(id) + ": " + text
+            r := apply_patch.apply_text(p, cwd)
+            if (r["ok"] != true) {
+                return string(r["output"])
             }
-            if (op == "done") {
-                id := args["id"]
-                if (id == null) {
-                    return "Error: id required"
-                }
-                items := state["items"]
-                for (i := 0; i < len(items); i += 1) {
-                    it := items[i]
-                    if (it["id"] == id) {
-                        it["status"] = "done"
-                        return "done " + string(id)
-                    }
-                }
-                return "Error: unknown todo id " + string(id)
-            }
-            if (op == "clear") {
-                state["items"] = []
-                return "cleared"
-            }
-            return "Error: unknown op " + op + " (use list/add/done/clear)"
+            return string(r["output"])
         }
     )
 
-    return [read_file, write_file, edit, glob, grep, bash, todo]
+    update_plan := tools.make_tool(
+        "update_plan",
+        "Update the plan checklist. Provide the FULL list of steps each time; each step is {\"step\": str, \"status\": \"pending\"|\"in_progress\"|\"completed\"}.",
+        {
+            "type": "object",
+            "properties": {
+                "steps": {
+                    "type": "array",
+                    "description": "full plan; each entry needs step (string) and status",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "step": {"type": "string"},
+                            "status": {"type": "string", "description": "pending | in_progress | completed"}
+                        },
+                        "required": ["step", "status"]
+                    }
+                }
+            },
+            "required": ["steps"]
+        },
+        fn(args) {
+            raw := args["steps"]
+            if (type(raw) != "ARRAY") {
+                return "Error: steps array required"
+            }
+            norm := []
+            for (i := 0; i < len(raw); i += 1) {
+                it := raw[i]
+                if (type(it) != "HASH") { continue }
+                text := it["step"]
+                if (text == null) { text = it["text"] }
+                if (text == null || type(text) != "STRING" || text == "") { continue }
+                status := it["status"]
+                if (status != "pending" && status != "in_progress" && status != "completed") {
+                    status = "pending"
+                }
+                norm = arr.push(norm, {"step": text, "status": status})
+            }
+            plan_state["steps"] = norm
+            done := 0
+            for (i := 0; i < len(norm); i += 1) {
+                st := norm[i]
+                if (st["status"] == "completed") { done += 1 }
+            }
+            return "Plan updated (" + string(len(norm)) + " steps, " + string(done) + " completed)"
+        }
+    )
+
+    return [read_file, write_file, edit, glob, grep, shell, apply_patch_tool, update_plan]
 }
 
 pub make_readonly_tools := fn(cwd) {
-    all := make_coding_tools(cwd, null)
+    all := make_coding_tools(cwd, {"allow_exec": false})
     by := tools.index_by_name(all)
-    return [by["read_file"], by["glob"], by["grep"]]
+    return [by["read_file"], by["glob"], by["grep"], by["update_plan"]]
 }

@@ -1,46 +1,93 @@
+// client.zd — OpenAI-compatible Chat Completions client for Zodex.
+//
+// Pure Zod: std/* only. No error() values cross function boundaries (the
+// VM only lets try() capture errors returned by the *direct* callee);
+// every fallible method returns an envelope hash:
+//   {"ok": true,  "resp"|"handle"|"body"|"models": value, "error": null}
+//   {"ok": false, ..., "error": "message"}
+//
+// new_client(api_key, model, opts) -> client hash or error() value (callers
+// wrap the construction itself in try()). Client hash:
+//   "chat"(messages, options)       -> {"ok","resp","error"}
+//   "stream"(messages, options)     -> {"ok","body","error"}
+//   "stream_events"(messages, opts) -> {"ok","handle","error"}
+//   "models"(api_key)               -> {"ok","models","error"}
+//   "set_model"(m)                  -> m
+//   "stats" / "last_usage" / "model" / "base_url" / "api_key"
+//
+// Options (all optional): "temperature", "max_tokens", "top_p",
+// "tools", "tool_choice", "stream_usage" (bool override).
+//
+// NOTE: __http_post_headers surfaces status + body in the error message
+// only; response headers (Retry-After) are NOT visible from Zod, so
+// callers must use fixed backoff, never header-driven retry.
+
 import "std/json" as json
 import "std/os" as os
-import "std/fmt" as fmt
 import "std/str" as str
+import "std/array" as arr
 
 pub Base_URL := "https://ai.hackclub.com/proxy/v1"
 pub DEFAULT_MODEL := "qwen/qwen3-32b"
 
-// models_list(api_key): api_key may be null/"". The /models endpoint needs
-// no auth. NOTE: __http_get(url, ms) takes no headers argument, so an
-// Authorization header cannot be attached here; the key is accepted for API
-// symmetry and ignored. Returns the data[] array with each element reduced
-// to {"id","name","context_length","pricing"} (pricing kept as-is), or an
-// error() value on any structural problem (never halts).
-pub models_list := fn(api_key) {
-    key := api_key
-    if (key == null) { key = "" }
-    endpoint := Base_URL + "/models"
+// classify(msg) buckets an error message for retry decisions.
+pub classify := fn(msg) {
+    s := string(msg)
+    if (str.contains(s, "402") || str.contains(s, "spend") || str.contains(s, "quota")) {
+        return "spend"
+    }
+    if (str.contains(s, "429") || str.contains(s, "rate")) {
+        return "rate_limit"
+    }
+    if (str.contains(s, "401") || str.contains(s, "403") || str.contains(s, "unauthorized") || str.contains(s, "invalid api key")) {
+        return "auth"
+    }
+    if (str.contains(s, "stream_options") || str.contains(s, "include_usage")) {
+        return "payload"
+    }
+    if (str.contains(s, "400") || str.contains(s, "invalid_request") || str.contains(s, "unsupported")) {
+        return "payload"
+    }
+    if (str.contains(s, "500") || str.contains(s, "502") || str.contains(s, "503") || str.contains(s, "server")) {
+        return "server"
+    }
+    if (str.contains(s, "timeout") || str.contains(s, "timed out")) {
+        return "timeout"
+    }
+    return "other"
+}
 
+// retryable(kind) reports whether classify()'s bucket is worth retrying.
+pub retryable := fn(kind) {
+    if (kind == "rate_limit" || kind == "server" || kind == "timeout" || kind == "other") {
+        return true
+    }
+    return false
+}
+
+read_models := fn(base) {
+    endpoint := base + "/models"
     got := try(__http_get(endpoint, 15000))
     if (!got[0]) {
-        return error("models failed: " + string(got[1]))
+        return {"ok": false, "models": null, "error": "models failed: " + string(got[1])}
     }
     parsed := try(json.parse(got[1]))
     if (!parsed[0]) {
-        return error("models failed: " + string(parsed[1]))
+        return {"ok": false, "models": null, "error": "models failed: " + string(parsed[1])}
     }
     body := parsed[1]
-    if (is_error(body)) {
-        return error("models failed: " + string(body))
-    }
     if (type(body) != "HASH") {
-        return error("models failed: unexpected response shape")
+        return {"ok": false, "models": null, "error": "models failed: unexpected response shape"}
     }
     raw := body["data"]
     if (type(raw) != "ARRAY") {
-        return error("models failed: unexpected response shape")
+        return {"ok": false, "models": null, "error": "models failed: unexpected response shape"}
     }
     out := []
     for (i := 0; i < len(raw); i += 1) {
         item := raw[i]
         if (type(item) != "HASH") {
-            return error("models failed: unexpected model entry shape")
+            return {"ok": false, "models": null, "error": "models failed: unexpected model entry shape"}
         }
         entry := {
             "id": item["id"],
@@ -48,142 +95,165 @@ pub models_list := fn(api_key) {
             "context_length": item["context_length"],
             "pricing": item["pricing"]
         }
-        out = __arr_push(out, entry)
+        out = arr.push(out, entry)
     }
-    return out
+    return {"ok": true, "models": out, "error": null}
 }
 
-pub new_client := fn(api_key, model) {
+// models_list(api_key) lists models from the default proxy. Kept for
+// backward compatibility; prefer client["models"](null).
+pub models_list := fn(api_key) {
+    return read_models(Base_URL)
+}
+
+pub new_client := fn(api_key, model, opts) {
+    if (opts == null) { opts = {} }
+
     if (api_key == null || api_key == "") { api_key = os.env_get("HACKCLUB_AI_API_KEY") }
     if (api_key == null || api_key == "") { api_key = os.env_get("HACK_CLUB_AI_API_KEY") }
-    if (api_key == null || api_key == "") { return error("HACKCLUB_AI_API_KEY is required") }
+    if (api_key == null || api_key == "") { api_key = os.env_get("ZODEX_API_KEY") }
+    if (api_key == null || api_key == "") { api_key = os.env_get("OPENAI_API_KEY") }
+    if (api_key == null || api_key == "") { return error("no API key: set ZODEX_API_KEY, OPENAI_API_KEY or HACKCLUB_AI_API_KEY") }
+
+    base := opts["base_url"]
+    if (base == null || type(base) != "STRING" || base == "") { base = Base_URL }
     if (model == null || model == "") { model = DEFAULT_MODEL }
+
+    use_usage := true
+    if (opts["stream_usage"] != null) { use_usage = opts["stream_usage"] }
+    timeout_ms := 120000
+    if (opts["timeout_ms"] != null && type(opts["timeout_ms"]) == "INTEGER") { timeout_ms = opts["timeout_ms"] }
+
     box := {"model": model}
+    stats := {"prompt": 0, "completion": 0, "calls": 0}
 
     headers := {
         "Authorization": "Bearer " + api_key,
         "Content-Type": "application/json"
     }
+    extra := opts["extra_headers"]
+    if (type(extra) == "HASH") {
+        ks := __hash_keys(extra)
+        for (i := 0; i < len(ks); i += 1) {
+            headers[ks[i]] = extra[ks[i]]
+        }
+    }
 
-    stats := {"prompt": 0, "completion": 0, "calls": 0}
     out := {
         "api_key": api_key,
         "model": model,
+        "base_url": base,
         "stats": stats,
         "last_usage": null,
-        "models": models_list,
+        "models": null,
         "chat": null,
-        "stream": null
+        "stream": null,
+        "stream_events": null,
+        "set_model": null
     }
 
     do_post := fn(url, data) {
-        // NOTE: response headers (e.g. Retry-After on 429) are NOT visible
-        // from Zod: __http_post_headers surfaces status + body in the error
-        // message only, so callers must use fixed backoff, never
-        // header-driven retry.
-        full_url := Base_URL + url
+        full_url := base + url
         body := json.stringify(data)
-
-        req := try(__http_post_headers(full_url, body, headers, 30000))
+        post_ms := timeout_ms
+        if (post_ms > 60000) { post_ms = 60000 }
+        req := try(__http_post_headers(full_url, body, headers, post_ms))
         if (!req[0]) {
-            msg := string(req[1])
-            if (str.contains(msg, "402")) {
-                return error("daily spend limit reached (402): " + msg)
+            kind := classify(string(req[1]))
+            if (kind == "spend") {
+                return {"ok": false, "resp": null, "error": "spend limit (402): " + string(req[1])}
             }
-            if (str.contains(msg, "429")) {
-                return error("rate limited (429), back off and retry: " + msg)
+            if (kind == "rate_limit") {
+                return {"ok": false, "resp": null, "error": "rate limited (429), back off and retry: " + string(req[1])}
             }
-            return error("http post failed: " + msg)
+            return {"ok": false, "resp": null, "error": "http post failed: " + string(req[1])}
         }
-        return json.parse(req[1])
+        parsed := try(json.parse(req[1]))
+        if (!parsed[0]) {
+            return {"ok": false, "resp": null, "error": "bad response body: " + string(parsed[1])}
+        }
+        return {"ok": true, "resp": parsed[1], "error": null}
+    }
+
+    build := fn(messages, options, stream_mode) {
+        if (options == null) { options = {} }
+        if (messages == null) { messages = [] }
+        eff := box["model"]
+        if (eff == null || eff == "") { eff = DEFAULT_MODEL }
+
+        payload := {
+            "model": eff,
+            "messages": messages,
+            "temperature": 0.7,
+            "stream": stream_mode
+        }
+        if (options["temperature"] != null) { payload["temperature"] = options["temperature"] }
+        if (options["max_tokens"] != null) { payload["max_tokens"] = options["max_tokens"] }
+        if (options["top_p"] != null) { payload["top_p"] = options["top_p"] }
+        if (options["tools"] != null) { payload["tools"] = options["tools"] }
+        if (options["tool_choice"] != null) { payload["tool_choice"] = options["tool_choice"] }
+
+        want_usage := use_usage
+        if (options["stream_usage"] != null) { want_usage = options["stream_usage"] }
+        if (stream_mode && want_usage) {
+            payload["stream_options"] = {"include_usage": true}
+        }
+        return payload
+    }
+
+    record_usage := fn(resp) {
+        if (type(resp) != "HASH") { return null }
+        usage := resp["usage"]
+        if (type(usage) != "HASH") {
+            out["last_usage"] = null
+            return null
+        }
+        pt := usage["prompt_tokens"]
+        ct := usage["completion_tokens"]
+        if (type(pt) == "INTEGER") { stats["prompt"] = stats["prompt"] + pt }
+        if (type(ct) == "INTEGER") { stats["completion"] = stats["completion"] + ct }
+        out["last_usage"] = usage
+        return null
     }
 
     chat := fn(messages, options) {
-        if (options == null) { options = {} }
-        if (messages == null) { messages = [] }
-        eff_model := box["model"]
-        if (eff_model == null || eff_model == "") { eff_model = DEFAULT_MODEL }
-
-        payload := {
-            "model": eff_model,
-            "messages": messages,
-            "temperature": 0.7,
-            "stream": false
-        }
-        if (options["temperature"] != null) { payload["temperature"] = options["temperature"] }
-        if (options["max_tokens"] != null) { payload["max_tokens"] = options["max_tokens"] }
-        if (options["top_p"] != null) { payload["top_p"] = options["top_p"] }
-        if (options["tools"] != null) { payload["tools"] = options["tools"] }
-        if (options["tool_choice"] != null) { payload["tool_choice"] = options["tool_choice"] }
-
-        resp := do_post("/chat/completions", payload)
-        if (is_error(resp)) {
-            return resp
+        payload := build(messages, options, false)
+        r := do_post("/chat/completions", payload)
+        if (r["ok"] != true) {
+            return {"ok": false, "resp": null, "error": r["error"]}
         }
         stats["calls"] = stats["calls"] + 1
-        if (type(resp) == "HASH") {
-            usage := resp["usage"]
-            if (!is_error(usage) && usage != null && type(usage) == "HASH") {
-                pt := usage["prompt_tokens"]
-                ct := usage["completion_tokens"]
-                if (type(pt) == "INTEGER") { stats["prompt"] = stats["prompt"] + pt }
-                if (type(ct) == "INTEGER") { stats["completion"] = stats["completion"] + ct }
-                out["last_usage"] = usage
-            } else {
-                out["last_usage"] = null
-            }
-        }
-        return resp
+        ignored := record_usage(r["resp"])
+        return {"ok": true, "resp": r["resp"], "error": null}
     }
 
     stream := fn(messages, options) {
-        if (options == null) { options = {} }
-        if (messages == null) { messages = [] }
-        eff_model := box["model"]
-        if (eff_model == null || eff_model == "") { eff_model = DEFAULT_MODEL }
-        payload := {
-            "model": eff_model,
-            "messages": messages,
-            "temperature": 0.7,
-            "stream": true
-        }
-        if (options["temperature"] != null) { payload["temperature"] = options["temperature"] }
-        if (options["max_tokens"] != null) { payload["max_tokens"] = options["max_tokens"] }
-        if (options["top_p"] != null) { payload["top_p"] = options["top_p"] }
-
+        payload := build(messages, options, true)
         body := json.stringify(payload)
-        req := try(__http_post_stream(Base_URL + "/chat/completions", body, headers, 120000))
+        post_ms := timeout_ms
+        if (post_ms > 300000) { post_ms = 300000 }
+        req := try(__http_post_stream(base + "/chat/completions", body, headers, post_ms))
         if (!req[0]) {
-            return error("stream failed: " + req[1])
+            return {"ok": false, "body": null, "error": "stream failed: " + string(req[1])}
         }
-        return req[1]
+        return {"ok": true, "body": req[1], "error": null}
     }
 
     stream_events := fn(messages, options) {
-        if (options == null) { options = {} }
-        if (messages == null) { messages = [] }
-        eff_model := box["model"]
-        if (eff_model == null || eff_model == "") { eff_model = DEFAULT_MODEL }
-        payload := {
-            "model": eff_model,
-            "messages": messages,
-            "temperature": 0.7,
-            "stream": true
-        }
-        if (options["temperature"] != null) { payload["temperature"] = options["temperature"] }
-        if (options["max_tokens"] != null) { payload["max_tokens"] = options["max_tokens"] }
-        if (options["top_p"] != null) { payload["top_p"] = options["top_p"] }
-        if (options["tools"] != null) { payload["tools"] = options["tools"] }
-        if (options["tool_choice"] != null) { payload["tool_choice"] = options["tool_choice"] }
-
+        payload := build(messages, options, true)
         body := json.stringify(payload)
-        req := try(__stream_start(Base_URL + "/chat/completions", body, headers, 120000))
+        stream_ms := timeout_ms
+        if (stream_ms > 300000) { stream_ms = 300000 }
+        req := try(__stream_start(base + "/chat/completions", body, headers, stream_ms))
         if (!req[0]) {
-            return error("stream failed: " + req[1])
+            return {"ok": false, "handle": null, "error": "stream failed: " + string(req[1])}
         }
-        return req[1]
+        return {"ok": true, "handle": req[1], "error": null}
     }
 
+    out["models"] = fn(key) {
+        return read_models(base)
+    }
     out["chat"] = chat
     out["stream"] = stream
     out["stream_events"] = stream_events
@@ -193,5 +263,4 @@ pub new_client := fn(api_key, model) {
         return m
     }
     return out
-
 }

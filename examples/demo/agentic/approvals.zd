@@ -1,0 +1,280 @@
+// approvals.zd — approval policy engine and guarded tool wrapping for Zodex.
+//
+// Policy hash: {"mode": str, "rules": array, "session": array}.
+// Modes: "untrusted", "on-failure", "on-request", "never"; anything else
+// (including null) falls back to "untrusted".
+//
+// Rules are strings:
+//   "name"         -> tool name must equal `name`
+//   "name:pattern" -> tool name must equal `name` and the pattern must
+//                     match the subject (part after the first ":").
+// Subject: for tool "shell" it is json.parse(args_text)["command"] when
+// args_text is valid JSON with a string command, else raw args_text; for
+// every other tool it is raw args_text.
+// Pattern: a single trailing "*" is a prefix match on the subject; anything
+// else is an exact OR plain-substring match. Substring was chosen (it
+// subsumes the exact case).
+//
+// Session entries (session_allow) are hashes {"name", "args_text",
+// "scope": "session"}. They match on tool name plus the subject computed
+// from the stored args_text, with the same pattern semantics above.
+//
+// Decision order: read-only name -> session -> rules -> mode.
+// This module never prints, never raises, and decide() is pure.
+
+import "std/str" as str
+import "std/array" as arr
+import "std/json" as json
+
+// Tool names that always pass without approval.
+pub read_only_names := fn() {
+    return ["read_file", "glob", "grep", "update_plan"]
+}
+
+is_read_only := fn(name) {
+    names := read_only_names()
+    for (i := 0; i < len(names); i += 1) {
+        if (names[i] == name) {
+            return true
+        }
+    }
+    return false
+}
+
+// Coerce an arbitrary value to a string without raising.
+to_text := fn(v) {
+    if (type(v) == "STRING") {
+        return v
+    }
+    r := try(string(v))
+    if (r[0]) {
+        return r[1]
+    }
+    return ""
+}
+
+// The text a rule pattern is matched against.
+subject_for := fn(name, args_text) {
+    if (name != "shell") {
+        return args_text
+    }
+    p := try(json.parse(args_text))
+    if (!p[0]) {
+        return args_text
+    }
+    parsed := p[1]
+    if (type(parsed) != "HASH") {
+        return args_text
+    }
+    cmd := parsed["command"]
+    if (cmd == null || type(cmd) != "STRING") {
+        return args_text
+    }
+    return cmd
+}
+
+// Trailing "*" -> prefix match; otherwise exact or substring match.
+pattern_matches := fn(pattern, subject) {
+    if (str.ends_with(pattern, "*")) {
+        prefix := str.slice(pattern, 0, len(pattern) - 1)
+        if (prefix == "") {
+            return true
+        }
+        return str.starts_with(subject, prefix)
+    }
+    return subject == pattern || str.contains(subject, pattern)
+}
+
+// Rule string: no ":" -> exact tool name; with ":" -> name before the first
+// ":" must match and the remainder is a pattern for the subject.
+rule_matches := fn(entry, name, subject) {
+    if (type(entry) != "STRING") {
+        return false
+    }
+    idx := str.index_of(entry, ":")
+    if (idx < 0) {
+        return entry == name
+    }
+    if (str.slice(entry, 0, idx) != name) {
+        return false
+    }
+    return pattern_matches(str.slice(entry, idx + 1, len(entry)), subject)
+}
+
+// Session entries behave like "name:<stored subject>" rules.
+session_matches := fn(entries, name, subject) {
+    if (type(entries) != "ARRAY") {
+        return false
+    }
+    for (i := 0; i < len(entries); i += 1) {
+        e := entries[i]
+        if (type(e) != "HASH") {
+            continue
+        }
+        if (to_text(e["name"]) != name) {
+            continue
+        }
+        stored := subject_for(name, to_text(e["args_text"]))
+        if (pattern_matches(stored, subject)) {
+            return true
+        }
+    }
+    return false
+}
+
+// Shared tolerant read of the policy fields; returns [mode, rules, session].
+read_policy := fn(policy) {
+    mode := "untrusted"
+    rules := []
+    session := []
+    if (type(policy) == "HASH") {
+        m := policy["mode"]
+        if (m == "untrusted" || m == "on-failure" || m == "on-request" || m == "never") {
+            mode = m
+        }
+        if (type(policy["rules"]) == "ARRAY") {
+            rules = policy["rules"]
+        }
+        if (type(policy["session"]) == "ARRAY") {
+            session = policy["session"]
+        }
+    }
+    return [mode, rules, session]
+}
+
+pub new_policy := fn(mode, rules) {
+    m := "untrusted"
+    if (mode == "untrusted" || mode == "on-failure" || mode == "on-request" || mode == "never") {
+        m = mode
+    }
+    clean := []
+    if (type(rules) == "ARRAY") {
+        for (i := 0; i < len(rules); i += 1) {
+            if (type(rules[i]) == "STRING") {
+                clean = arr.push(clean, rules[i])
+            }
+        }
+    }
+    return {"mode": m, "rules": clean, "session": []}
+}
+
+pub decide := fn(policy, name, args_text) {
+    parts := read_policy(policy)
+    mode := parts[0]
+    rules := parts[1]
+    session := parts[2]
+    nm := to_text(name)
+    text := to_text(args_text)
+    if (is_read_only(nm)) {
+        return {"action": "allow", "reason": "read-only"}
+    }
+    subject := subject_for(nm, text)
+    if (session_matches(session, nm, subject)) {
+        return {"action": "allow", "reason": "session-approved"}
+    }
+    for (i := 0; i < len(rules); i += 1) {
+        entry := rules[i]
+        if (rule_matches(entry, nm, subject)) {
+            return {"action": "allow", "reason": "rule: " + to_text(entry)}
+        }
+    }
+    if (mode == "never") {
+        return {"action": "deny", "reason": "mode: never"}
+    }
+    if (mode == "on-failure") {
+        return {"action": "allow", "reason": "mode: on-failure"}
+    }
+    return {"action": "ask", "reason": "mode: " + mode}
+}
+
+pub describe := fn(policy) {
+    parts := read_policy(policy)
+    mode := parts[0]
+    nr := len(parts[1])
+    ns := len(parts[2])
+    if (nr == 0 && ns == 0) {
+        return "approvals: " + mode
+    }
+    if (nr == 0) {
+        return "approvals: " + mode + " (" + string(ns) + " session)"
+    }
+    if (ns == 0) {
+        return "approvals: " + mode + " (" + string(nr) + " rules)"
+    }
+    return "approvals: " + mode + " (" + string(nr) + " rules, " + string(ns) + " session)"
+}
+
+pub session_allow := fn(policy, name, args_text) {
+    if (type(policy) != "HASH") {
+        return null
+    }
+    entries := policy["session"]
+    if (type(entries) != "ARRAY") {
+        entries = []
+    }
+    entry := {"name": to_text(name), "args_text": to_text(args_text), "scope": "session"}
+    policy["session"] = arr.push(entries, entry)
+    return null
+}
+
+// Build one guarded tool hash around an original tool hash.
+guard_one := fn(tool, policy, ask_fn) {
+    name := to_text(tool["name"])
+    guarded_fn := fn(args) {
+        args_text := ""
+        s := try(json.stringify(args))
+        if (s[0]) {
+            args_text = to_text(s[1])
+        }
+        d := decide(policy, name, args_text)
+        action := d["action"]
+        if (action == "ask") {
+            verdict := null
+            v := try(ask_fn({"name": name, "args_text": args_text}))
+            if (v[0]) {
+                verdict = v[1]
+            }
+            if (verdict == "allow-session") {
+                ignored := session_allow(policy, name, args_text)
+            } else if (verdict != "allow") {
+                return "Error: approval denied: " + name
+            }
+        } else if (action != "allow") {
+            return "Error: approval denied: " + name
+        }
+        r := try(tool["fn"](args))
+        if (!r[0]) {
+            return "Error: tool crashed: " + to_text(r[1])
+        }
+        result := r[1]
+        if (type(result) == "STRING") {
+            return result
+        }
+        j := try(json.stringify(result))
+        if (j[0]) {
+            return j[1]
+        }
+        return to_text(result)
+    }
+    return {
+        "name": name,
+        "description": tool["description"],
+        "parameters": tool["parameters"],
+        "fn": guarded_fn
+    }
+}
+
+pub wrap := fn(tool_list, policy, ask_fn) {
+    out := []
+    if (type(tool_list) != "ARRAY") {
+        return out
+    }
+    for (i := 0; i < len(tool_list); i += 1) {
+        t := tool_list[i]
+        if (type(t) != "HASH") {
+            continue
+        }
+        out = arr.push(out, guard_one(t, policy, ask_fn))
+    }
+    return out
+}

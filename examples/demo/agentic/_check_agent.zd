@@ -1,0 +1,190 @@
+// _check_agent.zd — client.zd + agent.zd integration checks against the mock.
+import "client.zd" as client
+import "agent.zd" as agent
+import "tools.zd" as tools
+import "std/fmt" as fmt
+import "std/str" as str
+import "std/array" as arr
+import "std/json" as json
+import "std/fs" as fs
+import "std/os" as os
+
+box := {"fails": 0}
+
+check := fn(name, cond, detail) {
+    if (cond) {
+        fmt.println("PASS " + name)
+    } else {
+        box["fails"] = box["fails"] + 1
+        fmt.println("FAIL " + name + ": " + detail)
+    }
+}
+
+contains := fn(s, sub) {
+    return str.contains(string(s), sub)
+}
+
+BASE := "http://127.0.0.1:8791/v1"
+LOG := "/tmp/opencode/mock_requests.jsonl"
+
+// ---------- client: models ----------
+c := try(client.new_client("test-key", "mock-1", {"base_url": BASE}))
+check("client_construct", c[0] && !is_error(c[1]), string(c[1]))
+cl := c[1]
+ml := cl["models"](null)
+check("models_count", ml["ok"] == true && type(ml["models"]) == "ARRAY" && len(ml["models"]) == 2, string(ml))
+if (ml["ok"] == true && type(ml["models"]) == "ARRAY" && len(ml["models"]) > 0) {
+    m0 := ml["models"][0]
+    check("models_ctx", m0["context_length"] == 8192, string(m0))
+}
+
+// ---------- client: chat non-stream ----------
+ir := cl["chat"]([{"role": "user", "content": "hello chat"}], {})
+check("chat_ok", ir["ok"] == true, string(ir))
+if (ir["ok"] == true) {
+    r := ir["resp"]
+    ch := r["choices"]
+    check("chat_shape", type(ch) == "ARRAY" && len(ch) > 0, string(r))
+    if (type(ch) == "ARRAY" && len(ch) > 0) {
+        check("chat_text", ch[0]["message"]["content"] == "non-stream reply", string(ch[0]))
+    }
+    check("chat_stats", cl["stats"]["prompt"] == 5 && cl["stats"]["completion"] == 3, string(cl["stats"]))
+}
+
+// ---------- client: unreachable host yields error ----------
+bad := try(client.new_client("test-key", "mock-1", {"base_url": "http://127.0.0.1:9/v1", "timeout_ms": 2000}))
+br := null
+if (bad[0] && !is_error(bad[1])) {
+    br = bad[1]["chat"]([{"role": "user", "content": "x"}], {})
+}
+ok_bad := false
+if (br != null) {
+    if (br["ok"] == false && br["error"] != null) { ok_bad = true }
+}
+check("chat_unreachable_error", ok_bad, string(br))
+
+// ---------- agent tool flow ----------
+events := {"items": []}
+collect := fn(kind, a) {
+    events["items"] = arr.push(events["items"], kind + ":" + string(a))
+}
+hooks := {
+    "on_text": fn(d) { collect("text", "d") },
+    "on_tool_start": fn(n, a) { collect("tool_start", n) },
+    "on_tool_result": fn(n, r) { collect("tool_result", n) },
+    "on_message": fn(role, content, extra) { collect("message", role) },
+    "on_note": fn(t) { collect("note", t) },
+    "on_usage": fn(u) { collect("usage", "u") }
+}
+
+rf := tools.make_tool(
+    "read_file",
+    "Read a file.",
+    {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+    fn(args) { return "CONTENTS OF " + string(args["path"]) }
+)
+ag := agent.new_agent(cl, [rf], "You are a test agent.", 8, null)
+tr := ag["run_turn"]("__mock_tool__ read a.txt", hooks)
+check("tool_turn_ok", tr["ok"] == true, string(tr))
+check("tool_turn_text", contains(tr["text"], "All done"), string(tr["text"]))
+check("tool_turn_steps", tr["steps"] == 2, string(tr["steps"]))
+check("tool_start_seen", arr.contains(events["items"], "tool_start:read_file"), string(events["items"]))
+check("tool_result_seen", arr.contains(events["items"], "tool_result:read_file"), string(events["items"]))
+check("user_msg_seen", arr.contains(events["items"], "message:user"), string(events["items"]))
+check("assistant_msg_seen", arr.contains(events["items"], "message:assistant"), string(events["items"]))
+check("tool_msg_seen", arr.contains(events["items"], "message:tool"), string(events["items"]))
+check("usage_seen", arr.contains(events["items"], "usage:u"), string(events["items"]))
+check("usage_last", cl["last_usage"] != null && cl["last_usage"]["prompt_tokens"] == 21, string(cl["last_usage"]))
+check("usage_stats", cl["stats"]["prompt"] == 47, string(cl["stats"]))
+hist := ag["conversation"]["to_api"](ag["conversation"])
+check("conv_tool_pairing", len(hist) >= 4, string(len(hist)))
+
+// ---------- retry on 429 ----------
+retry_events := {"items": []}
+rhooks := {"on_note": fn(t) { retry_events["items"] = arr.push(retry_events["items"], string(t)) }}
+ag2 := agent.new_agent(cl, [], "sys", 4, null)
+tr2 := ag2["run_turn"]("__mock_retry__ hello", rhooks)
+check("retry_ok", tr2["ok"] == true, string(tr2))
+found_retry := false
+for (i := 0; i < len(retry_events["items"]); i += 1) {
+    if (contains(retry_events["items"][i], "retrying")) { found_retry = true }
+}
+check("retry_note", found_retry, string(retry_events["items"]))
+
+// ---------- stream_options rejected -> fallback to no usage ----------
+ag3 := agent.new_agent(cl, [], "sys", 4, null)
+tr3 := ag3["run_turn"]("__mock_reject_usage__ hi", null)
+check("reject_usage_ok", tr3["ok"] == true, string(tr3))
+body_ok := false
+logr := try(fs.read_file(LOG))
+if (logr[0]) {
+    lines := str.split(logr[1], "\n")
+    hit := 0
+    saw_usage_opt := false
+    saw_plain := false
+    for (i := 0; i < len(lines); i += 1) {
+        line := lines[i]
+        if (line == "") { continue }
+        if (!str.contains(line, "__mock_reject_usage__")) { continue }
+        hit += 1
+        p := try(json.parse(line))
+        if (!p[0]) { continue }
+        rec := p[1]
+        if (type(rec) != "HASH") { continue }
+        recbody := rec["body"]
+        if (type(recbody) != "HASH") { continue }
+        so := recbody["stream_options"]
+        if (hit == 1 && so != null) { saw_usage_opt = true }
+        if (hit == 2 && so == null) { saw_plain = true }
+    }
+    body_ok = hit >= 2 && saw_usage_opt && saw_plain
+}
+check("reject_usage_fallback", body_ok, "log inspect failed")
+
+// ---------- cancel ----------
+cbox := {"n": 0}
+chooks := {"should_cancel": fn() {
+    cbox["n"] = cbox["n"] + 1
+    if (cbox["n"] > 6) { return true }
+    return false
+}}
+ag4 := agent.new_agent(cl, [], "sys", 4, null)
+tr4 := ag4["run_turn"]("__mock_slow__ go", chooks)
+check("cancel_interrupted", tr4["interrupted"] == true, string(tr4))
+check("cancel_text", contains(tr4["text"], "slow"), string(tr4["text"]))
+
+// ---------- compaction ----------
+ag5 := agent.new_agent(cl, [], "sys", 4, {"context_window": 5000, "compact_threshold": 0.8})
+conv5 := ag5["conversation"]
+conv5["add"](conv5, "user", "first question", null)
+conv5["add"](conv5, "assistant", "first answer", null)
+conv5["add"](conv5, "user", "second question", null)
+conv5["add"](conv5, "assistant", "second answer", null)
+big := str.repeat("a", 60000)
+tr5 := ag5["run_turn"](big, null)
+check("compact_ok", tr5["ok"] == true, string(tr5))
+hist5 := ag5["conversation"]["to_api"](ag5["conversation"])
+compacted := false
+for (i := 0; i < len(hist5); i += 1) {
+    c := hist5[i]["content"]
+    if (type(c) == "STRING" && str.contains(c, "[compacted summary]")) { compacted = true }
+}
+check("compact_applied", compacted && len(hist5) < 7, "len=" + string(len(hist5)))
+
+// ---------- finish_reason=length continuation ----------
+ag6 := agent.new_agent(cl, [], "sys", 4, null)
+notes6 := {"items": []}
+tr6 := ag6["run_turn"]("__mock_length__ hi", {"on_note": fn(t) { notes6["items"] = arr.push(notes6["items"], string(t)) }})
+check("length_ok", tr6["ok"] == true, string(tr6))
+check("length_steps", tr6["steps"] == 2, string(tr6["steps"]))
+check("length_text", contains(tr6["text"], "echo:"), string(tr6["text"]))
+cont := false
+for (i := 0; i < len(notes6["items"]); i += 1) {
+    if (contains(notes6["items"][i], "continuing")) { cont = true }
+}
+check("length_note", cont, string(notes6["items"]))
+
+fmt.println("SUMMARY pass_done fails=" + string(box["fails"]))
+if (box["fails"] > 0) {
+    os.exit(1)
+}

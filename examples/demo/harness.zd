@@ -1,4 +1,6 @@
-// thin runner: the TUI lives in harness_lib.zd (import-safe); this file only launches it.
-import "harness_lib.zd" as h
+// thin runner: Zodex lives in agentic/harness_lib.zd (import-safe); this file
+// only launches it.
+import "agentic/harness_lib.zd" as zodex
+import "std/os" as os
 
-h.main()
+os.exit(zodex.main())

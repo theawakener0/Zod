@@ -1,0 +1,1003 @@
+// render.zd — width-aware text and transcript-cell rendering for zodex.
+//
+// Pure Zod module: imports only std/str and std/array, never prints, never
+// calls error(). Every public function is defensive — null, non-string and
+// malformed inputs degrade to empty/plain output instead of crashing.
+//
+// ZodLang strings are byte-oriented (`len` counts bytes), so any slicing
+// that must not split a UTF-8 character goes through char_len() below.
+// Display width counts one column per character; ANSI escape sequences
+// measure as zero. This matches contract §1: measurement always via
+// strip_ansi + display_width.
+//
+// NOTE: definitions are ordered so that every top-level binding is defined
+// before the first function that references it — the default VM engine
+// resolves module identifiers at definition time and rejects forward
+// references.
+
+import "std/str" as str
+import "std/array" as arr
+
+// --------------------------------------------------------------------------
+// constants
+// --------------------------------------------------------------------------
+
+esc := "\x1b"
+bel := "\x07"
+// U+FFFD: utf8.RuneError decodes to 65533, so a literal replacement char
+// needs its own 3-byte comparison in char_len().
+repl := "�"
+
+// --------------------------------------------------------------------------
+// coercion helpers
+// --------------------------------------------------------------------------
+
+// as_str turns any value into a string without ever crashing.
+as_str := fn(x) {
+    if (x == null) {
+        return ""
+    }
+    if (type(x) == "STRING") {
+        return x
+    }
+    r := try(string(x))
+    if (r[0]) {
+        return r[1]
+    }
+    return ""
+}
+
+// num coerces a width-like argument to an int, falling back to `d` when it
+// is null or not numeric.
+num := fn(x, d) {
+    if (x == null) {
+        return d
+    }
+    if (type(x) == "INTEGER") {
+        return x
+    }
+    if (type(x) == "FLOAT") {
+        return int(x)
+    }
+    return d
+}
+
+// maxi is a small integer max helper.
+maxi := fn(a, b) {
+    if (a > b) {
+        return a
+    }
+    return b
+}
+
+// th_get reads a theme key defensively ("" when missing/null). `th` must be
+// a hash; callers check that first.
+th_get := fn(th, key) {
+    v := th[key]
+    if (v == null) {
+        return ""
+    }
+    return as_str(v)
+}
+
+// --------------------------------------------------------------------------
+// ANSI / character scanning
+// --------------------------------------------------------------------------
+
+// is_final_char reports whether a one-byte slice ends a CSI sequence.
+// CSI final bytes are 0x40..0x7E, which includes every letter.
+is_final_char := fn(ch) {
+    if (ch == "") {
+        return false
+    }
+    o := __ord(ch)
+    return o >= 64 && o <= 126
+}
+
+// ansi_end returns the index just past the ANSI sequence that starts at
+// byte i (which must hold ESC). Handles CSI (ESC [ ... final byte), OSC
+// (ESC ] ... BEL or ESC \), plain two-byte escapes, and truncated input
+// (a lone ESC is consumed by itself). Always advances at least one byte.
+ansi_end := fn(s, i) {
+    n := len(s)
+    j := i + 1
+    if (j >= n) {
+        return j
+    }
+    c := str.slice(s, j, j + 1)
+    if (c == "[") {
+        j += 1
+        loop {
+            if (j >= n) {
+                break
+            }
+            e := str.slice(s, j, j + 1)
+            j += 1
+            if (is_final_char(e)) {
+                break
+            }
+            if (e == esc) {
+                j -= 1
+                break
+            }
+        }
+        return j
+    }
+    if (c == "]") {
+        j += 1
+        loop {
+            if (j >= n) {
+                break
+            }
+            e := str.slice(s, j, j + 1)
+            if (e == bel) {
+                j += 1
+                break
+            }
+            if (e == esc) {
+                k := j + 1
+                if (k < n) {
+                    if (str.slice(s, k, k + 1) == "\\") {
+                        j += 2
+                        break
+                    }
+                }
+                break
+            }
+            j += 1
+        }
+        return j
+    }
+    return j + 1
+}
+
+// char_len returns the byte length of the character starting at byte i:
+// 1 for ASCII and malformed bytes, 2/3/4 for valid UTF-8 sequences. The
+// real U+FFFD is decodable but also reports RuneError, hence `repl`.
+char_len := fn(s, i) {
+    n := len(s)
+    if (i >= n) {
+        return 1
+    }
+    c1 := __ord(str.slice(s, i, i + 1))
+    if (c1 < 128) {
+        return 1
+    }
+    rem := n - i
+    if (rem >= 2) {
+        if (__ord(str.slice(s, i, i + 2)) != 65533) {
+            return 2
+        }
+    }
+    if (rem >= 3) {
+        t3 := str.slice(s, i, i + 3)
+        if (__ord(t3) != 65533) {
+            return 3
+        }
+        if (t3 == repl) {
+            return 3
+        }
+    }
+    if (rem >= 4) {
+        if (__ord(str.slice(s, i, i + 4)) != 65533) {
+            return 4
+        }
+    }
+    return 1
+}
+
+// strip_ansi removes CSI (ESC [ ... final), OSC (ESC ] ... BEL / ESC \) and
+// two-byte escapes; truncated sequences are dropped. Text is otherwise
+// passed through byte-for-byte.
+pub strip_ansi := fn(s) {
+    t := as_str(s)
+    n := len(t)
+    parts := []
+    i := 0
+    run := 0
+    loop {
+        if (i >= n) {
+            break
+        }
+        if (str.slice(t, i, i + 1) == esc) {
+            if (i > run) {
+                parts = arr.push(parts, str.slice(t, run, i))
+            }
+            i = ansi_end(t, i)
+            run = i
+            continue
+        }
+        i += 1
+    }
+    if (run < n) {
+        parts = arr.push(parts, str.slice(t, run, n))
+    }
+    return str.join(parts, "")
+}
+
+// display_width counts printable columns after stripping ANSI: one column
+// per character, malformed bytes count one column each.
+pub display_width := fn(s) {
+    t := strip_ansi(s)
+    n := len(t)
+    w := 0
+    i := 0
+    loop {
+        if (i >= n) {
+            break
+        }
+        i += char_len(t, i)
+        w += 1
+    }
+    return w
+}
+
+// cut returns the longest prefix of s that fits in maxw columns, keeping
+// ANSI sequences (zero width) and whole characters. It never splits a
+// multi-byte character.
+cut := fn(s, maxw) {
+    n := len(s)
+    parts := []
+    i := 0
+    w := 0
+    loop {
+        if (i >= n) {
+            break
+        }
+        if (str.slice(s, i, i + 1) == esc) {
+            j := ansi_end(s, i)
+            parts = arr.push(parts, str.slice(s, i, j))
+            i = j
+            continue
+        }
+        cl := char_len(s, i)
+        if (w + 1 > maxw) {
+            break
+        }
+        parts = arr.push(parts, str.slice(s, i, i + cl))
+        w += 1
+        i += cl
+    }
+    return str.join(parts, "")
+}
+
+// has_ansi reports whether s contains an escape byte.
+has_ansi := fn(s) {
+    return str.index_of(s, esc) != -1
+}
+
+// hard_chunks splits s into column-limited chunks without changing content:
+// the first chunk fits in w columns, every later chunk in w-2 (callers
+// indent continuations by two spaces). Relative indentation is preserved.
+hard_chunks := fn(s, w) {
+    out := []
+    rest := as_str(s)
+    first := true
+    loop {
+        if (len(rest) == 0) {
+            break
+        }
+        bw := w
+        if (!first) {
+            bw = w - 2
+        }
+        if (bw < 1) {
+            bw = 1
+        }
+        if (first && display_width(rest) <= bw) {
+            out = arr.push(out, rest)
+            break
+        }
+        piece := cut(rest, bw)
+        if (len(piece) == 0) {
+            break
+        }
+        out = arr.push(out, piece)
+        rest = str.slice(rest, len(piece), len(rest))
+        first = false
+    }
+    if (len(out) == 0) {
+        out = arr.push(out, "")
+    }
+    return out
+}
+
+// wrap_para word-wraps one paragraph (no newlines inside). Words longer
+// than the width are hard-broken on character boundaries; runs of spaces
+// collapse; a run that yields nothing produces one empty line.
+wrap_para := fn(p, w) {
+    words := str.split(p, " ")
+    out := []
+    cur := ""
+    curw := 0
+    pending := ""
+    idx := 0
+    loop {
+        word := pending
+        pending = ""
+        if (word == "") {
+            if (idx >= len(words)) {
+                break
+            }
+            word = words[idx]
+            idx += 1
+        }
+        ww := display_width(word)
+        if (ww == 0) {
+            continue
+        }
+        if (cur == "") {
+            if (ww <= w) {
+                cur = word
+                curw = ww
+            } else {
+                rest := word
+                loop {
+                    if (display_width(rest) <= w) {
+                        cur = rest
+                        curw = display_width(rest)
+                        break
+                    }
+                    piece := cut(rest, w)
+                    if (len(piece) == 0) {
+                        cur = ""
+                        curw = 0
+                        break
+                    }
+                    out = arr.push(out, piece)
+                    rest = str.slice(rest, len(piece), len(rest))
+                }
+            }
+        } else if (curw + 1 + ww <= w) {
+            cur += " " + word
+            curw += 1 + ww
+        } else {
+            out = arr.push(out, cur)
+            cur = ""
+            curw = 0
+            pending = word
+        }
+    }
+    if (cur != "") {
+        out = arr.push(out, cur)
+    }
+    if (len(out) == 0) {
+        out = arr.push(out, "")
+    }
+    return out
+}
+
+// wrap word-wraps text to `width` columns. Explicit newlines are
+// paragraph breaks: each input line yields at least one output line, so a
+// blank input line yields one empty string element. Words longer than the
+// width are hard-broken. Output lines never contain "\n".
+pub wrap := fn(text, width) {
+    t := as_str(text)
+    w := num(width, 80)
+    if (w < 1) {
+        w = 1
+    }
+    out := []
+    paras := str.split(t, "\n")
+    for (p := 0; p < len(paras); p += 1) {
+        sub := wrap_para(paras[p], w)
+        for (q := 0; q < len(sub); q += 1) {
+            out = arr.push(out, sub[q])
+        }
+    }
+    return out
+}
+
+// --------------------------------------------------------------------------
+// theme
+// --------------------------------------------------------------------------
+
+// theme returns the ANSI prefix sequences used across the TUI (contract
+// §1). Values carry no trailing reset.
+pub theme := fn() {
+    return {
+        "reset": "\x1b[0m",
+        "bold": "\x1b[1m",
+        "dim": "\x1b[2m",
+        "red": "\x1b[31m",
+        "green": "\x1b[32m",
+        "yellow": "\x1b[33m",
+        "blue": "\x1b[34m",
+        "magenta": "\x1b[35m",
+        "cyan": "\x1b[36m",
+        "gray": "\x1b[90m"
+    }
+}
+
+// --------------------------------------------------------------------------
+// inline markdown styling
+// --------------------------------------------------------------------------
+
+// inline_at applies inline markdown styling: `code` (cyan), **bold**
+// (bold), [text](url) -> text. Unclosed or malformed markers stay literal.
+// Depth is bounded so pathological nesting cannot blow the stack.
+inline_at := fn(t, th, depth) {
+    if (depth > 8) {
+        return t
+    }
+    n := len(t)
+    parts := []
+    i := 0
+    run := 0
+    loop {
+        if (i >= n) {
+            break
+        }
+        c := str.slice(t, i, i + 1)
+        if (c == "`") {
+            rel := str.index_of(str.slice(t, i + 1, n), "`")
+            if (rel >= 0) {
+                code_txt := str.slice(t, i + 1, i + 1 + rel)
+                if (i > run) {
+                    parts = arr.push(parts, str.slice(t, run, i))
+                }
+                parts = arr.push(parts, th_get(th, "cyan") + code_txt + th_get(th, "reset"))
+                i = i + 1 + rel + 1
+                run = i
+                continue
+            }
+        }
+        if (c == "*") {
+            if (str.slice(t, i, i + 2) == "**") {
+                rel := str.index_of(str.slice(t, i + 2, n), "**")
+                if (rel >= 0) {
+                    inner := str.slice(t, i + 2, i + 2 + rel)
+                    if (i > run) {
+                        parts = arr.push(parts, str.slice(t, run, i))
+                    }
+                    parts = arr.push(parts, th_get(th, "bold") + inline_at(inner, th, depth + 1) + th_get(th, "reset"))
+                    i = i + 2 + rel + 2
+                    run = i
+                    continue
+                }
+            }
+        }
+        if (c == "[") {
+            rel := str.index_of(str.slice(t, i + 1, n), "]")
+            if (rel >= 0) {
+                cb := i + 1 + rel
+                if (str.slice(t, cb + 1, cb + 2) == "(") {
+                    prel := str.index_of(str.slice(t, cb + 2, n), ")")
+                    if (prel >= 0) {
+                        label := str.slice(t, i + 1, cb)
+                        if (i > run) {
+                            parts = arr.push(parts, str.slice(t, run, i))
+                        }
+                        parts = arr.push(parts, inline_at(label, th, depth + 1))
+                        i = cb + 2 + prel + 1
+                        run = i
+                        continue
+                    }
+                }
+            }
+        }
+        i += 1
+    }
+    if (run < n) {
+        parts = arr.push(parts, str.slice(t, run, n))
+    }
+    return str.join(parts, "")
+}
+
+// inline is inline_at without the depth parameter.
+inline := fn(t, th) {
+    return inline_at(t, th, 0)
+}
+
+// heading_level counts leading '#' (1..6) when hl is a heading line (the
+// hash run must be followed by a space, tab or end of line). 0 otherwise.
+heading_level := fn(hl) {
+    lvl := 0
+    loop {
+        if (lvl >= 6) {
+            break
+        }
+        if (lvl >= len(hl)) {
+            break
+        }
+        if (str.slice(hl, lvl, lvl + 1) != "#") {
+            break
+        }
+        lvl += 1
+    }
+    if (lvl == 0) {
+        return 0
+    }
+    if (lvl < len(hl)) {
+        nxt := str.slice(hl, lvl, lvl + 1)
+        if (nxt != " " && nxt != "\t") {
+            return 0
+        }
+    }
+    return lvl
+}
+
+// list_info classifies a trimmed line: ["bullet", "• ", content] for
+// "- "/"* ", ["number", "N. ", content] for ordered items, otherwise
+// ["", "", ""].
+list_info := fn(hl) {
+    if (str.starts_with(hl, "- ") || str.starts_with(hl, "* ")) {
+        return ["bullet", "• ", str.trim(str.slice(hl, 2, len(hl)))]
+    }
+    d := 0
+    loop {
+        if (d >= len(hl)) {
+            break
+        }
+        if (d >= 9) {
+            break
+        }
+        o := __ord(str.slice(hl, d, d + 1))
+        if (o < 48 || o > 57) {
+            break
+        }
+        d += 1
+    }
+    if (d >= 1) {
+        if (d + 2 <= len(hl)) {
+            if (str.slice(hl, d, d + 1) == "." && str.slice(hl, d + 1, d + 2) == " ") {
+                return ["number", str.slice(hl, 0, d + 1) + " ", str.trim(str.slice(hl, d + 2, len(hl)))]
+            }
+        }
+    }
+    return ["", "", ""]
+}
+
+// markdown renders markdown-ish assistant text to ANSI lines no wider than
+// `width`. Headings (#..######) lose their hashes and render bold;
+// "- "/"* " bullets render as a cyan "•" with two-space continuation
+// indent; "N. " markers are kept as-is; fence markers stay visible but
+// dim (the full marker line, e.g. "```go", is kept); fence content is dim
+// and never inlined-styled; `code` is cyan; **bold** is bold;
+// [text](url) keeps only text. Blank lines are preserved. Malformed
+// markers stay literal.
+pub markdown := fn(text, width) {
+    t := as_str(text)
+    w := num(width, 80)
+    if (w < 1) {
+        w = 1
+    }
+    th := theme()
+    out := []
+    lines := str.split(t, "\n")
+    in_fence := false
+    for (i := 0; i < len(lines); i += 1) {
+        line := lines[i]
+        hl := str.trim(line)
+        if (in_fence) {
+            if (str.starts_with(hl, "```")) {
+                in_fence = false
+                out = arr.push(out, th_get(th, "dim") + cut(hl, w) + th_get(th, "reset"))
+            } else {
+                chunks := hard_chunks(line, w)
+                for (c := 0; c < len(chunks); c += 1) {
+                    out = arr.push(out, th_get(th, "dim") + chunks[c] + th_get(th, "reset"))
+                }
+            }
+            continue
+        }
+        if (str.starts_with(hl, "```")) {
+            in_fence = true
+            out = arr.push(out, th_get(th, "dim") + cut(hl, w) + th_get(th, "reset"))
+            continue
+        }
+        if (hl == "") {
+            out = arr.push(out, "")
+            continue
+        }
+        lvl := heading_level(hl)
+        if (lvl >= 1) {
+            htxt := str.trim(str.slice(hl, lvl, len(hl)))
+            body := wrap(inline(htxt, th), w)
+            for (j := 0; j < len(body); j += 1) {
+                out = arr.push(out, th_get(th, "bold") + body[j] + th_get(th, "reset"))
+            }
+            continue
+        }
+        li := list_info(hl)
+        if (li[0] == "bullet") {
+            body := wrap(inline(li[2], th), maxi(w - 2, 1))
+            for (j := 0; j < len(body); j += 1) {
+                if (j == 0) {
+                    out = arr.push(out, th_get(th, "cyan") + "• " + th_get(th, "reset") + body[j])
+                } else {
+                    out = arr.push(out, "  " + body[j])
+                }
+            }
+            continue
+        }
+        if (li[0] == "number") {
+            mw := display_width(li[1])
+            body := wrap(inline(li[2], th), maxi(w - mw, 1))
+            indent := str.repeat(" ", mw)
+            for (j := 0; j < len(body); j += 1) {
+                if (j == 0) {
+                    out = arr.push(out, li[1] + body[j])
+                } else {
+                    out = arr.push(out, indent + body[j])
+                }
+            }
+            continue
+        }
+        body := wrap(inline(hl, th), w)
+        for (j := 0; j < len(body); j += 1) {
+            out = arr.push(out, body[j])
+        }
+    }
+    return out
+}
+
+// --------------------------------------------------------------------------
+// width helpers
+// --------------------------------------------------------------------------
+
+// pad truncates s to `width` columns (dropping whole characters) and then
+// pads with spaces so the result measures exactly `width` columns.
+pub pad := fn(s, width) {
+    t := as_str(s)
+    w := num(width, 80)
+    if (w < 0) {
+        w = 0
+    }
+    cw := display_width(t)
+    if (cw > w) {
+        t = cut(t, w)
+        cw = display_width(t)
+    }
+    if (cw < w) {
+        t += str.repeat(" ", w - cw)
+    }
+    return t
+}
+
+// truncate shortens s to at most `cols` display columns, appending the
+// marker (default "…") inside that budget. When even the marker cannot
+// fit, the marker is dropped and s is hard-cut. A reset is appended when
+// the input carried ANSI so color cannot leak past the cut.
+pub truncate := fn(s, cols, marker) {
+    t := as_str(s)
+    c := num(cols, 80)
+    if (c < 0) {
+        c = 0
+    }
+    mk := marker
+    if (mk == null) {
+        mk = "…"
+    }
+    mk = as_str(mk)
+    if (display_width(t) <= c) {
+        return t
+    }
+    mw := display_width(mk)
+    budget := c - mw
+    out := ""
+    if (budget >= 0) {
+        out = cut(t, budget) + mk
+    } else {
+        out = cut(t, c)
+    }
+    if (has_ansi(t)) {
+        out += "\x1b[0m"
+    }
+    return out
+}
+
+// diff renders apply_patch text: "*** " lines bold, "@@" cyan, "+" green,
+// "-" red, everything else default. Lines longer than `width` are hard-
+// wrapped with a two-space continuation indent; content and relative
+// indentation are preserved byte-for-byte.
+pub diff := fn(patch_text, width) {
+    t := as_str(patch_text)
+    w := num(width, 80)
+    if (w < 1) {
+        w = 1
+    }
+    th := theme()
+    out := []
+    lines := str.split(t, "\n")
+    for (i := 0; i < len(lines); i += 1) {
+        line := lines[i]
+        col := ""
+        if (str.starts_with(line, "*** ")) {
+            col = th_get(th, "bold")
+        } else if (str.starts_with(line, "@@")) {
+            col = th_get(th, "cyan")
+        } else if (str.starts_with(line, "+")) {
+            col = th_get(th, "green")
+        } else if (str.starts_with(line, "-")) {
+            col = th_get(th, "red")
+        }
+        if (col == "" && display_width(line) <= w) {
+            out = arr.push(out, line)
+            continue
+        }
+        chunks := hard_chunks(line, w)
+        for (j := 0; j < len(chunks); j += 1) {
+            seg := chunks[j]
+            if (j > 0) {
+                seg = "  " + seg
+            }
+            if (col != "") {
+                out = arr.push(out, col + seg + th_get(th, "reset"))
+            } else {
+                out = arr.push(out, seg)
+            }
+        }
+    }
+    return out
+}
+
+// --------------------------------------------------------------------------
+// transcript cells
+// --------------------------------------------------------------------------
+
+// user_lines renders a user message: first line bold "> " + text,
+// continuations indented two spaces.
+user_lines := fn(txt, w, th) {
+    body := wrap(txt, maxi(w - 2, 1))
+    out := []
+    for (i := 0; i < len(body); i += 1) {
+        if (i == 0) {
+            out = arr.push(out, th_get(th, "bold") + "> " + body[i] + th_get(th, "reset"))
+        } else {
+            out = arr.push(out, "  " + body[i])
+        }
+    }
+    return out
+}
+
+// tool_lines renders a tool call cell. The header marker is colored
+// (yellow running / green ok / red error). "running" adds a dim
+// "    running…" row. A non-empty result shows the first 6 wrapped lines
+// (collapsed) plus dim "    … (+N lines)", or up to 60 lines (expanded)
+// plus dim "    … (truncated)".
+tool_lines := fn(cell, w, th) {
+    name := as_str(cell["name"])
+    args := as_str(cell["args"])
+    status := as_str(cell["status"])
+    expanded := cell["expanded"] == true
+    marker := "•"
+    col := th_get(th, "yellow")
+    if (status == "ok") {
+        marker = "✓"
+        col = th_get(th, "green")
+    } else if (status == "error") {
+        marker = "✗"
+        col = th_get(th, "red")
+    }
+    head := "  " + col + marker + th_get(th, "reset") + " " + name + "(" + args + ")"
+    out := []
+    out = arr.push(out, truncate(head, w, ""))
+    if (status == "running") {
+        out = arr.push(out, th_get(th, "dim") + "    running…" + th_get(th, "reset"))
+        return out
+    }
+    res := cell["result"]
+    if (res == null) {
+        return out
+    }
+    txt := as_str(res)
+    if (txt == "") {
+        return out
+    }
+    wrapped := wrap(txt, maxi(w - 4, 1))
+    cap := 6
+    if (expanded) {
+        cap = 60
+    }
+    shown := len(wrapped)
+    if (shown > cap) {
+        shown = cap
+    }
+    for (i := 0; i < shown; i += 1) {
+        out = arr.push(out, "    " + wrapped[i])
+    }
+    if (len(wrapped) > cap) {
+        if (expanded) {
+            out = arr.push(out, th_get(th, "dim") + "    … (truncated)" + th_get(th, "reset"))
+        } else {
+            out = arr.push(out, th_get(th, "dim") + "    … (+" + string(len(wrapped) - cap) + " lines)" + th_get(th, "reset"))
+        }
+    }
+    return out
+}
+
+// note_lines renders dim "[note]" and red "[error]" status lines, wrapped
+// with an aligned continuation indent.
+note_lines := fn(txt, w, th, kind) {
+    label := "  [note] "
+    col := th_get(th, "dim")
+    if (kind == "error") {
+        label = "  [error] "
+        col = th_get(th, "red")
+    }
+    lw := len(label)
+    body := wrap(txt, maxi(w - lw, 1))
+    indent := str.repeat(" ", lw)
+    out := []
+    for (i := 0; i < len(body); i += 1) {
+        if (i == 0) {
+            out = arr.push(out, col + label + body[i] + th_get(th, "reset"))
+        } else {
+            out = arr.push(out, col + indent + body[i] + th_get(th, "reset"))
+        }
+    }
+    return out
+}
+
+// plan_lines renders plan steps: "◻" pending, "◼" in_progress, "✓"
+// completed (dim). Unknown/missing status counts as pending; malformed
+// step entries are skipped.
+plan_lines := fn(cell, w, th) {
+    steps := cell["steps"]
+    if (type(steps) != "ARRAY") {
+        return []
+    }
+    out := []
+    for (i := 0; i < len(steps); i += 1) {
+        st := steps[i]
+        if (type(st) != "HASH") {
+            continue
+        }
+        stat := as_str(st["status"])
+        glyph := "◻"
+        if (stat == "in_progress") {
+            glyph = "◼"
+        } else if (stat == "completed") {
+            glyph = "✓"
+        }
+        body := wrap(as_str(st["step"]), maxi(w - 4, 1))
+        for (j := 0; j < len(body); j += 1) {
+            pre := "    "
+            if (j == 0) {
+                pre = "  " + glyph + " "
+            }
+            line := pre + body[j]
+            if (stat == "completed") {
+                line = th_get(th, "dim") + line + th_get(th, "reset")
+            }
+            out = arr.push(out, line)
+        }
+    }
+    return out
+}
+
+// cell_lines renders one transcript cell (contract §1) to ANSI lines.
+// Never crashes on null/missing fields: they act as empty/false.
+pub cell_lines := fn(cell, width, th) {
+    w := num(width, 80)
+    if (w < 1) {
+        w = 1
+    }
+    t := th
+    if (type(t) != "HASH") {
+        t = theme()
+    }
+    if (type(cell) != "HASH") {
+        return []
+    }
+    kind := as_str(cell["kind"])
+    if (kind == "banner") {
+        txt := as_str(cell["text"])
+        if (txt == "") {
+            return []
+        }
+        return str.split(txt, "\n")
+    }
+    if (kind == "user") {
+        return user_lines(as_str(cell["text"]), w, t)
+    }
+    if (kind == "assistant") {
+        return markdown(as_str(cell["text"]), w)
+    }
+    if (kind == "tool") {
+        return tool_lines(cell, w, t)
+    }
+    if (kind == "note") {
+        return note_lines(as_str(cell["text"]), w, t, "note")
+    }
+    if (kind == "error") {
+        return note_lines(as_str(cell["text"]), w, t, "error")
+    }
+    if (kind == "plan") {
+        return plan_lines(cell, w, t)
+    }
+    return []
+}
+
+// banner_lines returns the boot banner: a small box-drawing "ZODEX" plate
+// (4 lines with subtitle when width permits, 3 lines without, a single
+// "ZODEX" line below 18 columns). Never wider than 60 columns, never more
+// than 7 lines, no emoji.
+pub banner_lines := fn(width) {
+    w := num(width, 60)
+    if (w > 60) {
+        w = 60
+    }
+    if (w < 18) {
+        return [pad("ZODEX", w)]
+    }
+    th := theme()
+    inner := w - 4
+    padw := inner - 2
+    out := []
+    top := "  ╔" + str.repeat("═", inner) + "╗"
+    mid := "  ║ " + pad("Z O D E X", padw) + " ║"
+    bot := "  ╚" + str.repeat("═", inner) + "╝"
+    out = arr.push(out, th_get(th, "dim") + top + th_get(th, "reset"))
+    out = arr.push(out, th_get(th, "bold") + mid + th_get(th, "reset"))
+    if (w >= 44) {
+        sub := "  ║ " + pad("codex-style coding agent", padw) + " ║"
+        out = arr.push(out, th_get(th, "dim") + sub + th_get(th, "reset"))
+    }
+    out = arr.push(out, th_get(th, "dim") + bot + th_get(th, "reset"))
+    return out
+}
+
+// help_lines renders the command table from [label, hint] pairs: labels
+// left-aligned, alignment capped at 24 columns, hints wrapped with an
+// aligned continuation indent. Rows without a hint render as "  label".
+pub help_lines := fn(width, command_rows) {
+    w := num(width, 80)
+    if (w < 1) {
+        w = 1
+    }
+    if (type(command_rows) != "ARRAY") {
+        return []
+    }
+    rows := []
+    maxl := 0
+    for (i := 0; i < len(command_rows); i += 1) {
+        r := command_rows[i]
+        if (type(r) != "ARRAY") {
+            continue
+        }
+        if (len(r) == 0) {
+            continue
+        }
+        label := as_str(r[0])
+        hint := ""
+        if (len(r) >= 2) {
+            hint = as_str(r[1])
+        }
+        lw := display_width(label)
+        if (lw > maxl) {
+            maxl = lw
+        }
+        rows = arr.push(rows, [label, hint])
+    }
+    al := maxl
+    if (al > 24) {
+        al = 24
+    }
+    out := []
+    for (i := 0; i < len(rows); i += 1) {
+        label := rows[i][0]
+        hint := rows[i][1]
+        if (hint == "") {
+            out = arr.push(out, "  " + label)
+            continue
+        }
+        prew := 2 + al + 2
+        cw := w - prew
+        if (cw < 1) {
+            cw = 1
+        }
+        body := wrap(hint, cw)
+        area := pad(label, al)
+        indent := str.repeat(" ", prew)
+        for (j := 0; j < len(body); j += 1) {
+            if (j == 0) {
+                out = arr.push(out, "  " + area + "  " + body[j])
+            } else {
+                out = arr.push(out, indent + body[j])
+            }
+        }
+    }
+    return out
+}

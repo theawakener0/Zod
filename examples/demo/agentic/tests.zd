@@ -1,0 +1,272 @@
+// tests.zd — Zodex test aggregator (pure module checks + UI self-test).
+//
+// Run:
+//   /tmp/opencode/zod_next examples/demo/agentic/tests.zd
+//   ZODEX_HOME=/tmp/zodex_tests /tmp/opencode/zod_next examples/demo/agentic/tests.zd
+//
+// Session/history disk checks are skipped unless ZODEX_HOME is set, so a run
+// never touches a real ~/.zodex. The mock-based client/agent suite lives in
+// _check_agent.zd (needs the mock server on 127.0.0.1:8791).
+//
+// Exit code: 0 when every check passes, 1 otherwise.
+
+import "harness_lib.zd" as hz
+import "approvals.zd" as approvals
+import "apply_patch.zd" as apply_patch
+import "cli.zd" as cli
+import "coding_tools.zd" as coding_tools
+import "config.zd" as config
+import "fx.zd" as fx
+import "history.zd" as history
+import "messages.zd" as messages
+import "pi.zd" as pi
+import "render.zd" as render
+import "session.zd" as session
+import "tools.zd" as tools
+import "std/array" as arr
+import "std/fs" as fs
+import "std/json" as json
+import "std/os" as os
+import "std/str" as str
+import "std/time" as time
+import "std/fmt" as fmt
+
+res := {"pass": 0, "fail": 0}
+
+check := fn(name, cond) {
+    if (cond == true) {
+        res["pass"] = res["pass"] + 1
+        fmt.println("PASS " + name)
+    } else {
+        res["fail"] = res["fail"] + 1
+        fmt.println("FAIL " + name)
+    }
+    return null
+}
+
+// ---------------------------------------------------------------------------
+// 1. harness UI self-test (typing, keys, picker, draw, mentions)
+// ---------------------------------------------------------------------------
+
+ui_res := hz.self_test_ui()
+ui_lines := ui_res["lines"]
+for (i := 0; i < len(ui_lines); i += 1) {
+    fmt.println(ui_lines[i])
+}
+res["pass"] = res["pass"] + ui_res["pass"]
+res["fail"] = res["fail"] + ui_res["fail"]
+
+// ---------------------------------------------------------------------------
+// 2. cli.parse (flags, exec prompt tail, order independence)
+// ---------------------------------------------------------------------------
+
+a1 := cli.parse(["t.zd", "exec", "hi"])
+check("cli_exec_prompt", a1["mode"] == "exec" && a1["prompt"] == "hi")
+a2 := cli.parse(["t.zd", "--cwd", "/x", "exec", "hello world"])
+check("cli_cwd_before_exec", a2["cwd"] == "/x" && a2["mode"] == "exec" && a2["prompt"] == "hello world")
+a3 := cli.parse(["t.zd", "--model", "m1", "--approvals", "never", "exec", "x"])
+check("cli_model_approvals", a3["model"] == "m1" && a3["approvals"] == "never" && a3["prompt"] == "x")
+a4 := cli.parse(["t.zd", "--json", "exec", "p"])
+check("cli_json", a4["json"] == true && a4["mode"] == "exec")
+a5 := cli.parse(["t.zd", "--resume", "latest"])
+check("cli_resume", a5["resume"] == "latest")
+a6 := cli.parse(["t.zd", "--self-test"])
+check("cli_self_test", a6["mode"] == "self_test")
+a7 := cli.parse(["t.zd", "--nope", "-q"])
+check("cli_unknown", len(a7["unknown"]) == 2)
+check("cli_help_v", cli.parse(["t.zd", "--help"])["help"] == true && cli.parse(["t.zd", "-v"])["version"] == true)
+check("cli_version_string", str.contains(cli.version_string(), "zodex"))
+check("cli_usage_mentions_exec", str.contains(cli.usage(), "exec"))
+
+// ---------------------------------------------------------------------------
+// 3. config defaults + merge
+// ---------------------------------------------------------------------------
+
+cfg := config.defaults()
+check("config_defaults", cfg["model"] != null && cfg["base_url"] != null && cfg["approvals"] != null)
+merged := config.merge(cfg, {"model": "zzz"})
+check("config_merge_override", merged["model"] == "zzz" && merged["base_url"] == cfg["base_url"])
+
+// ---------------------------------------------------------------------------
+// 4. approvals: decide + wrap
+// ---------------------------------------------------------------------------
+
+pol_u := approvals.new_policy("untrusted", null)
+d1 := approvals.decide(pol_u, "read_file", "{}")
+check("approvals_readonly_allow", d1["action"] == "allow")
+d2 := approvals.decide(pol_u, "write_file", "{}")
+check("approvals_untrusted_ask", d2["action"] == "ask")
+d3 := approvals.decide(approvals.new_policy("never", null), "shell", "{}")
+check("approvals_never_deny", d3["action"] == "deny")
+d4 := approvals.decide(approvals.new_policy("on-failure", null), "shell", "{}")
+check("approvals_onfailure_allow", d4["action"] == "allow")
+d5 := approvals.decide(approvals.new_policy("untrusted", ["write_file"]), "write_file", "{}")
+check("approvals_rule_allow", d5["action"] == "allow")
+check("approvals_describe", str.contains(approvals.describe(pol_u), "untrusted"))
+check("approvals_readonly_names", arr.contains(approvals.read_only_names(), "read_file"))
+
+// ---------------------------------------------------------------------------
+// 5. sandbox guard + tool wrappers (real tools against a temp dir)
+// ---------------------------------------------------------------------------
+
+TMP := "/tmp/opencode/_zodex_tests_" + string(time.now_ms())
+mk := try(fs.mkdir(TMP))
+w1 := try(fs.write_file(TMP + "/hello.txt", "hello-approvals"))
+
+check("sandbox_valid", coding_tools.valid_sandbox("workspace-write") == true && coding_tools.valid_sandbox("nope") == false)
+check("sandbox_default_fallback", coding_tools.make_guard("nope")["sandbox"] == "workspace-write")
+
+guard := coding_tools.make_guard("workspace-write")
+plan_state := coding_tools.make_plan_state()
+base := coding_tools.make_coding_tools(TMP, {"guard": guard, "plan_state": plan_state})
+by := tools.index_by_name(base)
+
+rd1 := tools.call_tool(by, "read_file", json.stringify({"path": "hello.txt"}))
+check("tool_read_file", str.contains(rd1, "hello-approvals"))
+
+sh1 := tools.call_tool(by, "shell", json.stringify({"command": "echo zodex-test"}))
+check("tool_shell_echo", str.contains(sh1, "zodex-test"))
+
+rpl := tools.call_tool(by, "update_plan", json.stringify({"steps": [{"step": "a", "status": "pending"}, {"step": "b", "status": "pending"}]}))
+check("tool_update_plan", !str.starts_with(rpl, "Error"))
+check("plan_state_shared", len(plan_state["steps"]) == 2)
+
+apt := tools.call_tool(by, "apply_patch", json.stringify({"patch": "*** Begin Patch\n*** Add File: patched.txt\n+patched-line\n*** End Patch\n"}))
+check("tool_apply_patch", !str.starts_with(apt, "Error"))
+rf := try(fs.read_file(TMP + "/patched.txt"))
+check("tool_apply_patch_wrote", rf[0] && str.contains(string(rf[1]), "patched-line"))
+
+wrap_pol := approvals.new_policy("untrusted", null)
+deny_ask := fn(req) { return "deny" }
+wrapped_d := approvals.wrap(base, wrap_pol, deny_ask)
+by_d := tools.index_by_name(wrapped_d)
+rw := tools.call_tool(by_d, "write_file", json.stringify({"path": "new1.txt", "content": "x"}))
+check("wrap_deny_write", str.starts_with(rw, "Error") && str.contains(rw, "denied"))
+rr := tools.call_tool(by_d, "read_file", json.stringify({"path": "hello.txt"}))
+check("wrap_readonly_pass", str.contains(rr, "hello-approvals"))
+
+allow_ask := fn(req) { return "allow" }
+wrapped_a := approvals.wrap(base, approvals.new_policy("untrusted", null), allow_ask)
+by_a := tools.index_by_name(wrapped_a)
+ra := tools.call_tool(by_a, "write_file", json.stringify({"path": "new1.txt", "content": "made-it"}))
+check("wrap_allow_write", !str.starts_with(ra, "Error"))
+ra2 := tools.call_tool(by_a, "read_file", json.stringify({"path": "new1.txt"}))
+check("wrap_wrote_file", str.contains(ra2, "made-it"))
+
+base_ro := coding_tools.make_coding_tools(TMP, {"guard": coding_tools.make_guard("read-only"), "plan_state": coding_tools.make_plan_state()})
+by_ro := tools.index_by_name(base_ro)
+rro := tools.call_tool(by_ro, "write_file", json.stringify({"path": "nope.txt", "content": "x"}))
+check("sandbox_readonly_blocks", str.starts_with(rro, "Error"))
+rro2 := tools.call_tool(by_ro, "read_file", json.stringify({"path": "hello.txt"}))
+check("sandbox_readonly_reads", str.contains(rro2, "hello-approvals"))
+
+// ---------------------------------------------------------------------------
+// 6. apply_patch module
+// ---------------------------------------------------------------------------
+
+pp := apply_patch.parse_patch("*** Begin Patch\n*** Delete File: patched.txt\n*** End Patch\n")
+check("parse_patch_ok", pp["ok"] == true)
+bad := apply_patch.parse_patch("not a patch")
+check("parse_patch_bad", bad["ok"] == false)
+del := apply_patch.apply_text("*** Begin Patch\n*** Delete File: patched.txt\n*** End Patch\n", TMP)
+check("apply_text_delete", del["ok"] == true)
+ex := try(fs.exists(TMP + "/patched.txt"))
+check("apply_text_deleted_file", ex[0] && ex[1] != true)
+
+// ---------------------------------------------------------------------------
+// 7. session (lazy meta; disk checks gated on ZODEX_HOME)
+// ---------------------------------------------------------------------------
+
+sess1 := session.new_session(TMP, {"model": "test-model"})
+check("session_id_path", type(sess1["id"]) == "STRING" && str.ends_with(string(sess1["path"]), ".jsonl"))
+lazy := try(fs.exists(sess1["path"]))
+check("session_lazy_no_file", lazy[0] && lazy[1] != true)
+
+if (os.env_get("ZODEX_HOME") != null) {
+    rm1 := session.record_message(sess1, {"role": "user", "content": "hello session"})
+    ex2 := try(fs.exists(sess1["path"]))
+    check("session_written", ex2[0] && ex2[1] == true)
+    lm := session.load(sess1["path"])
+    check("session_load_ok", lm["ok"] == true && len(lm["messages"]) == 1)
+    check("session_meta", lm["meta"]["cwd"] == TMP && lm["meta"]["model"] == "test-model")
+    rows := session.list()
+    found := false
+    for (i := 0; i < len(rows); i += 1) {
+        if (string(rows[i]["id"]) == string(sess1["id"])) { found = true }
+    }
+    check("session_listed", found)
+    delf := try(fs.rm(sess1["path"]))
+} else {
+    fmt.println("SKIP session disk checks (set ZODEX_HOME=/tmp/zodex_tests to enable)")
+}
+
+// ---------------------------------------------------------------------------
+// 8. history
+// ---------------------------------------------------------------------------
+
+hist := history.load()
+check("history_load_array", type(hist) == "ARRAY")
+h1 := history.add(hist, "dup-line-xyz")
+h2 := history.add(h1, "dup-line-xyz")
+check("history_dedup", len(h2) == len(h1))
+h3 := history.add(h2, "other-line-xyz")
+check("history_add", len(h3) == len(h2) + 1)
+check("history_path", type(history.path()) == "STRING")
+
+// ---------------------------------------------------------------------------
+// 9. pi context loading
+// ---------------------------------------------------------------------------
+
+ctxdir := TMP + "/ctxproj"
+mk2 := try(fs.mkdir(ctxdir))
+cw := try(fs.write_file(ctxdir + "/AGENTS.md", "CTX-MARKER-123"))
+cf := pi.load_context(ctxdir)
+check("pi_load_context", str.contains(string(cf["system_extra"]), "CTX-MARKER-123"))
+check("pi_context_sources", len(cf["sources"]) >= 1)
+bsys := pi.build_system("BASE-SYS", cf["system_extra"])
+check("pi_build_system", str.contains(bsys, "BASE-SYS") && str.contains(bsys, "CTX-MARKER-123"))
+
+// ---------------------------------------------------------------------------
+// 10. messages
+// ---------------------------------------------------------------------------
+
+conv := messages.new_conversation("SYS")
+cms := conv["messages"]
+c0 := cms[0]
+check("msg_conversation_system", c0["role"] == "system")
+conv2 := messages.new_conversation("s2")
+addf := conv2["add"]
+lastf := conv2["last"]
+ignored_a := addf(conv2, "user", "hi", null)
+lastm := lastf(conv2)
+check("msg_add_last", lastm["content"] == "hi")
+
+// ---------------------------------------------------------------------------
+// 11. render / fx / tools smoke
+// ---------------------------------------------------------------------------
+
+check("render_display_width", render.display_width("hello") == 5)
+check("render_display_width_ansi", render.display_width("\x1b[31mhi\x1b[0m") == 2)
+check("render_pad_width", render.display_width(render.pad("ab", 5)) == 5)
+check("render_truncate_width", render.display_width(render.truncate("abcdefghij", 5, "…")) <= 5)
+bl := render.banner_lines(40)
+check("render_banner", type(bl) == "ARRAY" && len(bl) > 0)
+check("fx_working_row", str.contains(fx.working_row(1), "Working") && str.contains(fx.working_row(1), "esc to interrupt"))
+check("fx_interrupt_marker", len(fx.interrupt_marker()) > 0)
+
+t1 := tools.make_tool("t1", "d", {"type": "object"}, fn(args) { return "ok" })
+by2 := tools.index_by_name([t1])
+check("tools_index_by_name", by2["t1"] != null)
+r_bad := tools.call_tool(by2, "nope", "{}")
+check("tools_unknown_error", str.starts_with(r_bad, "Error"))
+oai := tools.to_openai([t1])
+o0 := oai[0]
+check("tools_to_openai", o0["type"] == "function" && o0["function"]["name"] == "t1")
+
+// ---------------------------------------------------------------------------
+// summary
+// ---------------------------------------------------------------------------
+
+fmt.println("SUMMARY pass=" + string(res["pass"]) + " fail=" + string(res["fail"]))
+if (res["fail"] > 0) { os.exit(1) }
+os.exit(0)

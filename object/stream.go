@@ -16,13 +16,15 @@ import (
 // The fetching goroutine appends to textPending/toolPending; script code
 // drains them via __stream_poll. All fields are guarded by mu.
 type sseStream struct {
-	mu          sync.Mutex
-	textPending strings.Builder
-	toolPending []Object
-	done        bool
-	errMsg      string
-	cancel      context.CancelFunc
-	manual      bool
+	mu           sync.Mutex
+	textPending  strings.Builder
+	toolPending  []Object
+	done         bool
+	errMsg       string
+	cancel       context.CancelFunc
+	manual       bool
+	usage        *sseUsage
+	finishReason string
 }
 
 // sseRegistry maps integer handles to live streams.
@@ -67,9 +69,9 @@ func makeToolCallHash(index int64, id, name, args string) *Hash {
 	return &Hash{Pairs: pairs, Order: order}
 }
 
-func makePollHash(text string, tools []Object, done bool, errMsg string) *Hash {
-	pairs := make(map[HashKey]HashPair, 4)
-	order := make([]HashKey, 0, 4)
+func makePollHash(text string, tools []Object, done bool, errMsg string, usage *sseUsage, finishReason string) *Hash {
+	pairs := make(map[HashKey]HashPair, 6)
+	order := make([]HashKey, 0, 6)
 	add := func(k string, v Object) {
 		ko := &String{Value: k}
 		hk := ko.HashKey()
@@ -87,10 +89,16 @@ func makePollHash(text string, tools []Object, done bool, errMsg string) *Hash {
 	if errMsg != "" {
 		errObj = &String{Value: errMsg}
 	}
+	var finishObj Object = NULL
+	if finishReason != "" {
+		finishObj = &String{Value: finishReason}
+	}
 	add("text", &String{Value: text})
 	add("tools", &Array{Elements: tools})
 	add("done", doneObj)
 	add("error", errObj)
+	add("usage", makeUsageHash(usage))
+	add("finish_reason", finishObj)
 	return &Hash{Pairs: pairs, Order: order}
 }
 
@@ -104,13 +112,43 @@ type sseToolCall struct {
 	} `json:"function"`
 }
 
+// sseUsage mirrors the OpenAI "usage" object that streaming providers emit
+// in the final chunk when stream_options.include_usage is requested.
+type sseUsage struct {
+	PromptTokens     int64 `json:"prompt_tokens"`
+	CompletionTokens int64 `json:"completion_tokens"`
+	TotalTokens      int64 `json:"total_tokens"`
+}
+
 type sseChunk struct {
 	Choices []struct {
 		Delta struct {
 			Content   string        `json:"content"`
 			ToolCalls []sseToolCall `json:"tool_calls"`
 		} `json:"delta"`
+		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
+	Usage *sseUsage `json:"usage"`
+}
+
+// makeUsageHash converts a parsed usage object into a Zod hash, or NULL when
+// the stream carried no usage payload.
+func makeUsageHash(u *sseUsage) Object {
+	if u == nil {
+		return NULL
+	}
+	pairs := make(map[HashKey]HashPair, 3)
+	order := make([]HashKey, 0, 3)
+	add := func(k string, v Object) {
+		ko := &String{Value: k}
+		hk := ko.HashKey()
+		pairs[hk] = HashPair{Key: ko, Value: v}
+		order = append(order, hk)
+	}
+	add("prompt_tokens", NewInteger(u.PromptTokens))
+	add("completion_tokens", NewInteger(u.CompletionTokens))
+	add("total_tokens", NewInteger(u.TotalTokens))
+	return &Hash{Pairs: pairs, Order: order}
 }
 
 func runSSEStream(st *sseStream, client *http.Client, req *http.Request, url string, ctx context.Context) {
@@ -172,7 +210,13 @@ func runSSEStream(st *sseStream, client *http.Client, req *http.Request, url str
 		}
 		st.mu.Lock()
 		overflow := false
+		if chunk.Usage != nil {
+			st.usage = chunk.Usage
+		}
 		for _, ch := range chunk.Choices {
+			if ch.FinishReason != "" {
+				st.finishReason = ch.FinishReason
+			}
 			if ch.Delta.Content != "" {
 				if totalBytes+int64(len(ch.Delta.Content)) > maxHTTPBody {
 					overflow = true
@@ -287,8 +331,10 @@ func streamPoll(args ...Object) Object {
 	st.toolPending = nil
 	done := st.done
 	errMsg := st.errMsg
+	usage := st.usage
+	finishReason := st.finishReason
 	st.mu.Unlock()
-	return makePollHash(text, tools, done, errMsg)
+	return makePollHash(text, tools, done, errMsg, usage, finishReason)
 }
 
 func streamCancel(args ...Object) Object {

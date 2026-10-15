@@ -29,12 +29,12 @@ read_capped := fn(path) {
     return content
 }
 
-// 1. Minimal default toolset: exactly [read_file, write_file, edit, bash],
+// 1. Minimal default toolset: exactly [read_file, write_file, edit, shell],
 // picked by NAME (never by position — upstream order may change).
 pub default_tools := fn(cwd, opts) {
     all := coding_tools.make_coding_tools(cwd, opts)
     by := tools.index_by_name(all)
-    return [by["read_file"], by["write_file"], by["edit"], by["bash"]]
+    return [by["read_file"], by["write_file"], by["edit"], by["shell"]]
 }
 
 // Full coding toolset (power users / subagents). Passes opts through.
@@ -42,33 +42,43 @@ pub power_pack := fn(cwd, opts) {
     return coding_tools.make_coding_tools(cwd, opts)
 }
 
-// 2. Load context files for the agent system prompt. Missing = skip.
+// 2. Load AGENTS.md context the Codex way: global files first
+// (~/.zodex/AGENTS.md, legacy ~/.pi/agent/AGENTS.md), then AGENTS.md
+// files from the topmost ancestor directory (up to 5 levels up) down to
+// cwd, then legacy SYSTEM.md in cwd. Missing files are skipped.
 // Returns {"system_extra": STRING, "sources": ARRAY of loaded paths}.
 pub load_context := fn(cwd) {
-    extra := ""
-    sources := []
-    p1 := cwd + "/AGENTS.md"
-    c1 := read_capped(p1)
-    if (c1 != null) {
-        extra = extra + "\n\n# " + p1 + "\n" + c1
-        sources = arr.push(sources, p1)
-    }
-    p2 := cwd + "/SYSTEM.md"
-    c2 := read_capped(p2)
-    if (c2 != null) {
-        extra = extra + "\n\n# " + p2 + "\n" + c2
-        sources = arr.push(sources, p2)
+    acc := {"extra": "", "sources": []}
+    add_path := fn(p) {
+        c := read_capped(p)
+        if (c != null) {
+            acc["extra"] = acc["extra"] + "\n\n# " + p + "\n" + c
+            acc["sources"] = arr.push(acc["sources"], p)
+        }
+        return null
     }
     home := os.env_get("HOME")
     if (home != null && type(home) == "STRING" && home != "") {
-        p3 := home + "/.pi/agent/AGENTS.md"
-        c3 := read_capped(p3)
-        if (c3 != null) {
-            extra = extra + "\n\n# " + p3 + "\n" + c3
-            sources = arr.push(sources, p3)
-        }
+        ignored := add_path(home + "/.zodex/AGENTS.md")
+        ignored = add_path(home + "/.pi/agent/AGENTS.md")
     }
-    return {"system_extra": extra, "sources": sources}
+    parents := []
+    cur := cwd
+    for (i := 0; i < 5; i += 1) {
+        if (cur == null || cur == "" || cur == "/") { break }
+        parents = arr.push(parents, cur)
+        raw := str.split(cur, "/")
+        if (len(raw) <= 1) { break }
+        nxt := str.join(arr.slice(raw, 0, len(raw) - 1), "/")
+        if (nxt == "" || nxt == cur) { break }
+        cur = nxt
+    }
+    ordered := arr.reverse(parents)
+    for (i := 0; i < len(ordered); i += 1) {
+        ignored2 := add_path(ordered[i] + "/AGENTS.md")
+    }
+    ignored3 := add_path(cwd + "/SYSTEM.md")
+    return {"system_extra": acc["extra"], "sources": acc["sources"]}
 }
 
 // 3. Combine base system prompt with loaded context (extra "" -> base).

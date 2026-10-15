@@ -1,0 +1,82 @@
+// history.zd — input history (one JSON string per line).
+//
+// File: <root_dir>/history.jsonl. All fs/json access is guarded; nothing here
+// prints or halts.
+
+import "config.zd" as config
+import "std/fs" as fs
+import "std/json" as json
+import "std/str" as str
+import "std/array" as arr
+
+pub path := fn() {
+    return config.root_dir() + "/history.jsonl"
+}
+
+// Last 200 entries, oldest first; corrupt lines are skipped; [] on failure.
+pub load := fn() {
+    out := []
+    r := try(fs.read_file(path()))
+    if (!r[0] || type(r[1]) != "STRING") {
+        return out
+    }
+    lines := str.split(r[1], "\n")
+    for (i := 0; i < len(lines); i += 1) {
+        line := lines[i]
+        if (str.trim(line) == "") {
+            continue
+        }
+        p := try(json.parse(line))
+        if (!p[0] || type(p[1]) != "STRING") {
+            continue
+        }
+        out = arr.push(out, p[1])
+    }
+    if (len(out) > 200) {
+        out = arr.slice(out, len(out) - 200, len(out))
+    }
+    return out
+}
+
+// Append one entry; "" is a no-op that still succeeds.
+pub append := fn(line) {
+    if (type(line) != "STRING") {
+        return false
+    }
+    if (line == "") {
+        return true
+    }
+    m := try(fs.mkdir(config.root_dir()))
+    if (!m[0]) {
+        return false
+    }
+    r := try(fs.append_file(path(), json.stringify(line) + "\n"))
+    if (!r[0]) {
+        return false
+    }
+    return true
+}
+
+// New array: append line when non-empty and different from the last entry,
+// dropping the oldest entries beyond 200.
+pub add := fn(hist, line) {
+    out := []
+    if (type(hist) == "ARRAY") {
+        for (i := 0; i < len(hist); i += 1) {
+            out = arr.push(out, hist[i])
+        }
+    }
+    if (type(line) == "STRING" && line != "") {
+        lastv := null
+        if (len(out) > 0) {
+            lastv = out[len(out) - 1]
+        }
+        if (lastv == null || lastv != line) {
+            out = arr.push(out, line)
+        }
+    }
+    if (len(out) > 200) {
+        out = arr.slice(out, len(out) - 200, len(out))
+    }
+    return out
+}
