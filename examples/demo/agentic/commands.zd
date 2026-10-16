@@ -519,8 +519,16 @@ resume_run := fn(ctx, args) {
     return str.join(lines, "\n")
 }
 
+quit_run := fn(ctx, args) {
+    ui := ctx["ui"]
+    if (ui != null) {
+        ui["quit"] = true
+    }
+    return "bye"
+}
+
 pub builtin_names := fn() {
-    return ["/help", "/models", "/model", "/stats", "/status", "/clear", "/compact", "/btw", "/init", "/new", "/diff", "/review", "/resume", "/approvals", "/sandbox", "/tree"]
+    return ["/help", "/models", "/model", "/stats", "/status", "/clear", "/compact", "/btw", "/init", "/new", "/diff", "/review", "/resume", "/approvals", "/sandbox", "/tree", "/quit"]
 }
 
 pub all_commands := fn() {
@@ -540,6 +548,7 @@ pub all_commands := fn() {
         make_command("approvals", "get/set approvals: /approvals [mode]", approvals_run),
         make_command("sandbox", "get/set sandbox: /sandbox [mode]", sandbox_run),
         make_command("tree", "list/switch branches: /tree [checkout|branch <b>]", tree_run),
+        make_command("quit", "exit zodex (same as :q)", quit_run),
         make_command("!", "run shell: !<cmd>", bang_run)
     ]
     help_run := fn(ctx, args) {

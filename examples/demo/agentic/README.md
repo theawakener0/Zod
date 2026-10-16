@@ -32,34 +32,44 @@ The default provider is the HackClub AI proxy
 ./zod examples/demo/harness.zd exec "..." --json    # JSONL events (tool.start, tool.result, text, turn.completed)
 ./zod examples/demo/harness.zd --resume             # resume the latest session
 ./zod examples/demo/harness.zd --resume <id|latest> # same, explicit target
-./zod examples/demo/harness.zd --self-test          # 41-check UI self-test, exit 1 on failure
+./zod examples/demo/harness.zd --self-test          # 49-check UI self-test, exit 1 on failure
 ```
 
 Flags: `--model <id>`, `--approvals <mode>`, `--sandbox <mode>`, `--cwd <dir>`,
-`--json`, `--resume [id|latest]`, `--help`, `--version`.
+`--yolo` (alias `--dangerously-bypass-approvals-and-sandbox`), `--json`,
+`--resume [id|latest]`, `--help`, `--version`.
 
 When stdin is not a TTY the interactive mode degrades to a line REPL
 (streams to stdout, commands on `/`, shell on `!`; a blank line or EOF exits).
 In exec mode, approvals default to `on-failure` unless `--approvals` is given,
-so unattended runs do not hang on prompts.
+so unattended runs do not hang on prompts. `--yolo` sets approvals to `never`
+(never ask) and the sandbox to `danger-full-access`, prints a warning and
+marks the TUI status line with a red `YOLO` badge.
 
 ## Keys (TUI)
 
 | Key | Action |
 | --- | --- |
-| `enter` | send the turn |
-| `ctrl-j` | insert a newline (multiline composer) |
+| `enter` | send the turn; while a turn is running: queue the message |
+| `ctrl-j` | insert a newline (multiline composer, up to 10 visible lines) |
 | `esc` | clear the composer; during a turn: interrupt |
 | `ctrl-c` | clear; when empty: quit; during a turn: interrupt |
 | `ctrl-d` | quit when the composer is empty |
+| `:q` / `:quit` | quit (`:q!` cancels the running turn and quits) |
 | `ctrl-l` | clear the transcript |
 | `ctrl-u` / `ctrl-w` / `ctrl-k` | clear line / delete word / kill to end |
 | `ctrl-a` / `ctrl-e` | home / end |
 | `left` / `right` | move the cursor |
 | `up` / `down` | history (and transcript scroll with `pgup`/`pgdn`) |
 | `tab` | complete `/command` names |
-| approval overlay | `y` allow, `a` allow for session, `n`/`esc`/`enter` deny, `v` expand args |
+| approval overlay | `y` allow once, `a` allow for session, `n`/`esc`/`enter` deny, `v` expand args |
 | model picker (`/model` with no argument) | up/down + enter, esc cancels |
+
+The composer is borderless (`›` prompt with a dim placeholder), a dim status
+line under it shows `model · Context NN% left · directory`, and a
+`• Working (Ns • esc to interrupt)` row appears above the composer during a
+turn. Queued messages run automatically when the current turn finishes; the
+status line shows the queue depth.
 
 ## Commands
 
@@ -70,13 +80,17 @@ so unattended runs do not hang on prompts.
         the sandbox still applies)
 ```
 
+`/quit` (or `:q` / `:quit`) exits the TUI.
+
 ## Approvals and sandbox
 
 Approvals (`untrusted` default, `on-failure`, `on-request`, `never`) gate every
-non-read-only tool call. Read-only tools (`read_file`, `glob`, `grep`) run
-unconditionally. Writes and `shell` ask the user, who can allow once or for the
-session. Non-interactive runs answer `deny` automatically; exec mode switches
-the default to `on-failure`. Allow rules can be configured as
+non-read-only tool call. `untrusted` and `on-request` ask; `on-failure` allows
+without asking; `never` (Codex semantics) allows without ever asking — it is
+the approvals half of yolo mode. Read-only tools (`read_file`, `glob`, `grep`)
+run unconditionally. Writes and `shell` ask the user, who can allow once or for
+the session. Non-interactive runs answer `deny` automatically; exec mode
+switches the default to `on-failure`. Allow rules can be configured as
 `"tool"` or `"tool:pattern"` entries in `approvals_rules`.
 
 Sandbox modes (`workspace-write` default, `read-only`, `danger-full-access`)
@@ -100,9 +114,15 @@ Precedence: built-in defaults → `~/.zodex/config.json` → `<cwd>/.zodex/confi
 
 Environment: `ZODEX_HOME`, `ZODEX_MODEL`, `ZODEX_BASE_URL`, `ZODEX_API_KEY`,
 `ZODEX_APPROVALS`, `ZODEX_SANDBOX`, `ZODEX_MAX_STEPS`, `ZODEX_MAX_BYTES`,
-`ZODEX_ALLOW_EXEC`, `ZODEX_AUTO_COMPACT`, `ZODEX_STREAM_USAGE`. API keys are
-also read from `HACKCLUB_AI_API_KEY`, `HACK_CLUB_AI_API_KEY` and
-`OPENAI_API_KEY`.
+`ZODEX_ALLOW_EXEC`, `ZODEX_AUTO_COMPACT`, `ZODEX_STREAM_USAGE`,
+`ZODEX_TIMEOUT_MS`. API keys are also read from `HACKCLUB_AI_API_KEY`,
+`HACK_CLUB_AI_API_KEY` and `OPENAI_API_KEY`.
+
+`timeout_ms` is an *inactivity* timeout for streaming responses: the stream
+keeps running while data keeps arriving and fails only after that many
+milliseconds of silence. On a mid-stream timeout the turn engine keeps the
+partial output, appends it to the conversation and continues from there
+instead of replaying the request.
 
 ## Sessions
 
@@ -133,13 +153,13 @@ an empty stub.
 ## Tests
 
 ```sh
-# pure modules + UI core: 103 checks, exit 1 on failure
+# pure modules + UI core: 116 checks, exit 1 on failure
 ZODEX_HOME=/tmp/zodex_tests ./zod examples/demo/agentic/tests.zd
 
-# UI self-test only (no disk writes): 41 checks
+# UI self-test only (no disk writes): 49 checks
 ./zod examples/demo/harness.zd --self-test
 
-# client + agent against the mock server: 32 checks
+# client + agent against the mock server: 38 checks
 python3 examples/demo/agentic/mock_openai.py 8791 &
 ./zod examples/demo/agentic/_check_agent.zd
 ```
@@ -156,13 +176,13 @@ runs that exercise retries.
 | Streaming TUI chat, markdown, diffs | done |
 | Tool calling: shell, apply_patch, update_plan, read/write/edit/glob/grep | done |
 | `apply_patch` format (add/update/delete, `@@` anchors, move) | done |
-| Approvals modes + session grants + rules | done |
+| Approvals modes + session grants + rules + yolo bypass (`--yolo`) | done |
 | Sandbox modes (workspace-write / read-only / danger-full-access) | done (advisory; OS-level sandboxing is future work) |
-| Sessions, resume, rollout JSONL | done |
+| Sessions, resume, rollout JSONL (with transcript replay) | done |
 | Config files + env vars | done |
 | Exec mode, JSONL events, exit codes | done |
 | Automatic context compaction | done (token-budget based) |
-| Interruptions, retries, cancellation | done |
+| Interruptions, retries, idle-timeout recovery, queued messages | done |
 | MCP servers | not in scope |
 | OAuth / ChatGPT login | not in scope (API key only) |
 | Cloud tasks / Codex web | not in scope |
@@ -180,7 +200,11 @@ inspectable and testable.
 - The one interpreter change this work required is included here:
   `object/stream.go` now surfaces token usage and `finish_reason` from SSE
   `stream_poll` (plus `object/stream_usage_test.go`), which the agent needs for
-  `/stats`, compaction budgets and length-continuation handling.
+  `/stats`, compaction budgets and length-continuation handling. Stream
+  deadlines are enforced as an *inactivity* timeout: a watchdog resets on
+  every byte and fails the stream only after `timeout_ms` of silence
+  (`object/stream_idle_test.go`). `__http_post_headers` accepts up to
+  `300000` ms.
 - Modules avoid letting `error()` values cross more than one function
   boundary: on the VM engine, an error propagating further fails with
   `executing bytecode failed:` instead of being catchable. All fallible calls

@@ -104,7 +104,7 @@ pub new_agent := fn(cli, tool_list, sys_prompt, max_steps, opts) {
     backoff := fn(hooks, attempt, kind) {
         ms := 500 * (attempt + 1)
         if (kind == "rate_limit") { ms = 2000 * (attempt + 1) }
-        h1(hooks, "on_note", "retrying in " + string(ms) + "ms (" + kind + ")")
+        h1(hooks, "on_note", "retrying in " + string(ms) + "ms (" + kind + ", attempt " + string(attempt + 2) + "/" + string(max_retries) + ")")
         try(time.sleep(ms))
         return null
     }
@@ -220,7 +220,13 @@ pub new_agent := fn(cli, tool_list, sys_prompt, max_steps, opts) {
         drain_err := null
         usage := null
         finish := null
-        deadline := time.now_ms() + 150000
+        // Idle watchdog: reset whenever the stream shows activity. The
+        // interpreter already enforces an inactivity timeout, so this is
+        // only a safety net (client idle window + 30s of slack).
+        drain_idle := 150000
+        tmo := cli["timeout_ms"]
+        if (type(tmo) == "INTEGER" && tmo > 0) { drain_idle = tmo + 30000 }
+        deadline := time.now_ms() + drain_idle
         loop {
             pr := try(http.stream_poll(handle))
             if (!pr[0]) {
@@ -232,12 +238,15 @@ pub new_agent := fn(cli, tool_list, sys_prompt, max_steps, opts) {
                 drain_err = err_text(p)
                 break
             }
+            moved := false
             text := p["text"]
             if (type(text) == "STRING" && text != "") {
                 content = content + text
                 h1(hooks, "on_text", text)
+                moved = true
             }
             chunk_tools := p["tools"]
+            if (type(chunk_tools) == "ARRAY" && len(chunk_tools) > 0) { moved = true }
             if (type(chunk_tools) == "ARRAY") {
                 for (i := 0; i < len(chunk_tools); i += 1) {
                     t := chunk_tools[i]
@@ -253,13 +262,14 @@ pub new_agent := fn(cli, tool_list, sys_prompt, max_steps, opts) {
                     if (t["args"] != null) { box["args"] = box["args"] + t["args"] }
                 }
             }
-            if (p["usage"] != null) { usage = p["usage"] }
-            if (p["finish_reason"] != null) { finish = p["finish_reason"] }
+            if (p["usage"] != null) { usage = p["usage"]; moved = true }
+            if (p["finish_reason"] != null) { finish = p["finish_reason"]; moved = true }
             if (p["error"] != null) {
                 drain_err = string(p["error"])
                 break
             }
             if (p["done"]) { break }
+            if (moved) { deadline = time.now_ms() + drain_idle }
             if (cancelled_hook(hooks)) {
                 cancelled = true
                 try(http.stream_cancel(handle))
@@ -336,6 +346,8 @@ pub new_agent := fn(cli, tool_list, sys_prompt, max_steps, opts) {
         steps := 0
         last_usage := null
         last_finish := null
+        saw_partial := false
+        nudged := false
 
         for (step := 1; step <= max_steps; step += 1) {
             steps = step
@@ -347,6 +359,7 @@ pub new_agent := fn(cli, tool_list, sys_prompt, max_steps, opts) {
             step_ok := false
             step_err := "request failed"
             cancelled := false
+            partial_step := false
             content := ""
             calls_by_index := {}
             usage := null
@@ -400,9 +413,28 @@ pub new_agent := fn(cli, tool_list, sys_prompt, max_steps, opts) {
                 if (d["error"] != null) {
                     derr := string(d["error"])
                     kind := client.classify(derr)
-                    if (kind == "payload" && str.contains(derr, "stream_options")) {
+                    ckeys := __hash_keys(calls_by_index)
+                    payload_blocked := kind == "payload" && str.contains(derr, "stream_options")
+                    if (payload_blocked && attempt + 1 < max_retries) {
                         options["stream_usage"] = false
-                        if (attempt + 1 < max_retries) { continue }
+                        continue
+                    }
+                    if (content != "" && len(ckeys) == 0) {
+                        if (finish != null) {
+                            // The model had already finished; treat the
+                            // trailing transport error as noise.
+                            step_ok = true
+                            break
+                        }
+                        // Keep the partial output and continue from it on the
+                        // next step instead of replaying the whole request.
+                        conv["add"](conv, "assistant", content, null)
+                        h3(hooks, "on_message", "assistant", content, null)
+                        h1(hooks, "on_note", "stream interrupted after partial output; continuing")
+                        saw_partial = true
+                        partial_step = true
+                        step_ok = true
+                        break
                     }
                     if (client.retryable(kind) && attempt + 1 < max_retries) {
                         backoff(hooks, attempt, kind)
@@ -418,6 +450,10 @@ pub new_agent := fn(cli, tool_list, sys_prompt, max_steps, opts) {
             if (!step_ok) {
                 h1(hooks, "on_note", "turn failed: " + step_err)
                 return {"ok": false, "text": "", "error": step_err, "interrupted": false, "steps": steps, "usage": last_usage, "finish": last_finish}
+            }
+
+            if (partial_step) {
+                continue
             }
 
             st := cli["stats"]
@@ -462,6 +498,14 @@ pub new_agent := fn(cli, tool_list, sys_prompt, max_steps, opts) {
                 conv["add"](conv, "assistant", content, null)
                 h3(hooks, "on_message", "assistant", content, null)
                 return {"ok": true, "text": content, "error": null, "interrupted": false, "steps": steps, "usage": last_usage, "finish": last_finish}
+            }
+
+            if (saw_partial && !nudged) {
+                nudged = true
+                conv["add"](conv, "user", "continue.", null)
+                h3(hooks, "on_message", "user", "continue.", null)
+                h1(hooks, "on_note", "empty continuation; nudging the model")
+                continue
             }
 
             return {"ok": true, "text": "", "error": null, "interrupted": false, "steps": steps, "usage": last_usage, "finish": last_finish}

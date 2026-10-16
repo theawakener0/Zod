@@ -11,13 +11,15 @@
 //   zod harness.zd --self-test          UI self-test, exit 1 on failure
 //   zod harness.zd --resume [id|latest] resume a rollout session
 //
-// Keys: enter send · ctrl-j newline · esc clear / interrupt · ctrl-c
-// clear-then-quit (during a turn: interrupt) · ctrl-d quit when empty ·
-// ctrl-l clear transcript · ctrl-u clear line · ctrl-w delete word ·
-// ctrl-a/e home/end · up/down history · tab complete command · pgup/pgdn
-// scroll · left/right arrows move the cursor.
-// Approval overlay: y allow · a allow for session · n/esc/enter deny ·
-// v expand args.  Model picker: /model with no argument.
+// Keys: enter send (during a turn: queue the message) · ctrl-j newline ·
+// esc clear / interrupt · ctrl-c clear-then-quit (during a turn: interrupt)
+// · ctrl-d quit when empty · ctrl-l clear transcript · ctrl-u clear line ·
+// ctrl-w delete word · ctrl-a/e home/end · up/down history · tab complete
+// command · pgup/pgdn scroll · left/right arrows move the cursor. `:q` (or
+// `:quit`) exits; `:q!` cancels the running turn and exits.
+// Approval overlay (Codex-style numbered options, enter stays deny):
+// y allow · a allow for session · n/esc/enter deny · v expand args.
+// Model picker: /model with no argument.
 //
 // All module APIs used here are envelope-based (no error() values cross
 // function boundaries on the VM). Definitions precede their call sites
@@ -145,6 +147,57 @@ arg_preview := fn(name, args_text) {
     return render.truncate(txt, 60, "…")
 }
 
+// arg_label is the Codex-style one-line label for a tool cell:
+// "Ran <cmd>", "Read <path>", "Explored <pattern>", ...
+arg_label := fn(name, args_text) {
+    txt := args_text
+    if (type(txt) != "STRING") { txt = "" }
+    p := try(json.parse(txt))
+    h := null
+    if (p[0] && type(p[1]) == "HASH") { h = p[1] }
+    if (name == "shell") {
+        if (h != null && type(h["command"]) == "STRING") { return "Ran " + render.truncate(h["command"], 76, "…") }
+        return "Ran " + render.truncate(txt, 60, "…")
+    }
+    if (name == "read_file") {
+        if (h != null && type(h["path"]) == "STRING") { return "Read " + render.truncate(h["path"], 76, "…") }
+        return "Read " + render.truncate(txt, 60, "…")
+    }
+    if (name == "write_file") {
+        if (h != null && type(h["path"]) == "STRING") { return "Wrote " + render.truncate(h["path"], 76, "…") }
+        return "Wrote " + render.truncate(txt, 60, "…")
+    }
+    if (name == "edit") {
+        if (h != null && type(h["path"]) == "STRING") { return "Edited " + render.truncate(h["path"], 76, "…") }
+        return "Edited " + render.truncate(txt, 60, "…")
+    }
+    if (name == "glob") {
+        if (h != null && type(h["pattern"]) == "STRING") { return "Explored " + render.truncate(h["pattern"], 74, "…") }
+        return "Explored " + render.truncate(txt, 60, "…")
+    }
+    if (name == "grep") {
+        if (h != null && type(h["pattern"]) == "STRING") { return "Searched " + render.truncate(h["pattern"], 74, "…") }
+        return "Searched " + render.truncate(txt, 60, "…")
+    }
+    if (name == "apply_patch") { return "Applied patch" }
+    if (name == "update_plan") {
+        if (h != null && type(h["steps"]) == "ARRAY") { return "Updated plan (" + string(len(h["steps"])) + " steps)" }
+        return "Updated plan"
+    }
+    return name + " " + render.truncate(txt, 60, "…")
+}
+
+// patch_of extracts the apply_patch "patch" argument ("" when missing).
+patch_of := fn(args_text) {
+    if (type(args_text) != "STRING") { return "" }
+    p := try(json.parse(args_text))
+    if (!p[0] || type(p[1]) != "HASH") { return "" }
+    hh := p[1]
+    v := hh["patch"]
+    if (v != null && type(v) == "STRING") { return v }
+    return ""
+}
+
 // expand_mentions appends the content of up to 3 "@path" referenced files
 // (8000 chars each) to the message. Unknown refs are left alone.
 expand_mentions := fn(cwd, text) {
@@ -214,8 +267,8 @@ new_assistant_cell := fn(ui) {
     return cell
 }
 
-new_tool_cell := fn(ui, name, args) {
-    cell := {"kind": "tool", "name": name, "args": args, "result": null, "status": "running", "expanded": false}
+new_tool_cell := fn(ui, name, label, patch) {
+    cell := {"kind": "tool", "name": name, "label": label, "patch": patch, "result": null, "status": "running", "expanded": false}
     ui["log"] = arr.push(ui["log"], cell)
     ui["scroll"] = 0
     ui["dirty"] = true
@@ -258,6 +311,9 @@ pub new_ui := fn(cwd, model) {
         "running": false,
         "cancel": {"v": false},
         "turn_start": 0,
+        "queue": [],
+        "yolo": false,
+        "ctx_pct": null,
         "overlay": null,
         "picker": null,
         "width": 80,
@@ -453,14 +509,22 @@ complete_cmd := fn(ui, ctx) {
 // --------------------------------------------------------------------------
 
 // composer_view builds the input area rows and cursor position (1-based
-// col). Shows at most 3 logical lines ending at the cursor line.
-composer_view := fn(ui, w) {
+// col). Borderless Codex style: an empty input shows the dim placeholder
+// "Ask Zodex to do anything" after the "› " prefix; at most 10 rows are
+// shown (including the leading "…" scroll marker), ending at the cursor
+// line.
+composer_view := fn(ui, w, th) {
     inp := ui["input"]
     if (type(inp) != "STRING") { inp = "" }
     cs := chars_of(inp)
     cur := ui["cursor"]
     if (type(cur) != "INTEGER" || cur < 0) { cur = 0 }
     if (cur > len(cs)) { cur = len(cs) }
+
+    if (len(cs) == 0) {
+        ph := "› " + th["dim"] + "Ask Zodex to do anything" + th["reset"]
+        return {"lines": [render.pad(ph, w)], "idx": 0, "col": 3}
+    }
 
     lines := []
     line := ""
@@ -487,9 +551,14 @@ composer_view := fn(ui, w) {
     }
     lines = arr.push(lines, line)
 
-    start_line := cl - 2
+    // Keep the window within 10 rows *including* the "…" marker so a
+    // scrolled window always ends at the cursor line and draw_ui never has
+    // to cut the row being edited.
+    win_rows := 10
+    if (cl > 9) { win_rows = 9 }
+    start_line := cl - (win_rows - 1)
     if (start_line < 0) { start_line = 0 }
-    end_line := start_line + 3
+    end_line := start_line + win_rows
     if (end_line > len(lines)) { end_line = len(lines) }
 
     maxw := w - 2
@@ -546,10 +615,16 @@ overlay_view := fn(ov, w, th) {
             if (len(al) > cap) {
                 out = arr.push(out, th["dim"] + "  … (+" + string(len(al) - cap) + " lines)" + th["reset"])
             }
-            out = arr.push(out, th["dim"] + "y allow · a allow session · n deny · v collapse" + th["reset"])
         } else {
             out = arr.push(out, th["dim"] + "  " + render.truncate(args, w - 2, "…") + th["reset"])
-            out = arr.push(out, th["dim"] + "y allow · a allow session · n deny · v expand" + th["reset"])
+        }
+        out = arr.push(out, "    1. allow once")
+        out = arr.push(out, "    2. allow for this session")
+        out = arr.push(out, th["bold"] + "  › 3. deny" + th["reset"])
+        if (ov["expanded"] == true) {
+            out = arr.push(out, th["dim"] + "  enter deny · y allow · a allow session · n deny · v collapse" + th["reset"])
+        } else {
+            out = arr.push(out, th["dim"] + "  enter deny · y allow · a allow session · n deny · v expand" + th["reset"])
         }
         return {"lines": out, "idx": null, "col": 1}
     }
@@ -587,34 +662,29 @@ picker_view := fn(pk, w, th) {
     return {"lines": out, "idx": null, "col": 1}
 }
 
+// compose_status renders the single Codex-style status line under the
+// composer: "  <model> · Context <NN>% left · <dir>", plus the queue
+// depth and the red YOLO badge. The working indicator is its own row
+// above the composer (see draw_ui).
 compose_status := fn(ui, w, th) {
-    left := ""
-    if (ui["running"] == true) {
-        el := sec_since(ui["turn_start"])
-        left = th["yellow"] + fx.working_row(el) + th["reset"]
-    } else {
-        left = th["dim"] + "enter send · /help · ! shell · esc clear" + th["reset"]
+    core := string(ui["model"]) + " · Context "
+    pct := ui["ctx_pct"]
+    if (type(pct) != "INTEGER") { pct = 100 }
+    core = core + string(pct) + "% left · " + basename_of(ui["cwd"])
+    q := ui["queue"]
+    if (type(q) == "ARRAY" && len(q) > 0) {
+        core = core + " · " + string(len(q)) + " queued"
     }
-    rparts := []
-    if (ui["tokens"] != null && string(ui["tokens"]) != "") { rparts = arr.push(rparts, string(ui["tokens"])) }
-    if (ui["session_id"] != null && string(ui["session_id"]) != "") { rparts = arr.push(rparts, string(ui["session_id"])) }
-    right := ""
-    if (len(rparts) > 0) {
-        right = th["dim"] + str.join(rparts, " · ") + th["reset"]
+    if (ui["running"] == true && ui["input"] != "") {
+        core = core + " · enter to queue"
     }
-    lw := render.display_width(left)
-    rw := render.display_width(right)
-    if (lw + rw + 2 > w) {
-        right = ""
-        rw = 0
+    if (render.display_width(core) > w - 2) {
+        core = render.truncate(core, w - 2, "…")
     }
-    if (lw > w) {
-        left = render.truncate(left, w, "…")
-        lw = render.display_width(left)
+    if (ui["yolo"] == true) {
+        return th["red"] + "  YOLO" + th["reset"] + th["dim"] + " " + core + th["reset"]
     }
-    gap := w - lw - rw
-    if (gap < 0) { gap = 0 }
-    return left + str.repeat(" ", gap) + right
+    return "  " + th["dim"] + core + th["reset"]
 }
 
 // draw_ui renders the whole frame from ui state. Pure: returns
@@ -637,17 +707,32 @@ pub draw_ui := fn(ui) {
     } else if (pk != null) {
         comp = picker_view(pk, w, th)
     } else {
-        comp = composer_view(ui, w)
+        comp = composer_view(ui, w, th)
     }
+    runrow := null
+    if (ui["running"] == true) {
+        runrow = fx.working_row(sec_since(ui["turn_start"]))
+    }
+    wrows := 0
+    if (runrow != null) { wrows = 1 }
     ch := len(comp["lines"])
-    if (ch > h - 3) { ch = h - 3 }
+    maxch := h - 2 - wrows
+    if (maxch < 1) { maxch = 1 }
+    if (ch > maxch) { ch = maxch }
     if (ch < 1) { ch = 1 }
     if (len(comp["lines"]) > ch) {
-        comp["lines"] = arr.slice(comp["lines"], 0, ch)
+        idxv := comp["idx"]
+        if (type(idxv) == "INTEGER" && idxv >= ch) {
+            // Cursor-bearing comp (composer): tail-slice so the cursor row
+            // stays visible even at tiny heights.
+            si := idxv - ch + 1
+            comp["lines"] = arr.slice(comp["lines"], si, si + ch)
+            comp["idx"] = idxv - si
+        } else {
+            comp["lines"] = arr.slice(comp["lines"], 0, ch)
+        }
     }
-    sort_cursor := comp["idx"]
-    if (type(sort_cursor) == "INTEGER" && sort_cursor >= ch) { sort_cursor = null }
-    avail := h - 2 - ch
+    avail := h - 1 - wrows - ch
 
     // transcript
     flat := []
@@ -674,21 +759,16 @@ pub draw_ui := fn(ui) {
     if (start < 0) { start = 0 }
     win := arr.slice(flat, start, end)
 
-    header := th["bold"] + "Zodex" + th["reset"] + th["dim"]
-    if (ui["model"] != null && string(ui["model"]) != "") { header = header + " · " + string(ui["model"]) }
-    if (ui["sandbox"] != null && string(ui["sandbox"]) != "") { header = header + " · " + string(ui["sandbox"]) }
-    if (ui["approvals"] != null && string(ui["approvals"]) != "") { header = header + " · " + string(ui["approvals"]) }
-    b := ui["branch"]
-    if (b != null && string(b) != "" && string(b) != "main") { header = header + " · " + string(b) }
-    header = header + th["reset"] + "  " + th["dim"] + basename_of(ui["cwd"]) + th["reset"]
-
-    rows := [header]
+    rows := []
     top_pad := avail - len(win)
     for (i := 0; i < top_pad; i += 1) {
         rows = arr.push(rows, "")
     }
     for (i := 0; i < len(win); i += 1) {
         rows = arr.push(rows, win[i])
+    }
+    if (runrow != null) {
+        rows = arr.push(rows, runrow)
     }
     for (i := 0; i < ch; i += 1) {
         rows = arr.push(rows, comp["lines"][i])
@@ -730,6 +810,20 @@ sync_ui := fn(app) {
         if (type(st) == "HASH") {
             ui["tokens"] = string(st["prompt"]) + "→" + string(st["completion"]) + " tok · " + string(st["calls"]) + " calls"
         }
+        pct := 100
+        lu := cli["last_usage"]
+        if (type(lu) == "HASH") {
+            pt := lu["prompt_tokens"]
+            if (type(pt) == "INTEGER" && pt > 0) {
+                cw := 32768
+                cfg := app["cfg"]
+                if (type(cfg) == "HASH" && type(cfg["context_window"]) == "INTEGER" && cfg["context_window"] > 0) { cw = cfg["context_window"] }
+                used := pt * 100 / cw
+                if (used > 100) { used = 100 }
+                pct = 100 - used
+            }
+        }
+        ui["ctx_pct"] = pct
     }
     sess := app["sess"]
     if (type(sess) == "HASH" && sess["id"] != null) { ui["session_id"] = string(sess["id"]) }
@@ -853,8 +947,10 @@ run_turn_ui := fn(app, text) {
             return record_turn_message(app, role, content, extra)
         },
         "on_tool_start": fn(name, args) {
-            preview := arg_preview(name, args)
-            cell := new_tool_cell(ui, name, preview)
+            label := arg_label(name, args)
+            patch := ""
+            if (name == "apply_patch") { patch = patch_of(args) }
+            cell := new_tool_cell(ui, name, label, patch)
             tcell["c"] = cell
             return null
         },
@@ -915,6 +1011,17 @@ submit_ui := fn(ui, ctx) {
     ui["dirty"] = true
     if (trimmed == "") {
         ui["hidx"] = len(ui["history"])
+        return null
+    }
+    if (trimmed == ":q" || trimmed == ":quit") {
+        ui["quit"] = true
+        return null
+    }
+    if (trimmed == ":q!") {
+        // VM workaround: single-level write (chained index assign is broken on VM)
+        cbx := ui["cancel"]
+        cbx["v"] = true
+        ui["quit"] = true
         return null
     }
     ui["history"] = history.add(ui["history"], trimmed)
@@ -1068,7 +1175,36 @@ pub handle_key := fn(ui, ctx, key) {
         }
         if (key == "\x1b[5~") { scroll_up(ui, 6); return null }
         if (key == "\x1b[6~") { scroll_down(ui, 6); return null }
-        return null
+        // ctrl-d must not set quit mid-turn: esc/ctrl-c are the interrupt
+        // keys and a pending quit would lock them out until the turn ends.
+        // Use :q! to cancel and quit in one step.
+        if (key == "\x04") { return null }
+        if (key == "\r") {
+            // enter while running queues the message (Codex queue-message
+            // style; any further keys keep editing the next message).
+            t := str.trim(ui["input"])
+            if (t == ":q!") {
+                // cancel the running turn and quit immediately
+                cbxq := ui["cancel"]
+                cbxq["v"] = true
+                ui["quit"] = true
+                ui["input"] = ""
+                ui["cursor"] = 0
+                ui["dirty"] = true
+                return null
+            }
+            if (t != "") {
+                q := ui["queue"]
+                if (type(q) != "ARRAY") { q = [] }
+                if (len(q) < 10) { ui["queue"] = arr.push(q, t) }
+                ui["input"] = ""
+                ui["cursor"] = 0
+                ui["draft"] = ""
+                ui["dirty"] = true
+            }
+            return null
+        }
+        // fall through: editing keys keep working while a turn runs
     }
     if (str.starts_with(key, "\x1b[200~")) {
         body := str.slice(key, 6, len(key))
@@ -1263,7 +1399,25 @@ do_resume := fn(app, arg) {
     if (ctx != null) { ctx["session"] = sess }
     ui := app["ui"]
     if (ui != null) {
-        ui["log"] = []
+        cells := []
+        for (i := 0; i < len(msgs); i += 1) {
+            m := msgs[i]
+            if (type(m) != "HASH") { continue }
+            role := m["role"]
+            txt := m["content"]
+            if (type(txt) != "STRING") { txt = "" }
+            if (role == "user") {
+                if (txt != "") { cells = arr.push(cells, {"kind": "user", "text": txt}) }
+            } else if (role == "assistant") {
+                if (txt != "") { cells = arr.push(cells, {"kind": "assistant", "text": txt}) }
+            } else if (role == "tool") {
+                nm := m["name"]
+                if (type(nm) != "STRING" || nm == "") { nm = "tool" }
+                cells = arr.push(cells, {"kind": "tool", "name": nm, "label": nm, "patch": "", "result": txt, "status": "ok", "expanded": false})
+            }
+        }
+        ui["log"] = cells
+        ui["scroll"] = 0
         ui["session_id"] = string(target["id"])
         ui["plan_sig"] = ""
         ui["dirty"] = true
@@ -1349,11 +1503,13 @@ run_line := fn(app) {
         if (line == null) { break }
         t := str.trim(string(line))
         if (t == "") { break }
+        if (t == ":q" || t == ":quit" || t == ":q!") { break }
         if (str.starts_with(t, "/") || str.starts_with(t, "!")) {
             d := commands.dispatch(ctx["reg"], ctx, t)
             if (d[0] == true && d[1] != null && string(d[1]) != "") {
                 fmt.println(string(d[1]))
             }
+            if (ui["quit"] == true) { break }
             continue
         }
         push_user(ui, t)
@@ -1431,9 +1587,28 @@ run_tui := fn(app) {
             ui["height"] = sz[1]
         }
     }
-    banner := render.banner_lines(ui["width"])
-    push_banner(ui, str.join(banner, "\n"))
-    push_note(ui, "tip: /help lists commands · /model opens the picker")
+    wl := render.welcome_lines(ui["width"], string(ui["model"]), string(ui["cwd"]), "v0.1.0")
+    banner_text := str.join(wl, "\n")
+    sid := ui["session_id"]
+    if (sid != null && string(sid) != "") {
+        // Resumed session: keep the header as the first transcript cell
+        // (do_resume already replayed the transcript).
+        old := ui["log"]
+        newlog := [{"kind": "banner", "text": banner_text}]
+        if (type(old) == "ARRAY") {
+            for (i := 0; i < len(old); i += 1) {
+                newlog = arr.push(newlog, old[i])
+            }
+        }
+        ui["log"] = newlog
+    } else {
+        push_banner(ui, banner_text)
+    }
+    if (ui["yolo"] == true) {
+        push_error(ui, "YOLO mode: approvals bypassed · sandbox danger-full-access")
+    } else {
+        push_note(ui, "tip: /help lists commands · /model opens the picker")
+    }
     bn := app["boot_note"]
     if (bn != null && type(bn) == "STRING" && bn != "") {
         if (str.starts_with(bn, "Error:")) { push_error(ui, bn) } else { push_note(ui, bn) }
@@ -1442,6 +1617,16 @@ run_tui := fn(app) {
     loop {
         pump_keys(app)
         if (ui["quit"] == true) { break }
+        if (ui["running"] != true) {
+            q := ui["queue"]
+            if (type(q) == "ARRAY" && len(q) > 0) {
+                nxt := string(q[0])
+                ui["queue"] = arr.slice(q, 1, len(q))
+                ui["input"] = nxt
+                ui["cursor"] = char_len_of(nxt)
+                submit_ui(ui, app["ctx"])
+            }
+        }
         render_app(app, false)
         sl := try(time.sleep(30))
         if (!sl[0]) { break }
@@ -1470,6 +1655,12 @@ pub build_app := fn(cli_opts, mode) {
         if (cli_opts["approvals"] != null) { cfg["approvals"] = cli_opts["approvals"] }
         if (cli_opts["sandbox"] != null) { cfg["sandbox"] = cli_opts["sandbox"] }
     }
+    yolo := false
+    if (cli_opts != null && cli_opts["yolo"] == true) { yolo = true }
+    if (yolo) {
+        cfg["approvals"] = "never"
+        cfg["sandbox"] = "danger-full-access"
+    }
     key := config.resolve_key(cfg)
     if (key == null) {
         eprintln("Error: no API key. Set ZODEX_API_KEY / HACKCLUB_AI_API_KEY / OPENAI_API_KEY, or api_key in ~/.zodex/config.json.")
@@ -1494,6 +1685,10 @@ pub build_app := fn(cli_opts, mode) {
         "guard": guard, "plan": plan_state, "sess": null, "tree": null,
         "reg": null, "ctx": null, "policy": null, "ag": null,
         "tty": tty, "last_draw": 0, "pump_keys": null, "render": null
+    }
+    if (yolo) {
+        eprintln("warning: yolo mode — approvals bypassed, sandbox disabled (danger-full-access)")
+        ui["yolo"] = true
     }
     ask := fn(req) {
         if (app["tty"] == true) { return ask_approval(app, req) }
@@ -1646,6 +1841,51 @@ pub self_test_ui := fn() {
     hcur := ui["history"]
     check("submit_history", hcur[len(hcur) - 1] == "hello")
 
+    // --- :q / :quit exit ---
+    uiq := new_ui("/tmp", "m")
+    handle_key(uiq, null, ":")
+    handle_key(uiq, null, "q")
+    handle_key(uiq, null, "\r")
+    check("colon_q_quits", uiq["quit"] == true && uiq["input"] == "")
+    check("colon_q_no_note", len(uiq["log"]) == 0)
+
+    // --- queue while running ---
+    uibq := new_ui("/tmp", "m")
+    uibq["running"] = true
+    handle_key(uibq, null, "n")
+    handle_key(uibq, null, "x")
+    handle_key(uibq, null, "\r")
+    qb := uibq["queue"]
+    check("queue_while_running", type(qb) == "ARRAY" && len(qb) == 1 && string(qb[0]) == "nx" && uibq["input"] == "")
+
+    // --- ctrl-d mid-turn must not set quit (esc/ctrl-c stay usable) ---
+    uibq2 := new_ui("/tmp", "m")
+    uibq2["running"] = true
+    handle_key(uibq2, null, "\x04")
+    check("ctrl_d_running_ignored", uibq2["quit"] != true)
+
+    // --- scrolled composer keeps the cursor visible ---
+    uisc := new_ui("/tmp", "m")
+    uisc["width"] = 80
+    uisc["height"] = 12
+    uisc["input"] = "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\nl11"
+    uisc["cursor"] = 33
+    frsc := draw_ui(uisc)
+    check("scrolled_composer_rows", len(frsc["lines"]) == 12)
+    check("scrolled_composer_cursor", frsc["cursor_r"] != null && frsc["cursor_r"] >= 1 && frsc["cursor_r"] <= 12)
+
+    // --- tiny screen, running, multiline draft: cursor still visible ---
+    uism := new_ui("/tmp", "m")
+    uism["width"] = 40
+    uism["height"] = 6
+    uism["running"] = true
+    uism["turn_start"] = 0
+    uism["input"] = "a\nb\nc\nd"
+    uism["cursor"] = 7
+    frsm := draw_ui(uism)
+    check("tiny_running_rows", len(frsm["lines"]) == 6)
+    check("tiny_running_cursor", frsm["cursor_r"] != null && frsm["cursor_r"] >= 1 && frsm["cursor_r"] <= 6)
+
     // --- cancel while running (VM chained-assign regression) ---
     uic := new_ui("/tmp", "m")
     uic["running"] = true
@@ -1688,12 +1928,12 @@ pub self_test_ui := fn() {
     push_user(ui4, "hello there")
     ac := new_assistant_cell(ui4)
     ac["text"] = "# Title\n\nSome **bold** text and `code`."
-    tc := new_tool_cell(ui4, "shell", "echo hi")
+    tc := new_tool_cell(ui4, "shell", "Ran echo hi", "")
     finish_tool_cell(ui4, tc, "exit 0\nhi")
     push_note(ui4, "a note")
     push_error(ui4, "Error: boom")
     push_plan_cell(ui4, [{"step": "one", "status": "completed"}, {"step": "two", "status": "pending"}])
-    push_banner(ui4, str.join(render.banner_lines(80), "\n"))
+    push_banner(ui4, str.join(render.welcome_lines(80, "qwen/x", "/tmp/work", "v0.1.0"), "\n"))
     fr := draw_ui(ui4)
     lines := fr["lines"]
     check("draw_rows_80x24", len(lines) == 24)

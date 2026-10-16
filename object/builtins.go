@@ -2084,8 +2084,8 @@ var Builtins = []struct {
 				if !ok {
 					return newError("fourth argument to `__http_post_headers` must be INTEGER. got=%s", args[3].Type())
 				}
-				if ms.Value < 1 || ms.Value > 60000 {
-					return newError("fourth argument to `__http_post_headers` must be between 1 and 60000. got=%d", ms.Value)
+				if ms.Value < 1 || ms.Value > 300000 {
+					return newError("fourth argument to `__http_post_headers` must be between 1 and 300000. got=%d", ms.Value)
 				}
 
 				req, err := http.NewRequest("POST", u.Value, strings.NewReader(body.Value))

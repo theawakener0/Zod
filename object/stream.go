@@ -151,7 +151,25 @@ func makeUsageHash(u *sseUsage) Object {
 	return &Hash{Pairs: pairs, Order: order}
 }
 
-func runSSEStream(st *sseStream, client *http.Client, req *http.Request, url string, ctx context.Context) {
+// idleReader resets an inactivity watchdog whenever bytes arrive.
+type idleReader struct {
+	r     io.Reader
+	timer *time.Timer
+	idle  time.Duration
+}
+
+func (ir *idleReader) Read(p []byte) (int, error) {
+	n, err := ir.r.Read(p)
+	if n > 0 {
+		ir.timer.Reset(ir.idle)
+	}
+	return n, err
+}
+
+func runSSEStream(st *sseStream, client *http.Client, req *http.Request, url string, ctx context.Context, cancel context.CancelFunc, idle time.Duration) {
+	timer := time.AfterFunc(idle, cancel)
+	defer timer.Stop()
+
 	finishErr := func(msg string) {
 		st.mu.Lock()
 		st.errMsg = msg
@@ -175,8 +193,8 @@ func runSSEStream(st *sseStream, client *http.Client, req *http.Request, url str
 			finishDone()
 			return
 		}
-		if ctx.Err() == context.DeadlineExceeded {
-			finishErr("http stream timed out")
+		if ctx.Err() != nil {
+			finishErr(fmt.Sprintf("http stream timed out after %dms of inactivity", idle.Milliseconds()))
 			return
 		}
 		finishErr(fmt.Sprintf("http stream %q failed: %s", url, err.Error()))
@@ -190,7 +208,7 @@ func runSSEStream(st *sseStream, client *http.Client, req *http.Request, url str
 		return
 	}
 
-	scanner := bufio.NewScanner(resp.Body)
+	scanner := bufio.NewScanner(&idleReader{r: resp.Body, timer: timer, idle: idle})
 	var totalBytes int64
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -252,8 +270,8 @@ func runSSEStream(st *sseStream, client *http.Client, req *http.Request, url str
 			finishDone()
 			return
 		}
-		if ctx.Err() == context.DeadlineExceeded {
-			finishErr("http stream timed out")
+		if ctx.Err() != nil {
+			finishErr(fmt.Sprintf("http stream timed out after %dms of inactivity", idle.Milliseconds()))
 			return
 		}
 		finishErr(fmt.Sprintf("http stream %q read error: %s", url, errScan.Error()))
@@ -286,7 +304,7 @@ func streamStart(args ...Object) Object {
 		return newError("fourth argument to `__http_post_stream` must be between 1 and 300000. got=%d", ms.Value)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(ms.Value)*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	req, err := http.NewRequestWithContext(ctx, "POST", u.Value, strings.NewReader(body.Value))
 	if err != nil {
 		cancel()
@@ -307,7 +325,7 @@ func streamStart(args ...Object) Object {
 	sseRegistry.Unlock()
 
 	client := &http.Client{}
-	go runSSEStream(st, client, req, u.Value, ctx)
+	go runSSEStream(st, client, req, u.Value, ctx, cancel, time.Duration(ms.Value)*time.Millisecond)
 
 	return NewInteger(id)
 }

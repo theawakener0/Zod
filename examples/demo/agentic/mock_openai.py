@@ -7,6 +7,9 @@ Scenarios are triggered by markers in the last user message:
   __mock_retry__         -> first request: 429; later: normal echo
   __mock_reject_usage__  -> requests carrying stream_options get a 400;
                             caller must retry without it
+  __mock_stall__         -> first request streams two chunks, stalls ~2.5s
+                            past the client idle timeout, then finishes;
+                            continuations echo normally
   __mock_slow__          -> streams chunks slowly (for cancel tests)
   anything else          -> streams "echo: <last user content>"
 
@@ -121,6 +124,14 @@ class Handler(BaseHTTPRequestHandler):
             if "__mock_length__" in last_user and not has_assistant:
                 self.wfile.write(sse_line({"choices": [{"delta": {"content": "partial "}, "finish_reason": None}]}))
                 self.wfile.write(sse_line({"choices": [{"delta": {}, "finish_reason": "length"}]}))
+            elif "__mock_stall__" in last_user and not has_assistant:
+                self.wfile.write(sse_line({"choices": [{"delta": {"content": "partial-one "}, "finish_reason": None}]}))
+                self.wfile.flush()
+                self.wfile.write(sse_line({"choices": [{"delta": {"content": "partial-two "}, "finish_reason": None}]}))
+                self.wfile.flush()
+                time.sleep(2.5)
+                self.wfile.write(sse_line({"choices": [{"delta": {"content": "stalled-tail "}, "finish_reason": None}]}))
+                self.wfile.write(sse_line({"choices": [{"delta": {}, "finish_reason": "stop"}]}))
             elif "__mock_tool__" in last_user and not has_tool_msg:
                 self.wfile.write(sse_line({"choices": [{"delta": {"tool_calls": [{
                     "index": 0, "id": "call_1", "type": "function",

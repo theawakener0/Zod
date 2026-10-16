@@ -21,6 +21,9 @@
 // NOTE: __http_post_headers surfaces status + body in the error message
 // only; response headers (Retry-After) are NOT visible from Zod, so
 // callers must use fixed backoff, never header-driven retry.
+//
+// timeout_ms for streams is an *inactivity* timeout: the stream keeps
+// going while data arrives and fails only after that many ms of silence.
 
 import "std/json" as json
 import "std/os" as os
@@ -146,6 +149,7 @@ pub new_client := fn(api_key, model, opts) {
         "stats": stats,
         "last_usage": null,
         "models": null,
+        "timeout_ms": timeout_ms,
         "chat": null,
         "stream": null,
         "stream_events": null,
@@ -156,7 +160,7 @@ pub new_client := fn(api_key, model, opts) {
         full_url := base + url
         body := json.stringify(data)
         post_ms := timeout_ms
-        if (post_ms > 60000) { post_ms = 60000 }
+        if (post_ms > 300000) { post_ms = 300000 }
         req := try(__http_post_headers(full_url, body, headers, post_ms))
         if (!req[0]) {
             kind := classify(string(req[1]))

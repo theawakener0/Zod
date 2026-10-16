@@ -193,6 +193,10 @@ pub apply_env := fn(cfg) {
     if (n != null) {
         out["max_bytes"] = n
     }
+    n = env_int("ZODEX_TIMEOUT_MS")
+    if (n != null) {
+        out["timeout_ms"] = n
+    }
     b = env_bool("ZODEX_AUTO_COMPACT")
     if (b != null) {
         out["auto_compact"] = b

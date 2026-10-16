@@ -2,7 +2,9 @@
 //
 // Policy hash: {"mode": str, "rules": array, "session": array}.
 // Modes: "untrusted", "on-failure", "on-request", "never"; anything else
-// (including null) falls back to "untrusted".
+// (including null) falls back to "untrusted". "untrusted" and "on-request"
+// ask, "on-failure" allows without asking, and "never" (Codex semantics)
+// allows without ever asking (yolo / bypass mode).
 //
 // Rules are strings:
 //   "name"         -> tool name must equal `name`
@@ -179,7 +181,7 @@ pub decide := fn(policy, name, args_text) {
         }
     }
     if (mode == "never") {
-        return {"action": "deny", "reason": "mode: never"}
+        return {"action": "allow", "reason": "mode: never"}
     }
     if (mode == "on-failure") {
         return {"action": "allow", "reason": "mode: on-failure"}

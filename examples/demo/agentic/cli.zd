@@ -28,14 +28,16 @@ pub usage := fn() {
         "  --model <id>          model to use",
         "  --approvals <mode>    untrusted | on-failure | on-request | never",
         "  --sandbox <mode>      read-only | workspace-write | danger-full-access",
+        "  --yolo                never ask for approval, ignore the sandbox",
+        "                        (alias: --dangerously-bypass-approvals-and-sandbox)",
         "  --cwd <dir>           working directory for the session",
         "",
-        "Session commands: /help /model /approvals /sandbox /new /resume /compact /quit",
+        "Session commands: /help /model /approvals /sandbox /new /resume /compact /quit (:q)",
         "",
         "Environment:",
         "  ZODEX_HOME, ZODEX_MODEL, ZODEX_BASE_URL, ZODEX_API_KEY, ZODEX_APPROVALS,",
         "  ZODEX_SANDBOX, ZODEX_MAX_STEPS, ZODEX_MAX_BYTES, ZODEX_ALLOW_EXEC,",
-        "  ZODEX_AUTO_COMPACT, ZODEX_STREAM_USAGE"
+        "  ZODEX_AUTO_COMPACT, ZODEX_STREAM_USAGE, ZODEX_TIMEOUT_MS"
     ]
     return str.join(lines, "\n")
 }
@@ -53,6 +55,7 @@ pub parse := fn(argv) {
         "model": null,
         "approvals": null,
         "sandbox": null,
+        "yolo": false,
         "cwd": null,
         "help": false,
         "version": false,
@@ -116,6 +119,10 @@ pub parse := fn(argv) {
                 skip_next = true
             }
             out["resume"] = rv
+            continue
+        }
+        if (t == "--yolo" || t == "--dangerously-bypass-approvals-and-sandbox") {
+            out["yolo"] = true
             continue
         }
         if (t == "--model" || t == "--approvals" || t == "--sandbox" || t == "--cwd") {

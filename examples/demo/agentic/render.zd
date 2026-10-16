@@ -751,30 +751,64 @@ user_lines := fn(txt, w, th) {
     return out
 }
 
-// tool_lines renders a tool call cell. The header marker is colored
-// (yellow running / green ok / red error). "running" adds a dim
-// "    running…" row. A non-empty result shows the first 6 wrapped lines
-// (collapsed) plus dim "    … (+N lines)", or up to 60 lines (expanded)
-// plus dim "    … (truncated)".
+// tool_lines renders a tool call cell in Codex style: a "  • <label>"
+// header (yellow running / green ok / red error), a dim "    running…"
+// row while running, and a "  └ <first output line>" block with four-space
+// continuations after completion. apply_patch cells render the patch as a
+// colored diff instead of the raw result. Collapsed output shows the first
+// 6 wrapped lines; expanded shows up to 60.
 tool_lines := fn(cell, w, th) {
     name := as_str(cell["name"])
-    args := as_str(cell["args"])
+    label := as_str(cell["label"])
+    if (label == "") {
+        args := as_str(cell["args"])
+        if (args != "") {
+            label = name + "(" + args + ")"
+        } else {
+            label = name
+        }
+    }
     status := as_str(cell["status"])
     expanded := cell["expanded"] == true
-    marker := "•"
     col := th_get(th, "yellow")
     if (status == "ok") {
-        marker = "✓"
         col = th_get(th, "green")
     } else if (status == "error") {
-        marker = "✗"
         col = th_get(th, "red")
     }
-    head := "  " + col + marker + th_get(th, "reset") + " " + name + "(" + args + ")"
+    head := "  " + col + "•" + th_get(th, "reset") + " " + label
     out := []
     out = arr.push(out, truncate(head, w, ""))
     if (status == "running") {
         out = arr.push(out, th_get(th, "dim") + "    running…" + th_get(th, "reset"))
+        return out
+    }
+    patch := as_str(cell["patch"])
+    if (patch != "") {
+        dlines := diff(patch, maxi(w - 4, 1))
+        cap := 20
+        if (expanded) {
+            cap = 120
+        }
+        shown := len(dlines)
+        if (shown > cap) {
+            shown = cap
+        }
+        for (i := 0; i < shown; i += 1) {
+            out = arr.push(out, "    " + dlines[i])
+        }
+        if (len(dlines) > cap) {
+            out = arr.push(out, th_get(th, "dim") + "    … (+" + string(len(dlines) - cap) + " lines)" + th_get(th, "reset"))
+        }
+        txt := as_str(cell["result"])
+        if (txt != "") {
+            flines := str.split(txt, "\n")
+            first := ""
+            if (len(flines) > 0) { first = flines[0] }
+            out = arr.push(out, th_get(th, "dim") + "    " + truncate(first, maxi(w - 4, 1), "…") + th_get(th, "reset"))
+        } else {
+            out = arr.push(out, th_get(th, "dim") + "  └ (no output)" + th_get(th, "reset"))
+        }
         return out
     }
     res := cell["result"]
@@ -783,6 +817,7 @@ tool_lines := fn(cell, w, th) {
     }
     txt := as_str(res)
     if (txt == "") {
+        out = arr.push(out, th_get(th, "dim") + "  └ (no output)" + th_get(th, "reset"))
         return out
     }
     wrapped := wrap(txt, maxi(w - 4, 1))
@@ -795,7 +830,11 @@ tool_lines := fn(cell, w, th) {
         shown = cap
     }
     for (i := 0; i < shown; i += 1) {
-        out = arr.push(out, "    " + wrapped[i])
+        if (i == 0) {
+            out = arr.push(out, th_get(th, "dim") + "  └ " + th_get(th, "reset") + wrapped[i])
+        } else {
+            out = arr.push(out, "    " + wrapped[i])
+        }
     }
     if (len(wrapped) > cap) {
         if (expanded) {
@@ -910,32 +949,33 @@ pub cell_lines := fn(cell, width, th) {
     return []
 }
 
-// banner_lines returns the boot banner: a small box-drawing "ZODEX" plate
-// (4 lines with subtitle when width permits, 3 lines without, a single
-// "ZODEX" line below 18 columns). Never wider than 60 columns, never more
-// than 7 lines, no emoji.
-pub banner_lines := fn(width) {
-    w := num(width, 60)
-    if (w > 60) {
-        w = 60
+// welcome_lines returns the Codex-style startup header used as the first
+// transcript cell: title, model and directory lines, a short intro and a
+// few suggested commands. Plain text (no box), each line truncated to
+// `width` columns.
+pub welcome_lines := fn(width, model, dir, version) {
+    w := num(width, 80)
+    if (w < 1) {
+        w = 1
     }
-    if (w < 18) {
-        return [pad("ZODEX", w)]
+    m := as_str(model)
+    d := as_str(dir)
+    v := as_str(version)
+    if (v == "") {
+        v = "v0.1.0"
     }
-    th := theme()
-    inner := w - 4
-    padw := inner - 2
     out := []
-    top := "  ╔" + str.repeat("═", inner) + "╗"
-    mid := "  ║ " + pad("Z O D E X", padw) + " ║"
-    bot := "  ╚" + str.repeat("═", inner) + "╝"
-    out = arr.push(out, th_get(th, "dim") + top + th_get(th, "reset"))
-    out = arr.push(out, th_get(th, "bold") + mid + th_get(th, "reset"))
-    if (w >= 44) {
-        sub := "  ║ " + pad("codex-style coding agent", padw) + " ║"
-        out = arr.push(out, th_get(th, "dim") + sub + th_get(th, "reset"))
-    }
-    out = arr.push(out, th_get(th, "dim") + bot + th_get(th, "reset"))
+    out = arr.push(out, truncate(">_ Zodex (" + v + ")", w, "…"))
+    out = arr.push(out, "")
+    out = arr.push(out, truncate("model: " + m, w, "…"))
+    out = arr.push(out, truncate("directory: " + d, w, "…"))
+    out = arr.push(out, "")
+    out = arr.push(out, truncate("To get started, describe a task or try one of these commands:", w, "…"))
+    out = arr.push(out, "")
+    out = arr.push(out, truncate("  /help    list commands", w, "…"))
+    out = arr.push(out, truncate("  /model   switch the model", w, "…"))
+    out = arr.push(out, truncate("  /init    write AGENTS.md project notes", w, "…"))
+    out = arr.push(out, truncate("  /review  review the current diff", w, "…"))
     return out
 }
 

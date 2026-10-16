@@ -184,6 +184,28 @@ for (i := 0; i < len(notes6["items"]); i += 1) {
 }
 check("length_note", cont, string(notes6["items"]))
 
+// ---------- mid-stream stall: partial output kept, turn continues ----------
+stall := try(client.new_client("test-key", "mock-1", {"base_url": BASE, "timeout_ms": 1200}))
+check("stall_construct", stall[0] && !is_error(stall[1]), string(stall[1]))
+ag7 := agent.new_agent(stall[1], [], "sys", 6, null)
+notes7 := {"items": []}
+tr7 := ag7["run_turn"]("__mock_stall__ go", {"on_note": fn(t) { notes7["items"] = arr.push(notes7["items"], string(t)) }})
+check("stall_ok", tr7["ok"] == true, string(tr7))
+check("stall_steps", tr7["steps"] == 2, string(tr7["steps"]))
+stall_note := false
+for (i := 0; i < len(notes7["items"]); i += 1) {
+    if (contains(notes7["items"][i], "partial output; continuing")) { stall_note = true }
+}
+check("stall_continuation_note", stall_note, string(notes7["items"]))
+check("stall_text", contains(tr7["text"], "echo:"), string(tr7["text"]))
+kept := false
+hist7 := ag7["conversation"]["to_api"](ag7["conversation"])
+for (i := 0; i < len(hist7); i += 1) {
+    c7 := hist7[i]["content"]
+    if (type(c7) == "STRING" && contains(c7, "partial-one")) { kept = true }
+}
+check("stall_partial_kept", kept, string(hist7))
+
 fmt.println("SUMMARY pass_done fails=" + string(box["fails"]))
 if (box["fails"] > 0) {
     os.exit(1)
