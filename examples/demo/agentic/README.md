@@ -32,7 +32,7 @@ The default provider is the HackClub AI proxy
 ./zod examples/demo/harness.zd exec "..." --json    # JSONL events (tool.start, tool.result, text, turn.completed)
 ./zod examples/demo/harness.zd --resume             # resume the latest session
 ./zod examples/demo/harness.zd --resume <id|latest> # same, explicit target
-./zod examples/demo/harness.zd --self-test          # 40-check UI self-test, exit 1 on failure
+./zod examples/demo/harness.zd --self-test          # 41-check UI self-test, exit 1 on failure
 ```
 
 Flags: `--model <id>`, `--approvals <mode>`, `--sandbox <mode>`, `--cwd <dir>`,
@@ -133,10 +133,10 @@ an empty stub.
 ## Tests
 
 ```sh
-# pure modules + UI core: 102 checks, exit 1 on failure
+# pure modules + UI core: 103 checks, exit 1 on failure
 ZODEX_HOME=/tmp/zodex_tests ./zod examples/demo/agentic/tests.zd
 
-# UI self-test only (no disk writes): 40 checks
+# UI self-test only (no disk writes): 41 checks
 ./zod examples/demo/harness.zd --self-test
 
 # client + agent against the mock server: 32 checks

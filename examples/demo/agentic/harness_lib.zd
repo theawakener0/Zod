@@ -828,7 +828,10 @@ run_turn_ui := fn(app, text) {
         return null
     }
     ui["running"] = true
-    ui["cancel"]["v"] = false
+    // VM workaround: chained index assignment (a["x"]["y"] = v) is broken on
+    // the VM engine; assign through a single-level handle instead.
+    cbx := ui["cancel"]
+    cbx["v"] = false
     ui["turn_start"] = time.now_ms()
     ui["dirty"] = true
     acell := {"c": null}
@@ -1057,7 +1060,9 @@ pub handle_key := fn(ui, ctx, key) {
     }
     if (ui["running"] == true) {
         if (key == "\x1b" || key == "\x03") {
-            ui["cancel"]["v"] = true
+            // VM workaround: single-level write (chained index assign is broken on VM)
+            cbx := ui["cancel"]
+            cbx["v"] = true
             ui["dirty"] = true
             return null
         }
@@ -1190,7 +1195,9 @@ ask_approval := fn(app, req) {
         if (key == "n" || key == "N" || key == "\x1b" || key == "\r" || key == "\n") { decision = "deny"; break }
         if (key == "\x03") {
             decision = "deny"
-            ui["cancel"]["v"] = true
+            // VM workaround: single-level write (chained index assign is broken on VM)
+            cbx := ui["cancel"]
+            cbx["v"] = true
             break
         }
         if (key == "v" || key == "V") {
@@ -1638,6 +1645,12 @@ pub self_test_ui := fn() {
     check("submit_reset", ui["input"] == "" && ui["cursor"] == 0)
     hcur := ui["history"]
     check("submit_history", hcur[len(hcur) - 1] == "hello")
+
+    // --- cancel while running (VM chained-assign regression) ---
+    uic := new_ui("/tmp", "m")
+    uic["running"] = true
+    handle_key(uic, null, "\x03")
+    check("cancel_when_running", uic["cancel"]["v"] == true && uic["dirty"] == true)
 
     // --- tab completion ---
     ui2 := new_ui("/tmp", "m")
