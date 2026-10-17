@@ -1,0 +1,83 @@
+// sandbox.zd — external shell-sandbox wrapper (bubblewrap) argv builder + probe.
+// Pure arg building + one impure probe; never raises.
+//
+// wrap_argv(mode, cwd, workdir, binds, cmd) builds the full argv for the
+// wrapper program (the program itself is passed separately by the caller).
+// Base view: whole filesystem read-only, writable /dev and /tmp, /proc
+// mounted. Under "workspace-write", cwd, the effective workdir and each
+// configured bind path are added back read-write. Tolerates null/odd inputs.
+
+import "std/str" as str
+import "std/array" as arr
+import "std/process" as process
+
+pub wrap_argv := fn(mode, cwd, workdir, binds, cmd) {
+    argv := ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp"]
+    wd := cwd
+    if (type(workdir) == "STRING" && workdir != "") { wd = workdir }
+    add_bind := fn(a, p) {
+        a = arr.push(a, "--bind")
+        a = arr.push(a, p)
+        a = arr.push(a, p)
+        return a
+    }
+    if (mode == "workspace-write") {
+        bound := []
+        if (type(cwd) == "STRING" && cwd != "") {
+            argv = add_bind(argv, cwd)
+            bound = arr.push(bound, cwd)
+        }
+        if (type(wd) == "STRING" && wd != "" && wd != cwd) {
+            argv = add_bind(argv, wd)
+            bound = arr.push(bound, wd)
+        }
+        if (type(binds) == "ARRAY") {
+            for (i := 0; i < len(binds); i += 1) {
+                b := binds[i]
+                if (type(b) == "STRING" && b != "" && str.starts_with(b, "/") && !arr.contains(bound, b)) {
+                    argv = add_bind(argv, b)
+                    bound = arr.push(bound, b)
+                }
+            }
+        }
+    }
+    argv = arr.push(argv, "--chdir")
+    argv = arr.push(argv, wd)
+    argv = arr.push(argv, "--die-with-parent")
+    argv = arr.push(argv, "--unshare-pid")
+    argv = arr.push(argv, "--share-net")
+    argv = arr.push(argv, "--")
+    argv = arr.push(argv, "sh")
+    argv = arr.push(argv, "-c")
+    argv = arr.push(argv, cmd)
+    return argv
+}
+
+// probe(cfg) resolves the wrapper program: "auto" -> bwrap; an explicit
+// "sandbox_tool" name is used as-is; "off" disables wrapping. Returns the
+// program name only when a functional smoke test actually runs (exit 0),
+// otherwise null so callers fall back to the advisory guard.
+pub probe := fn(cfg) {
+    tool := "auto"
+    if (type(cfg) == "HASH") {
+        t := cfg["sandbox_tool"]
+        if (t != null && type(t) == "STRING" && t != "") { tool = t }
+    }
+    if (tool == "off") { return null }
+    prog := "bwrap"
+    if (tool != "auto") { prog = tool }
+    r := try(process.exec(prog, ["--ro-bind", "/", "/", "--", "true"], {"timeout_ms": 3000}))
+    if (r[0] == true && type(r[1]) == "HASH" && r[1]["code"] == 0) {
+        return prog
+    }
+    return null
+}
+
+// describe(prog) renders the status label for the active wrapper; when no
+// wrapper program is available the guard remains advisory.
+pub describe := fn(prog) {
+    if (prog != null && type(prog) == "STRING" && prog != "") {
+        return prog
+    }
+    return "advisory"
+}

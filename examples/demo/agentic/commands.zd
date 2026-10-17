@@ -16,8 +16,11 @@ import "tools.zd" as tools
 import "pi.zd" as pi
 import "approvals.zd" as approvals
 import "session.zd" as session
+import "checkpoints.zd" as checkpoints
+import "pricing.zd" as pricing
 import "std/str" as str
 import "std/array" as arr
+import "std/hash" as hash
 import "std/json" as json
 
 pub make_command := fn(name, hint, run) {
@@ -172,6 +175,43 @@ model_run := fn(ctx, args) {
     return "model -> " + want
 }
 
+// cost_line_for(ctx, cli) -> "est cost: $D.HHHH (est)" or "est cost: n/a".
+// Prefers the /models cache pricing (USD per token) for the active model,
+// falling back to the built-in static price table (USD per 1M tokens).
+cost_line_for := fn(ctx, cli) {
+    mid := ""
+    if (cli != null && cli["model"] != null) { mid = string(cli["model"]) }
+    p := 0
+    c := 0
+    st := null
+    if (cli != null) { st = cli["stats"] }
+    if (type(st) == "HASH") {
+        if (type(st["prompt"]) == "INTEGER") { p = st["prompt"] }
+        if (type(st["completion"]) == "INTEGER") { c = st["completion"] }
+    }
+    cache := null
+    if (type(ctx) == "HASH") { cache = ctx["models_cache"] }
+    if (type(cache) == "ARRAY" && mid != "") {
+        for (i := 0; i < len(cache); i += 1) {
+            m := cache[i]
+            if (type(m) != "HASH" || m["id"] == null || string(m["id"]) != mid) { continue }
+            pr := m["pricing"]
+            if (type(pr) != "HASH" || pr["prompt"] == null || pr["completion"] == null) { continue }
+            a := try(float(string(pr["prompt"])))
+            b := try(float(string(pr["completion"])))
+            if (a[0] && b[0]) {
+                total := float(p) * a[1] + float(c) * b[1]
+                return "est cost: " + pricing.fmt_cost(total) + " (est)"
+            }
+        }
+    }
+    ec := pricing.estimate(mid, p, c)
+    if (ec != null) {
+        return "est cost: " + pricing.fmt_cost(ec) + " (est)"
+    }
+    return "est cost: n/a"
+}
+
 stats_run := fn(ctx, args) {
     cli := ctx["cli"]
     st := cli["stats"]
@@ -185,23 +225,7 @@ stats_run := fn(ctx, args) {
     }
     mid := ""
     if (cli["model"] != null) { mid = string(cli["model"]) }
-    cost_line := "pricing unknown, run /models"
-    cache := ctx["models_cache"]
-    if (type(cache) == "ARRAY") {
-        for (i := 0; i < len(cache); i += 1) {
-            m := cache[i]
-            if (type(m) == "HASH" && m["id"] != null && string(m["id"]) == mid) {
-                pr := m["pricing"]
-                if (type(pr) == "HASH" && pr["prompt"] != null && pr["completion"] != null) {
-                    a := try(float(string(pr["prompt"])))
-                    b := try(float(string(pr["completion"])))
-                    if (a[0] && b[0]) {
-                        cost_line = "est cost: $" + string(p * a[1] + c * b[1])
-                    }
-                }
-            }
-        }
-    }
+    cost_line := cost_line_for(ctx, cli)
     last := "last: (none)"
     lu := cli["last_usage"]
     if (type(lu) == "HASH") {
@@ -222,7 +246,14 @@ status_run := fn(ctx, args) {
     }
     guard := ctx["guard"]
     if (guard != null && guard["sandbox"] != null) {
-        lines = arr.push(lines, "sandbox: " + string(guard["sandbox"]))
+        smode := string(guard["sandbox"])
+        if (smode == "danger-full-access") {
+            lines = arr.push(lines, "sandbox: danger-full-access (unrestricted)")
+        } else {
+            impl := "advisory"
+            if (guard["sandbox_impl"] != null) { impl = string(guard["sandbox_impl"]) }
+            lines = arr.push(lines, "sandbox: " + smode + " (" + impl + ")")
+        }
     }
     ui := ctx["ui"]
     if (ui != null && ui["cwd"] != null) {
@@ -232,6 +263,7 @@ status_run := fn(ctx, args) {
     if (sess != null && sess["id"] != null) {
         lines = arr.push(lines, "session: " + string(sess["id"]))
     }
+    lines = arr.push(lines, cost_line_for(ctx, cli))
     br := call_shell(ctx, "git rev-parse --abbrev-ref HEAD 2>/dev/null")
     if (!str.starts_with(br, "Error") && !str.contains(br, "fatal")) {
         first := str.split(str.trim(br), "\n")
@@ -498,6 +530,18 @@ resume_run := fn(ctx, args) {
         if (!r[0]) { return "Error: " + string(r[1]) }
         return string(r[1])
     }
+    ap := ctx["app"]
+    pf := ctx["on_picker"]
+    if (ap != null && ap["tty"] == true && pf != null) {
+        r := try(pf("session"))
+        if (!r[0]) { return "Error: " + string(r[1]) }
+        return string(r[1])
+    }
+    if (rf != null) {
+        r2 := try(rf("latest"))
+        if (!r2[0]) { return "Error: " + string(r2[1]) }
+        return string(r2[1])
+    }
     sessions := session.list()
     if (type(sessions) != "ARRAY" || len(sessions) == 0) {
         return "sessions: (none yet)"
@@ -519,6 +563,23 @@ resume_run := fn(ctx, args) {
     return str.join(lines, "\n")
 }
 
+undo_run := fn(ctx, args) {
+    sess := ctx["session"]
+    sid := "nosession"
+    if (sess != null && sess["id"] != null) { sid = string(sess["id"]) }
+    base := ctx["ck_base"]
+    if (base == null || type(base) != "STRING" || base == "") { return "Error: checkpoints not wired" }
+    want := str.trim(args)
+    if (want == "list") {
+        ls := try(checkpoints.list_turns(sid, base))
+        if (!ls[0] || len(ls[1]) == 0) { return "no checkpoints for this session" }
+        return str.join(ls[1], "\n")
+    }
+    r := try(checkpoints.undo_last(sid, base))
+    if (!r[0]) { return "Error: " + string(r[1]) }
+    return string(r[1])
+}
+
 quit_run := fn(ctx, args) {
     ui := ctx["ui"]
     if (ui != null) {
@@ -528,7 +589,7 @@ quit_run := fn(ctx, args) {
 }
 
 pub builtin_names := fn() {
-    return ["/help", "/models", "/model", "/stats", "/status", "/clear", "/compact", "/btw", "/init", "/new", "/diff", "/review", "/resume", "/approvals", "/sandbox", "/tree", "/quit"]
+    return ["/help", "/models", "/model", "/stats", "/status", "/clear", "/compact", "/btw", "/init", "/new", "/diff", "/review", "/resume", "/approvals", "/sandbox", "/tree", "/undo", "/quit"]
 }
 
 pub all_commands := fn() {
@@ -544,7 +605,8 @@ pub all_commands := fn() {
         make_command("new", "start a fresh session", new_run),
         make_command("diff", "show git diff for review", diff_run),
         make_command("review", "review the current diff with the model", review_run),
-        make_command("resume", "list/resume sessions: /resume [id|latest]", resume_run),
+        make_command("resume", "resume a session: /resume [id|latest]; picker with no id in the TUI", resume_run),
+        make_command("undo", "restore files from the last tool turn: /undo [list]", undo_run),
         make_command("approvals", "get/set approvals: /approvals [mode]", approvals_run),
         make_command("sandbox", "get/set sandbox: /sandbox [mode]", sandbox_run),
         make_command("tree", "list/switch branches: /tree [checkout|branch <b>]", tree_run),
@@ -559,6 +621,23 @@ pub all_commands := fn() {
             label := "/" + nm
             if (nm == "!") { label = "!<cmd>" }
             lines = arr.push(lines, label + " - " + c["hint"])
+        }
+        pm := ctx["prompts"]
+        if (type(pm) == "HASH") {
+            ks := hash.keys(pm)
+            prows := []
+            for (k := 0; k < len(ks); k += 1) {
+                if (!arr.contains(builtin_names(), "/" + ks[k])) {
+                    prows = arr.push(prows, "/" + ks[k] + " - prompt from .md file")
+                }
+            }
+            if (len(prows) > 0) {
+                lines = arr.push(lines, "")
+                lines = arr.push(lines, "prompts:")
+                for (k := 0; k < len(prows); k += 1) {
+                    lines = arr.push(lines, prows[k])
+                }
+            }
         }
         return str.join(lines, "\n")
     }

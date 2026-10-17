@@ -2,6 +2,7 @@
 import "client.zd" as client
 import "agent.zd" as agent
 import "tools.zd" as tools
+import "harness_lib.zd" as hz
 import "std/fmt" as fmt
 import "std/str" as str
 import "std/array" as arr
@@ -98,6 +99,29 @@ check("usage_last", cl["last_usage"] != null && cl["last_usage"]["prompt_tokens"
 check("usage_stats", cl["stats"]["prompt"] == 47, string(cl["stats"]))
 hist := ag["conversation"]["to_api"](ag["conversation"])
 check("conv_tool_pairing", len(hist) >= 4, string(len(hist)))
+
+// ---------- explore sub-agent (nested turn through the real tool) ----------
+ex := hz.make_explore_tool(cl, "/tmp/zodex_tests", null)
+ex_events := {"items": []}
+exh := {
+    "on_text": fn(d) { ex_events["items"] = arr.push(ex_events["items"], "text:" + string(d)) },
+    "on_tool_start": fn(n, a) { ex_events["items"] = arr.push(ex_events["items"], "tool_start:" + string(n)) },
+    "on_tool_result": fn(n, r) { ex_events["items"] = arr.push(ex_events["items"], "tool_result:" + string(r)) }
+}
+agx := agent.new_agent(cl, [ex], "You are a test agent.", 8, null)
+trx := agx["run_turn"]("__mock_explore__ look around", exh)
+check("explore_turn_ok", trx["ok"] == true, string(trx))
+check("explore_turn_text", contains(trx["text"], "All done"), string(trx["text"]))
+check("explore_turn_steps", trx["steps"] == 2, string(trx["steps"]))
+check("explore_tool_started", arr.contains(ex_events["items"], "tool_start:explore"), string(ex_events["items"]))
+saw_sub := false
+for (i := 0; i < len(ex_events["items"]); i += 1) {
+    it := ex_events["items"][i]
+    if (str.starts_with(it, "tool_result:") && contains(it, "echo: look") && contains(it, "explore: 1 steps")) {
+        saw_sub = true
+    }
+}
+check("explore_nested_result", saw_sub, string(ex_events["items"]))
 
 // ---------- retry on 429 ----------
 retry_events := {"items": []}

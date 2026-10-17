@@ -25,6 +25,7 @@ import "std/str" as str
 import "std/array" as arr
 import "std/json" as json
 import "std/process" as process
+import "sandbox.zd" as sandbox
 
 pub SANDBOX_DEFAULT := "workspace-write"
 
@@ -55,13 +56,20 @@ pub make_coding_tools := fn(cwd, opts) {
     max_bytes := 200000
     if (opts["max_bytes"] != null && type(opts["max_bytes"]) == "INTEGER") { max_bytes = opts["max_bytes"] }
 
+    exec_wrap := null
+    if (opts["exec_wrap"] != null && type(opts["exec_wrap"]) == "STRING" && opts["exec_wrap"] != "") {
+        exec_wrap = opts["exec_wrap"]
+    }
+    sandbox_binds := []
+    if (type(opts["sandbox_binds"]) == "ARRAY") { sandbox_binds = opts["sandbox_binds"] }
+
     guard := opts["guard"]
     if (type(guard) != "HASH") { guard = make_guard(null) }
 
     plan_state := opts["plan_state"]
     if (type(plan_state) != "HASH") { plan_state = make_plan_state() }
 
-    sandbox := fn() {
+    sandbox_mode := fn() {
         s := guard["sandbox"]
         if (!valid_sandbox(s)) { s = SANDBOX_DEFAULT }
         return s
@@ -70,7 +78,7 @@ pub make_coding_tools := fn(cwd, opts) {
     // join_path resolves a user-supplied path; absolute paths only pass
     // through under danger-full-access.
     join_path := fn(p) {
-        if (sandbox() == "danger-full-access" && str.starts_with(p, "/")) {
+        if (sandbox_mode() == "danger-full-access" && str.starts_with(p, "/")) {
             return p
         }
         return cwd + "/" + p
@@ -81,7 +89,7 @@ pub make_coding_tools := fn(cwd, opts) {
         if (p == null || type(p) != "STRING" || p == "") {
             return "Error: path required"
         }
-        s := sandbox()
+        s := sandbox_mode()
         if (s != "danger-full-access") {
             if (str.starts_with(p, "/")) {
                 return "Error: absolute path blocked by sandbox: " + p
@@ -230,7 +238,7 @@ pub make_coding_tools := fn(cwd, opts) {
         if (e != null) {
             return [e, null, null]
         }
-        if (sandbox() == "danger-full-access" && str.starts_with(d, "/")) {
+        if (sandbox_mode() == "danger-full-access" && str.starts_with(d, "/")) {
             return [null, d, d]
         }
         return [null, cwd + "/" + d, d]
@@ -545,10 +553,16 @@ pub make_coding_tools := fn(cwd, opts) {
                 if (we != null) { return we }
                 wd = join_path(wdarg)
             }
-            if (sandbox() == "read-only" && !read_only_cmd_ok(cmd)) {
+            if (sandbox_mode() == "read-only" && !read_only_cmd_ok(cmd)) {
                 return "Error: sandbox \"read-only\" blocks shell command: " + cmd
             }
-            r := try(process.shell(cmd, {"cwd": wd, "timeout_ms": ms}))
+            r := null
+            if (exec_wrap != null && sandbox_mode() != "danger-full-access") {
+                wargs := sandbox.wrap_argv(sandbox_mode(), cwd, wd, sandbox_binds, cmd)
+                r = try(process.exec(exec_wrap, wargs, {"cwd": wd, "timeout_ms": ms}))
+            } else {
+                r = try(process.shell(cmd, {"cwd": wd, "timeout_ms": ms}))
+            }
             if (!r[0]) {
                 return "Error: " + r[1]
             }
@@ -586,7 +600,7 @@ pub make_coding_tools := fn(cwd, opts) {
             if (p == null || type(p) != "STRING" || p == "") {
                 return "Error: patch required"
             }
-            if (sandbox() == "read-only") {
+            if (sandbox_mode() == "read-only") {
                 return "Error: sandbox \"read-only\" blocks writes"
             }
             r := apply_patch.apply_text(p, cwd)

@@ -9,6 +9,7 @@ import "std/fs" as fs
 import "std/json" as json
 import "std/hash" as hash
 import "std/str" as str
+import "std/array" as arr
 
 pub root_dir := fn() {
     home := os.env_get("ZODEX_HOME")
@@ -42,7 +43,10 @@ pub defaults := fn() {
         "max_bytes": 200000,
         "temperature": 0.7,
         "timeout_ms": 120000,
-        "theme": "zodex"
+        "theme": "zodex",
+        "bell": true,
+        "sandbox_tool": "auto",
+        "sandbox_binds": []
     }
 }
 
@@ -73,8 +77,14 @@ value_ok := fn(key, v) {
         return key == "api_key"
     }
     t := type(v)
-    if (key == "model" || key == "base_url" || key == "approvals" || key == "sandbox" || key == "theme") {
+    if (key == "model" || key == "base_url" || key == "theme") {
         return t == "STRING"
+    }
+    if (key == "sandbox") {
+        return t == "STRING" && (v == "read-only" || v == "workspace-write" || v == "danger-full-access")
+    }
+    if (key == "approvals") {
+        return t == "STRING" && (v == "untrusted" || v == "on-failure" || v == "on-request" || v == "never")
     }
     if (key == "api_key") {
         return t == "STRING"
@@ -90,6 +100,18 @@ value_ok := fn(key, v) {
     }
     if (key == "compact_threshold" || key == "temperature") {
         return t == "INTEGER" || t == "FLOAT"
+    }
+    if (key == "bell") {
+        return t == "BOOLEAN"
+    }
+    if (key == "sandbox_tool") {
+        return t == "STRING"
+    }
+    if (key == "sandbox_binds") {
+        return t == "ARRAY"
+    }
+    if (key == "profiles") {
+        return t == "HASH"
     }
     return true
 }
@@ -201,7 +223,103 @@ pub apply_env := fn(cfg) {
     if (b != null) {
         out["auto_compact"] = b
     }
+    b = env_bool("ZODEX_BELL")
+    if (b != null) {
+        out["bell"] = b
+    }
+    v = env_str("ZODEX_SANDBOX_TOOL")
+    if (v != null) {
+        out["sandbox_tool"] = v
+    }
     return out
+}
+
+// Overlay the named entry of cfg["profiles"] on top of cfg. A null/empty
+// name is a no-op; an unknown profile returns an error hash instead.
+pub profile_overlay := fn(cfg, name) {
+    if (name == null || type(name) != "STRING" || name == "") {
+        return {"ok": true, "cfg": cfg, "error": null}
+    }
+    profiles := null
+    if (type(cfg) == "HASH") {
+        profiles = cfg["profiles"]
+    }
+    if (type(profiles) == "HASH") {
+        if (hash.contains(profiles, name)) {
+            over := profiles[name]
+            if (type(over) == "HASH") {
+                clean := {}
+                ks := hash.keys(over)
+                for (i := 0; i < len(ks); i += 1) {
+                    if (value_ok(ks[i], over[ks[i]])) {
+                        clean[ks[i]] = over[ks[i]]
+                    }
+                }
+                return {"ok": true, "cfg": merge(cfg, clean), "error": null}
+            }
+            return {"ok": false, "cfg": cfg, "error": "invalid profile: " + name + " (must be a table)"}
+        }
+        return {"ok": false, "cfg": cfg, "error": "unknown profile: " + name + " (available: " + str.join(hash.keys(profiles), ", ") + ")"}
+    }
+    return {"ok": false, "cfg": cfg, "error": "unknown profile: " + name + " (no profiles are defined)"}
+}
+
+// Parse one -c value: true/false booleans, JSON-ish numbers/arrays/hashes
+// (only when the text starts with a digit, "-", "[" or "{"), else a string.
+pub parse_override_value := fn(text) {
+    if (type(text) != "STRING") {
+        return text
+    }
+    if (text == "true") {
+        return true
+    }
+    if (text == "false") {
+        return false
+    }
+    if (text == "") {
+        return text
+    }
+    c := str.slice(text, 0, 1)
+    if (str.contains("0123456789", c) || c == "-" || c == "[" || c == "{") {
+        p := try(json.parse(text))
+        if (p[0]) {
+            t := type(p[1])
+            if (t == "INTEGER" || t == "FLOAT" || t == "BOOLEAN" || t == "HASH" || t == "ARRAY") {
+                return p[1]
+            }
+        }
+    }
+    return text
+}
+
+// Apply "-c key=value" pairs onto a copy of cfg. Never raises: bad pairs are
+// reported in "errors" and skipped, everything else keeps the merged value.
+pub apply_overrides := fn(cfg, pairs) {
+    out := merge(cfg, null)
+    errs := []
+    if (type(pairs) == "ARRAY") {
+        for (i := 0; i < len(pairs); i += 1) {
+            pair := pairs[i]
+            if (type(pair) != "STRING") {
+                errs = arr.push(errs, "invalid -c (expected key=value): " + string(pair))
+                continue
+            }
+            at := str.index_of(pair, "=")
+            if (at <= 0) {
+                errs = arr.push(errs, "invalid -c (expected key=value): " + pair)
+                continue
+            }
+            key := str.slice(pair, 0, at)
+            raw := str.slice(pair, at + 1, len(pair))
+            v := parse_override_value(raw)
+            if (!value_ok(key, v)) {
+                errs = arr.push(errs, "invalid -c value for " + key + ": " + raw)
+                continue
+            }
+            out[key] = v
+        }
+    }
+    return {"cfg": out, "errors": errs}
 }
 
 pub resolve_key := fn(cfg) {
@@ -229,13 +347,24 @@ pub resolve_key := fn(cfg) {
     return null
 }
 
-pub load := fn(cwd) {
+// Full layered load: defaults < root config < cwd config < profile < env.
+// Returns {"ok": bool, "cfg": hash, "error": string|null}.
+pub load_ex := fn(cwd, profile) {
     cfg := defaults()
     cfg = config_file(root_dir() + "/config.json", cfg)
     if (type(cwd) == "STRING" && cwd != "") {
         cfg = config_file(cwd + "/.zodex/config.json", cfg)
     }
-    return apply_env(cfg)
+    po := profile_overlay(cfg, profile)
+    if (po["ok"] != true) {
+        return {"ok": false, "cfg": defaults(), "error": po["error"]}
+    }
+    return {"ok": true, "cfg": apply_env(po["cfg"]), "error": null}
+}
+
+pub load := fn(cwd) {
+    r := load_ex(cwd, null)
+    return r["cfg"]
 }
 
 // Persist only the project-safe subset of cfg to cwd/.zodex/config.json.

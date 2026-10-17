@@ -1,0 +1,140 @@
+// files.zd — cached read-only file index for the @-file picker.
+//
+// walk builds a deterministic relative-path list under cwd (os.ReadDir is
+// name-sorted), skipping VCS/vendor/build directories and dot entries.
+// fuzzy_score ranks one path against a subsequence query; rank returns the
+// best N. Pure string/array code: no writes, no session state.
+
+import "std/fs" as fs
+import "std/str" as str
+import "std/array" as arr
+
+// walk(cwd, limit) returns relative file paths under cwd (directories are
+// only descended into, never listed). Deterministic: os.ReadDir sorts by
+// name and subdirectories are expanded depth-first. Skips dot entries and
+// common VCS/vendor/build dirs. limit defaults to 1200.
+pub walk := fn(cwd, limit) {
+    out := []
+    if (type(cwd) != "STRING" || cwd == "") { return out }
+    lim := 1200
+    if (type(limit) == "INTEGER" && limit > 0) { lim = limit }
+    skips := [".git", "node_modules", "target", "dist", "build", ".venv", "venv", "__pycache__", ".cache", ".idea", ".vscode", "vendor"]
+    stack := [""]
+    sp := 1
+    visited := 0
+    for (round := 0; round < 4000 && sp > 0 && len(out) < lim; round += 1) {
+        sp -= 1
+        rel := stack[sp]
+        abs := cwd + "/" + rel
+        if (rel == "") { abs = cwd }
+        visited += 1
+        lr := try(fs.ls(abs))
+        if (!lr[0] || type(lr[1]) != "ARRAY") { continue }
+        names := lr[1]
+        for (i := 0; i < len(names); i += 1) {
+            nm := names[i]
+            if (type(nm) != "STRING" || nm == "") { continue }
+            if (len(out) >= lim) { continue }
+            child_rel := nm
+            if (rel != "") { child_rel = rel + "/" + nm }
+            child_abs := cwd + "/" + child_rel
+            sr := try(fs.stat(child_abs))
+            is_dir := false
+            if (sr[0] && type(sr[1]) == "HASH" && sr[1]["is_dir"] == true) { is_dir = true }
+            if (str.starts_with(nm, ".")) { continue }
+            if (is_dir) {
+                if (arr.contains(skips, nm)) { continue }
+                // push: reuse the slot just popped when possible, grow
+                // otherwise (arr.push appends at the end, not at index sp).
+                if (sp < len(stack)) {
+                    stack[sp] = child_rel
+                } else {
+                    stack = arr.push(stack, child_rel)
+                }
+                sp += 1
+            } else {
+                out = arr.push(out, child_rel)
+            }
+        }
+    }
+    return out
+}
+
+// fuzzy_score(path, query) returns a non-negative reward when every query
+// char appears in order in path (higher = better) and -1 when query is not
+// a subsequence. An empty query scores 0 for every path. Non-ASCII query
+// bytes (e.g. a multibyte picker keystroke) are ignored: the matcher is
+// byte/ASCII oriented, and a stray non-ASCII char must not filter out
+// every path.
+pub fuzzy_score := fn(path, query) {
+    raw := str.lower(query)
+    lq := ""
+    for (bi := 0; bi < len(raw); bi += 1) {
+        ch := str.slice(raw, bi, bi + 1)
+        if (__ord(ch) < 128) { lq = lq + ch }
+    }
+    if (lq == "") { return 0 }
+    lp := str.lower(path)
+    if (len(lq) > len(lp)) { return -1 }
+    score := 0
+    pi := 0
+    last := -1
+    for (qi := 0; qi < len(lq); qi += 1) {
+        ch := str.slice(lq, qi, qi + 1)
+        found := -1
+        for (k := pi; k < len(lp); k += 1) {
+            if (found < 0 && str.slice(lp, k, k + 1) == ch) { found = k }
+        }
+        if (found < 0) { return -1 }
+        score += 20
+        if (found < 60) { score += 10 }
+        if (last >= 0 && found == last + 1) { score += 15 }
+        if (found == 0 || str.slice(lp, found - 1, found) == "/") { score += 25 }
+        last = found
+        pi = found + 1
+    }
+    bslash := -1
+    for (bi := 0; bi < len(lp); bi += 1) {
+        if (str.slice(lp, bi, bi + 1) == "/") { bslash = bi }
+    }
+    base_pos := bslash + 1
+    if (last >= base_pos) { score += 40 }
+    if (len(lp) < 50) { score += 50 - len(lp) }
+    return score
+}
+
+// rank(paths, query, limit) returns up to `limit` best paths (best first).
+// Ties keep the input order. limit defaults to 12 when absent/invalid.
+pub rank := fn(paths, query, limit) {
+    lim := 12
+    if (type(limit) == "INTEGER" && limit > 0) { lim = limit }
+    items := []
+    scores := []
+    if (type(paths) == "ARRAY") {
+        for (i := 0; i < len(paths); i += 1) {
+            p := paths[i]
+            if (type(p) != "STRING") { continue }
+            sc := fuzzy_score(p, query)
+            if (sc >= 0) {
+                items = arr.push(items, p)
+                scores = arr.push(scores, sc)
+            }
+        }
+    }
+    out := []
+    for (round := 0; round < lim; round += 1) {
+        bi := -1
+        bs := -2
+        for (i := 0; i < len(scores); i += 1) {
+            if (scores[i] > bs) {
+                bs = scores[i]
+                bi = i
+            }
+        }
+        if (bi >= 0) {
+            out = arr.push(out, items[bi])
+            scores[bi] = -2
+        }
+    }
+    return out
+}

@@ -1,0 +1,154 @@
+// _check_golden.zd — golden-frame checks for the pure UI core (draw_ui).
+// Renders deterministic frames, strips ANSI, compares to
+// examples/demo/agentic/fixtures/golden/<name>.txt. Regenerate with:
+//   ZODEX_UPDATE_GOLDEN=1 /tmp/opencode/zod_next examples/demo/agentic/_check_golden.zd
+import "harness_lib.zd" as hz
+import "render.zd" as render
+import "std/fmt" as fmt
+import "std/str" as str
+import "std/array" as arr
+import "std/fs" as fs
+import "std/os" as os
+
+box := {"fails": 0}
+
+check := fn(name, cond, detail) {
+    if (cond) {
+        fmt.println("PASS " + name)
+    } else {
+        box["fails"] = box["fails"] + 1
+        fmt.println("FAIL " + name + ": " + detail)
+    }
+}
+
+GD := "examples/demo/agentic/fixtures/golden"
+UPD := false
+uv := os.env_get("ZODEX_UPDATE_GOLDEN")
+if (uv == "1" || uv == "true") { UPD = true }
+if (UPD) {
+    ignored_gd := try(fs.mkdir(GD))
+}
+
+// verify(name, ui) draws the frame, strips ANSI, then compares against the
+// golden file (or rewrites it when ZODEX_UPDATE_GOLDEN=1). Deterministic
+// inputs only: no running state, clocks, ids or paths that vary per run.
+verify := fn(name, ui) {
+    fr := hz.draw_ui(ui)
+    lines := fr["lines"]
+    stripped := []
+    for (i := 0; i < len(lines); i += 1) {
+        stripped = arr.push(stripped, render.strip_ansi(string(lines[i])))
+    }
+    text := str.join(stripped, "\n")
+    path := GD + "/" + name + ".txt"
+    if (UPD) {
+        wr := try(fs.write_file(path, text))
+        if (wr[0]) {
+            fmt.println("UPDATED " + name)
+        } else {
+            check("write_" + name, false, string(wr[1]))
+        }
+        return null
+    }
+    rd := try(fs.read_file(path))
+    if (!rd[0] || type(rd[1]) != "STRING") {
+        check(name, false, "missing golden; regenerate with ZODEX_UPDATE_GOLDEN=1")
+        return null
+    }
+    want := str.split(rd[1], "\n")
+    diff := -1
+    n := len(want)
+    if (len(stripped) < n) { n = len(stripped) }
+    for (i := 0; i < n; i += 1) {
+        if (diff < 0 && want[i] != stripped[i]) { diff = i }
+    }
+    if (diff < 0 && len(want) != len(stripped)) { diff = n }
+    if (diff < 0) {
+        check(name, true, "")
+    } else {
+        wl := "<missing>"
+        gl := "<missing>"
+        if (diff < len(want)) { wl = want[diff] }
+        if (diff < len(stripped)) { gl = stripped[diff] }
+        check(name, false, "mismatch at line " + string(diff) + " | want: " + wl + " | got: " + gl)
+    }
+    return null
+}
+
+// 1. welcome_80x24 — banner + tip on an empty transcript.
+u1 := hz.new_ui("/tmp/work", "qwen/x")
+u1["width"] = 80
+u1["height"] = 24
+u1["log"] = arr.push(u1["log"], {"kind": "banner", "text": str.join(render.welcome_lines(80, "qwen/x", "/tmp/work", "v0.1.0"), "\n")})
+u1["log"] = arr.push(u1["log"], {"kind": "note", "text": "tip: /help lists commands · @ opens the file picker"})
+verify("welcome_80x24", u1)
+
+// 2. transcript_80x24 — every cell kind.
+u2 := hz.new_ui("/tmp/work", "qwen/x")
+u2["width"] = 80
+u2["height"] = 24
+u2["log"] = arr.push(u2["log"], {"kind": "user", "text": "hello there"})
+u2["log"] = arr.push(u2["log"], {"kind": "assistant", "text": "# Title\n\nSome **bold** text and `code`."})
+u2["log"] = arr.push(u2["log"], {"kind": "tool", "name": "shell", "label": "Ran echo hi", "patch": "", "result": "exit 0\nhi", "status": "ok", "expanded": false})
+u2["log"] = arr.push(u2["log"], {"kind": "note", "text": "a note"})
+u2["log"] = arr.push(u2["log"], {"kind": "error", "text": "Error: boom"})
+u2["log"] = arr.push(u2["log"], {"kind": "plan", "steps": [{"step": "one", "status": "completed"}, {"step": "two", "status": "pending"}]})
+verify("transcript_80x24", u2)
+
+// 3. composer_60x12 — multiline composer with the cursor at the end.
+u3 := hz.new_ui("/tmp/work", "qwen/x")
+u3["width"] = 60
+u3["height"] = 12
+u3["input"] = "line1\nline2\nline3\nline4"
+u3["cursor"] = len(u3["input"])
+verify("composer_60x12", u3)
+
+// 4. picker_model_60x12
+u4 := hz.new_ui("/tmp/work", "qwen/x")
+u4["width"] = 60
+u4["height"] = 12
+u4["picker"] = {"kind": "model", "title": "model", "items": ["gpt-4o-mini", "claude-sonnet-4", "qwen/x"], "sel": 1}
+verify("picker_model_60x12", u4)
+
+// 5. picker_file_60x12 — file picker with a typed query.
+u5 := hz.new_ui("/tmp/work", "qwen/x")
+u5["width"] = 60
+u5["height"] = 12
+u5["picker"] = {"kind": "file", "title": "file @b", "all": ["a.txt", "dir/b.txt", "lib/big.zd"], "items": ["dir/b.txt", "lib/big.zd"], "query": "b", "sel": 0}
+verify("picker_file_60x12", u5)
+
+// 6. overlay_approval_80x24 — expanded approval overlay over a transcript.
+u6 := hz.new_ui("/tmp/work", "qwen/x")
+u6["width"] = 80
+u6["height"] = 24
+u6["log"] = arr.push(u6["log"], {"kind": "user", "text": "clean the build dir"})
+u6["log"] = arr.push(u6["log"], {"kind": "assistant", "text": "I would like to run a command."})
+u6["overlay"] = {"kind": "approval", "name": "shell", "args": "{\"command\":\"ls -la\"}", "expanded": true}
+verify("overlay_approval_80x24", u6)
+
+// 7. scroll_60x12 — scroll clamps to the tail of a long transcript.
+u7 := hz.new_ui("/tmp/work", "qwen/x")
+u7["width"] = 60
+u7["height"] = 12
+for (i := 1; i <= 10; i += 1) {
+    n := string(i)
+    if (i < 10) { n = "0" + n }
+    u7["log"] = arr.push(u7["log"], {"kind": "note", "text": "note " + n})
+}
+u7["scroll"] = 100000
+verify("scroll_60x12", u7)
+
+// 8. narrow_40x10 — wrapped transcript + composer at a narrow size.
+u8 := hz.new_ui("/tmp/work", "qwen/x")
+u8["width"] = 40
+u8["height"] = 10
+u8["log"] = arr.push(u8["log"], {"kind": "user", "text": "fix the bug in the parser"})
+u8["log"] = arr.push(u8["log"], {"kind": "assistant", "text": "Looking at `parser.zd` now."})
+u8["input"] = "add a test too"
+u8["cursor"] = len(u8["input"])
+verify("narrow_40x10", u8)
+
+fmt.println("SUMMARY pass_done fails=" + string(box["fails"]))
+if (box["fails"] > 0) {
+    os.exit(1)
+}

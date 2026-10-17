@@ -1,0 +1,24 @@
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+>_ Zodex (v0.1.0)                                                               
+                                                                                
+model: qwen/x                                                                   
+directory: /tmp/work                                                            
+                                                                                
+To get started, describe a task or try one of these commands:                   
+                                                                                
+  /help    list commands                                                        
+  /model   switch the model                                                     
+  /init    write AGENTS.md project notes                                        
+  /review  review the current diff                                              
+                                                                                
+  [note] tip: /help lists commands · @ opens the file picker                    
+                                                                                
+› Ask Zodex to do anything                                                      
+  qwen/x · Context 100% left · work                                             

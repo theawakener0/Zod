@@ -1,0 +1,95 @@
+// _check_sandbox.zd — end-to-end sandbox wrapper checks (shell tool + fake bwrap).
+// Requires an executable fake wrapper at /tmp/opencode/fakebin/bwrap; prints
+// SKIP and exits 0 when it is missing. Run:
+//   /tmp/opencode/zod_next examples/demo/agentic/_check_sandbox.zd
+import "coding_tools.zd" as coding_tools
+import "sandbox.zd" as sandbox
+import "tools.zd" as tools
+import "std/fmt" as fmt
+import "std/str" as str
+import "std/array" as arr
+import "std/fs" as fs
+import "std/os" as os
+
+box := {"fails": 0}
+
+check := fn(name, cond, detail) {
+    if (cond) {
+        fmt.println("PASS " + name)
+    } else {
+        box["fails"] = box["fails"] + 1
+        fmt.println("FAIL " + name + ": " + detail)
+    }
+}
+
+contains := fn(s, sub) {
+    return str.contains(string(s), sub)
+}
+
+FAKE := "/tmp/opencode/fakebin/bwrap"
+ARGSFILE := "/tmp/opencode/bwrap_args.txt"
+TMP := "/tmp/opencode/sbx_tmp"
+WORK := TMP + "/work"
+
+fake_ex := try(fs.exists(FAKE))
+if (!fake_ex[0] || fake_ex[1] != true) {
+    fmt.println("SKIP: fake wrapper not found at " + FAKE)
+    os.exit(0)
+}
+
+ignored_tmp := try(fs.mkdir(TMP))
+ignored_work := try(fs.mkdir(WORK))
+ignored_rm := try(fs.rm(ARGSFILE))
+
+// ---------- t1: workspace-write via the wrapper ----------
+guard1 := coding_tools.make_guard("workspace-write")
+ts1 := coding_tools.make_coding_tools(TMP, {"guard": guard1, "allow_exec": true, "exec_wrap": FAKE, "sandbox_binds": []})
+by1 := tools.index_by_name(ts1)
+t1 := by1["shell"]
+r1 := try(t1["fn"]({"command": "echo sbx-ok"}))
+out1 := string(r1[1])
+check("t1_wrapped_output", r1[0] && contains(out1, "sbx-ok") && contains(out1, "exit 0"), out1)
+a1 := try(fs.read_file(ARGSFILE))
+args1 := ""
+if (a1[0] && type(a1[1]) == "STRING") { args1 = a1[1] }
+check("t1_wrapper_args", contains(args1, "--ro-bind") && contains(args1, "--bind") && contains(args1, "--chdir"), args1)
+
+// ---------- t2: no wrapper configured -> plain shell ----------
+ignored_rm2 := try(fs.rm(ARGSFILE))
+guard2 := coding_tools.make_guard("workspace-write")
+ts2 := coding_tools.make_coding_tools(TMP, {"guard": guard2, "allow_exec": true})
+by2 := tools.index_by_name(ts2)
+t2 := by2["shell"]
+r2 := try(t2["fn"]({"command": "echo direct-ok"}))
+out2 := string(r2[1])
+check("t2_direct_output", r2[0] && contains(out2, "direct-ok"), out2)
+ex2 := try(fs.exists(ARGSFILE))
+used2 := false
+if (ex2[0] && ex2[1] == true) { used2 = true }
+check("t2_no_wrapper", !used2, "wrapper args file written")
+
+// ---------- t3: read-only via the wrapper (no rw binds) ----------
+ignored_rm3 := try(fs.rm(ARGSFILE))
+guard3 := coding_tools.make_guard("read-only")
+ts3 := coding_tools.make_coding_tools(TMP, {"guard": guard3, "allow_exec": true, "exec_wrap": FAKE, "sandbox_binds": []})
+by3 := tools.index_by_name(ts3)
+t3 := by3["shell"]
+r3 := try(t3["fn"]({"command": "echo ro-ok"}))
+out3 := string(r3[1])
+check("t3_readonly_output", r3[0] && contains(out3, "ro-ok"), out3)
+a3 := try(fs.read_file(ARGSFILE))
+args3 := ""
+if (a3[0] && type(a3[1]) == "STRING") { args3 = a3[1] }
+check("t3_no_rw_bind", args3 != "" && !contains(args3, "--bind"), args3)
+
+// ---------- t4: probe resolves / disables ----------
+p1 := sandbox.probe({"sandbox_tool": FAKE})
+check("t4_probe_fake", p1 == FAKE, string(p1))
+p2 := sandbox.probe({"sandbox_tool": "off"})
+check("t4_probe_off", p2 == null, string(p2))
+
+fmt.println("SUMMARY pass_done fails=" + string(box["fails"]))
+if (box["fails"] > 0) {
+    os.exit(1)
+}
+os.exit(0)

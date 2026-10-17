@@ -32,10 +32,12 @@ The default provider is the HackClub AI proxy
 ./zod examples/demo/harness.zd exec "..." --json    # JSONL events (tool.start, tool.result, text, turn.completed)
 ./zod examples/demo/harness.zd --resume             # resume the latest session
 ./zod examples/demo/harness.zd --resume <id|latest> # same, explicit target
-./zod examples/demo/harness.zd --self-test          # 49-check UI self-test, exit 1 on failure
+./zod examples/demo/harness.zd --self-test          # 55-check UI self-test, exit 1 on failure
 ```
 
 Flags: `--model <id>`, `--approvals <mode>`, `--sandbox <mode>`, `--cwd <dir>`,
+`--profile <name>` (a named `profiles` entry from config), repeatable
+`-c key=value` overrides, `--full-auto` (never ask, workspace-write sandbox),
 `--yolo` (alias `--dangerously-bypass-approvals-and-sandbox`), `--json`,
 `--resume [id|latest]`, `--help`, `--version`.
 
@@ -63,7 +65,8 @@ marks the TUI status line with a red `YOLO` badge.
 | `up` / `down` | history (and transcript scroll with `pgup`/`pgdn`) |
 | `tab` | complete `/command` names |
 | approval overlay | `y` allow once, `a` allow for session, `n`/`esc`/`enter` deny, `v` expand args |
-| model picker (`/model` with no argument) | up/down + enter, esc cancels |
+| pickers (`/model`, `/resume` with no argument) | up/down + enter, esc cancels |
+| `@` (file picker) | type to filter, up/down + enter inserts `@path` (paths with spaces are inserted quoted, e.g. `@"my file.txt"`), esc cancels |
 
 The composer is borderless (`›` prompt with a dim placeholder), a dim status
 line under it shows `model · Context NN% left · directory`, and a
@@ -75,23 +78,33 @@ status line shows the queue depth.
 
 ```
 /help /status /model /stats /approvals /sandbox /new /resume
-/compact /init /diff /review /btw /tree /clear /quit
+/compact /undo /init /diff /review /btw /tree /clear /quit
 !<cmd>  run a shell command directly (user-initiated, bypasses approvals;
         the sandbox still applies)
 ```
 
-`/quit` (or `:q` / `:quit`) exits the TUI.
+`/quit` (or `:q` / `:quit`) exits the TUI. `/undo [list]` restores the files
+touched by the last mutating tool turn from per-turn checkpoints; shell side
+effects are not captured. In the TUI, `/resume` with no argument opens a
+session picker (line mode resumes the latest session).
+
+`*.md` files in `<ZODEX_HOME>/prompts/` or `./.zodex/prompts/` (local wins)
+become prompt commands: `/<name> args` runs the body with `$ARGUMENTS`
+replaced by the argument text (or the args appended after a blank line);
+they work in the TUI, line mode, and exec mode.
+Builtin command names always win name collisions.
 
 ## Approvals and sandbox
 
 Approvals (`untrusted` default, `on-failure`, `on-request`, `never`) gate every
 non-read-only tool call. `untrusted` and `on-request` ask; `on-failure` allows
 without asking; `never` (Codex semantics) allows without ever asking — it is
-the approvals half of yolo mode. Read-only tools (`read_file`, `glob`, `grep`)
-run unconditionally. Writes and `shell` ask the user, who can allow once or for
-the session. Non-interactive runs answer `deny` automatically; exec mode
-switches the default to `on-failure`. Allow rules can be configured as
-`"tool"` or `"tool:pattern"` entries in `approvals_rules`.
+the approvals half of yolo mode. Read-only tools (`read_file`, `glob`, `grep`,
+`update_plan`, `explore`) run unconditionally. Writes and `shell` ask the
+user, who can allow once or for the session. Non-interactive runs answer
+`deny` automatically; exec mode switches the default to `on-failure`. Allow
+rules can be configured as `"tool"` or `"tool:pattern"` entries in
+`approvals_rules`.
 
 Sandbox modes (`workspace-write` default, `read-only`, `danger-full-access`)
 are enforced by shared guards inside the tools:
@@ -101,22 +114,44 @@ are enforced by shared guards inside the tools:
 - `workspace-write`: writes allowed under the working directory.
 - `danger-full-access`: no path restrictions.
 
-This is an advisory, in-process sandbox. OS-level sandboxing (seatbelt/landlock
-style) is documented future work.
+This is an advisory, in-process sandbox. Optionally, an external wrapper
+program provides OS-level isolation for `shell` commands: config
+`sandbox_tool` is `auto` (use `bwrap` when a smoke test passes), `off`, or a
+program name/path; `ZODEX_SANDBOX_TOOL` overrides it. Under `workspace-write`,
+`sandbox_binds` adds extra paths that stay read-write. `/status` shows the
+active implementation (the wrapper program vs `advisory`); without a working
+wrapper the advisory guard applies.
+
+The `explore` tool runs a nested read-only sub-agent (`read_file`, `glob`,
+`grep`, `update_plan` only — it can never mutate anything) and returns its
+report, truncated, with a step count.
 
 ## Config
 
 Precedence: built-in defaults → `~/.zodex/config.json` → `<cwd>/.zodex/config.json`
-→ environment variables. Keys: `model`, `base_url`, `api_key`, `api_key_env`,
-`approvals`, `approvals_rules`, `sandbox`, `max_steps`, `auto_compact`,
-`compact_threshold`, `context_window`, `stream_usage`, `allow_exec`,
-`max_bytes`, `temperature`, `timeout_ms`, `theme`.
+→ profile (`--profile <name>`, overlay from the config `profiles` hash) →
+environment variables → `--full-auto` → explicit flags
+(`--model`/`--approvals`/`--sandbox`) → `-c key=value` overrides → `--yolo`.
+Keys: `model`, `base_url`, `api_key`, `api_key_env`, `approvals`,
+`approvals_rules`, `sandbox`, `sandbox_tool`, `sandbox_binds`, `max_steps`,
+`auto_compact`, `compact_threshold`, `context_window`, `stream_usage`,
+`allow_exec`, `max_bytes`, `temperature`, `timeout_ms`, `theme`, `bell`,
+`profiles`. `-c` values are parsed as boolean/number/array/hash when they look
+JSON-ish, otherwise as strings; malformed pairs are reported and skipped.
+Invalid `sandbox`/`approvals` values are skipped from config files, profiles
+and env; `-c` rejects them with an error; an unknown `--sandbox`/`--approvals`
+value warns on stderr and falls back to the default.
 
 Environment: `ZODEX_HOME`, `ZODEX_MODEL`, `ZODEX_BASE_URL`, `ZODEX_API_KEY`,
 `ZODEX_APPROVALS`, `ZODEX_SANDBOX`, `ZODEX_MAX_STEPS`, `ZODEX_MAX_BYTES`,
 `ZODEX_ALLOW_EXEC`, `ZODEX_AUTO_COMPACT`, `ZODEX_STREAM_USAGE`,
-`ZODEX_TIMEOUT_MS`. API keys are also read from `HACKCLUB_AI_API_KEY`,
-`HACK_CLUB_AI_API_KEY` and `OPENAI_API_KEY`.
+`ZODEX_TIMEOUT_MS`, `ZODEX_BELL`, `ZODEX_SANDBOX_TOOL`. API keys are also read
+from `HACKCLUB_AI_API_KEY`, `HACK_CLUB_AI_API_KEY` and `OPENAI_API_KEY`.
+
+`bell` (default on) makes the TUI ring `\x07` when a turn takes at least
+1.5 s; `ZODEX_BELL=0` disables it. `/status` and `/stats` show
+`est cost: $x (est)` from the `/models` pricing when available, falling back
+to the built-in static price table.
 
 `timeout_ms` is an *inactivity* timeout for streaming responses: the stream
 keeps running while data keeps arriving and fails only after that many
@@ -131,7 +166,9 @@ Every conversation is an append-only rollout at
 meta, messages and tool traffic as they happen. `--resume` and `/resume` load
 a rollout into the agent conversation and continue appending to the same file.
 Session files are created lazily on their first record, so resuming never picks
-an empty stub.
+an empty stub. Per-turn checkpoints (the pre-edit content of files touched by
+mutating tools) live under `$ZODEX_HOME/checkpoints/<session>/<turn>/` and back
+`/undo`.
 
 ## Modules
 
@@ -144,6 +181,8 @@ an empty stub.
 | `apply_patch.zd` | Codex-style `*** Begin Patch` parser and all-or-nothing applier |
 | `approvals.zd` | decision engine (modes, rules, session grants) + tool wrapping |
 | `commands.zd` | slash commands and `!` passthrough |
+| `checkpoints.zd` / `sandbox.zd` | per-turn file checkpoints for `/undo`; external shell-sandbox wrapper |
+| `prompts.zd` / `pricing.zd` | user prompt commands; static cost estimates |
 | `pi.zd` | AGENTS.md context loading, system prompt, worktree/branch helpers |
 | `render.zd` / `fx.zd` | ANSI-aware markdown/cells/diff rendering; spinner kit |
 | `config.zd` / `cli.zd` | config precedence/env; argument parsing |
@@ -153,33 +192,51 @@ an empty stub.
 ## Tests
 
 ```sh
-# pure modules + UI core: 116 checks, exit 1 on failure
+# pure modules + UI core: 171 checks, exit 1 on failure
 ZODEX_HOME=/tmp/zodex_tests ./zod examples/demo/agentic/tests.zd
 
-# UI self-test only (no disk writes): 49 checks
+# UI self-test only (no disk writes): 55 checks
 ./zod examples/demo/harness.zd --self-test
 
-# client + agent against the mock server: 38 checks
+# golden UI frames: 8 checks; regenerate with ZODEX_UPDATE_GOLDEN=1
+./zod examples/demo/agentic/_check_golden.zd
+
+# external shell-sandbox wrapper: 8 checks
+# (prints SKIP without the fake wrapper at /tmp/opencode/fakebin/bwrap)
+./zod examples/demo/agentic/_check_sandbox.zd
+
+# mock server (needed by the next two):
 python3 examples/demo/agentic/mock_openai.py 8791 &
+
+# client + agent against the mock: 43 checks
 ./zod examples/demo/agentic/_check_agent.zd
+
+# request-shape (cassette) checks: 12 checks
+./zod examples/demo/agentic/_check_requests.zd
 ```
 
 `tests.zd` skips the four session/history disk checks unless `ZODEX_HOME` is
 set, so plain runs never touch a real `~/.zodex`. The mock server
 (`mock_openai.py`, stdlib-only test tooling) is stateful: restart it between
-runs that exercise retries.
+runs that exercise retries. `_check_golden.zd` compares ANSI-stripped frames
+against `examples/demo/agentic/fixtures/golden/<name>.txt` and only rewrites
+them when `ZODEX_UPDATE_GOLDEN=1` is set; `_check_requests.zd` inspects the
+raw request bodies the mock records in `/tmp/opencode/mock_requests.jsonl`.
 
 ## Parity with Codex
 
 | Area | Status |
 | --- | --- |
 | Streaming TUI chat, markdown, diffs | done |
-| Tool calling: shell, apply_patch, update_plan, read/write/edit/glob/grep | done |
+| Tool calling: shell, apply_patch, update_plan, read/write/edit/glob/grep, read-only `explore` sub-agent | done |
 | `apply_patch` format (add/update/delete, `@@` anchors, move) | done |
-| Approvals modes + session grants + rules + yolo bypass (`--yolo`) | done |
-| Sandbox modes (workspace-write / read-only / danger-full-access) | done (advisory; OS-level sandboxing is future work) |
+| Approvals modes + session grants + rules + `--full-auto` / `--yolo` bypass | done |
+| Sandbox modes (workspace-write / read-only / danger-full-access) | done (advisory guard; optional external wrapper via `sandbox_tool`) |
 | Sessions, resume, rollout JSONL (with transcript replay) | done |
-| Config files + env vars | done |
+| Per-turn file checkpoints + `/undo [list]` | done (mutating tools only; shell side effects not captured) |
+| Pickers: `/model`, `/resume`, `@` file picker | done (TUI) |
+| User prompt commands from `*.md` files | done |
+| Config files + profiles + env vars + `-c` overrides | done |
 | Exec mode, JSONL events, exit codes | done |
 | Automatic context compaction | done (token-budget based) |
 | Interruptions, retries, idle-timeout recovery, queued messages | done |
@@ -187,7 +244,7 @@ runs that exercise retries.
 | OAuth / ChatGPT login | not in scope (API key only) |
 | Cloud tasks / Codex web | not in scope |
 | Image inputs, web search tools | not in scope |
-| OS-level sandbox enforcement | future work |
+| OS-level sandbox enforcement | optional external wrapper (`sandbox_tool`); no built-in implementation |
 
 MCP, OAuth and cloud features are excluded by design: they need long-lived
 external services and credentials that this local, dependency-free

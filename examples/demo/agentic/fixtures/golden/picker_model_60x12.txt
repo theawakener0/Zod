@@ -1,0 +1,12 @@
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+select model  (↑↓ · enter · esc)                            
+  gpt-4o-mini                                               
+› claude-sonnet-4                                           
+  qwen/x                                                    
+  qwen/x · Context 100% left · work                         

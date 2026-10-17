@@ -1,0 +1,70 @@
+// pricing.zd — tiny static price table (USD per 1M tokens) matched by
+// case-insensitive substring against the model id; used for the "(est)"
+// cost readout when the /models cache has no pricing. Pure; never raises.
+import "std/str" as str
+
+pub table := fn() {
+    return [
+        {"match": "gpt-5", "in": 1.25, "out": 10.0},
+        {"match": "gpt-4o-mini", "in": 0.15, "out": 0.6},
+        {"match": "gpt-4o", "in": 2.5, "out": 10.0},
+        {"match": "gpt-4.1-mini", "in": 0.4, "out": 1.6},
+        {"match": "gpt-4.1", "in": 2.0, "out": 8.0},
+        {"match": "o3-mini", "in": 1.1, "out": 4.4},
+        {"match": "o3", "in": 2.0, "out": 8.0},
+        {"match": "o4-mini", "in": 1.1, "out": 4.4},
+        {"match": "claude-opus-4", "in": 15.0, "out": 75.0},
+        {"match": "claude-sonnet-4", "in": 3.0, "out": 15.0},
+        {"match": "claude-3-5-haiku", "in": 0.8, "out": 4.0},
+        {"match": "gemini-2.5-pro", "in": 1.25, "out": 10.0},
+        {"match": "gemini-2.5-flash", "in": 0.3, "out": 2.5},
+        {"match": "deepseek", "in": 0.27, "out": 1.1},
+        {"match": "qwen", "in": 0.5, "out": 1.5},
+        {"match": "llama", "in": 0.2, "out": 0.2},
+        {"match": "mistral", "in": 0.2, "out": 0.6}
+    ]
+}
+
+// lookup(model_id) -> row hash or null; longest substring match wins.
+pub lookup := fn(model_id) {
+    if (model_id == null || type(model_id) != "STRING" || model_id == "") { return null }
+    mid := str.lower(model_id)
+    rows := table()
+    best := null
+    best_len := 0
+    for (i := 0; i < len(rows); i += 1) {
+        r := rows[i]
+        m := r["match"]
+        if (!str.contains(mid, m)) { continue }
+        if (len(m) > best_len) {
+            best_len = len(m)
+            best = r
+        }
+    }
+    return best
+}
+
+// estimate(model_id, prompt_tokens, completion_tokens) -> FLOAT or null.
+pub estimate := fn(model_id, prompt_tokens, completion_tokens) {
+    r := lookup(model_id)
+    if (r == null) { return null }
+    p := 0
+    c := 0
+    if (type(prompt_tokens) == "INTEGER") { p = prompt_tokens }
+    if (type(completion_tokens) == "INTEGER") { c = completion_tokens }
+    return float(p) * r["in"] / 1000000.0 + float(c) * r["out"] / 1000000.0
+}
+
+// fmt_cost(c) -> "$D.HHHH" (4 decimals) or "n/a".
+pub fmt_cost := fn(c) {
+    if (type(c) != "FLOAT" && type(c) != "INTEGER") { return "n/a" }
+    f := float(c)
+    if (f < 0.0) { return "n/a" }
+    whole := int(f)
+    frac := int((f - float(whole)) * 10000.0 + 0.5)
+    if (frac >= 10000) {
+        whole += 1
+        frac = 0
+    }
+    return "$" + string(whole) + "." + str.pad_left(string(frac), 4, "0")
+}

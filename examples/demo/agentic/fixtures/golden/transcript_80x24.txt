@@ -1,0 +1,24 @@
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+> hello there                                                                   
+                                                                                
+Title                                                                           
+                                                                                
+Some bold text and code.                                                        
+                                                                                
+  • Ran echo hi                                                                 
+  └ exit 0                                                                      
+    hi                                                                          
+                                                                                
+  [note] a note                                                                 
+                                                                                
+  [error] Error: boom                                                           
+                                                                                
+  ✓ one                                                                         
+  ◻ two                                                                         
+                                                                                
+› Ask Zodex to do anything                                                      
+  qwen/x · Context 100% left · work                                             

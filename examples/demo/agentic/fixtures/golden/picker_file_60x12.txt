@@ -1,0 +1,12 @@
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+                                                            
+select file @b  (type · ↑↓ · enter · esc)                   
+› dir/b.txt                                                 
+  lib/big.zd                                                
+  qwen/x · Context 100% left · work                         

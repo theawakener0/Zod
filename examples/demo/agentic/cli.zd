@@ -28,16 +28,22 @@ pub usage := fn() {
         "  --model <id>          model to use",
         "  --approvals <mode>    untrusted | on-failure | on-request | never",
         "  --sandbox <mode>      read-only | workspace-write | danger-full-access",
+        "  --profile <name>      apply a named profile from config \"profiles\"",
+        "  -c key=value          override one config value (repeatable)",
+        "  --full-auto           low-friction: never ask, workspace-write sandbox",
+        "  @                     open the file picker (@path mentions)",
         "  --yolo                never ask for approval, ignore the sandbox",
         "                        (alias: --dangerously-bypass-approvals-and-sandbox)",
         "  --cwd <dir>           working directory for the session",
         "",
-        "Session commands: /help /model /approvals /sandbox /new /resume /compact /quit (:q)",
+        "Session commands: /help /model /approvals /sandbox /new /resume /compact /undo /quit (:q)",
+        "User prompts: .md files in <ZODEX_HOME>/prompts or ./.zodex/prompts run as /<name>.",
         "",
         "Environment:",
         "  ZODEX_HOME, ZODEX_MODEL, ZODEX_BASE_URL, ZODEX_API_KEY, ZODEX_APPROVALS,",
         "  ZODEX_SANDBOX, ZODEX_MAX_STEPS, ZODEX_MAX_BYTES, ZODEX_ALLOW_EXEC,",
-        "  ZODEX_AUTO_COMPACT, ZODEX_STREAM_USAGE, ZODEX_TIMEOUT_MS"
+        "  ZODEX_AUTO_COMPACT, ZODEX_STREAM_USAGE, ZODEX_TIMEOUT_MS, ZODEX_BELL,",
+        "  ZODEX_SANDBOX_TOOL"
     ]
     return str.join(lines, "\n")
 }
@@ -55,6 +61,9 @@ pub parse := fn(argv) {
         "model": null,
         "approvals": null,
         "sandbox": null,
+        "profile": null,
+        "overrides": [],
+        "full_auto": false,
         "yolo": false,
         "cwd": null,
         "help": false,
@@ -119,6 +128,28 @@ pub parse := fn(argv) {
                 skip_next = true
             }
             out["resume"] = rv
+            continue
+        }
+        if (t == "--profile") {
+            v := null
+            if (i + 1 < len(rest) && !flag_like(rest[i + 1])) {
+                v = rest[i + 1]
+                skip_next = true
+            }
+            out["profile"] = v
+            continue
+        }
+        if (t == "-c") {
+            if (i + 1 < len(rest) && !flag_like(rest[i + 1])) {
+                out["overrides"] = arr.push(out["overrides"], rest[i + 1])
+                skip_next = true
+            } else {
+                out["overrides"] = arr.push(out["overrides"], "")
+            }
+            continue
+        }
+        if (t == "--full-auto") {
+            out["full_auto"] = true
             continue
         }
         if (t == "--yolo" || t == "--dangerously-bypass-approvals-and-sandbox") {

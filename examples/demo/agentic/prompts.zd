@@ -1,0 +1,76 @@
+// prompts.zd — user-defined prompt commands: /<name> [args].
+//
+// Scans <root>/prompts/*.md and <cwd>/.zodex/prompts/*.md (local wins) and
+// turns each file into a prompt command. "$ARGUMENTS" in the body is replaced
+// with the raw argument text; with no $ARGUMENTS the args are appended after
+// a blank line. Builtin command names always win name collisions. Every fs
+// call is guarded with try(); nothing here prints.
+import "std/fs" as fs
+import "std/str" as str
+import "std/array" as arr
+import "std/hash" as hash
+
+merge_dir := fn(out, dir) {
+    lr := try(fs.ls(dir))
+    if (!lr[0] || type(lr[1]) != "ARRAY") { return out }
+    names := lr[1]
+    for (i := 0; i < len(names); i += 1) {
+        fn2 := names[i]
+        if (type(fn2) != "STRING" || !str.ends_with(fn2, ".md")) { continue }
+        nm := str.slice(fn2, 0, len(fn2) - 3)
+        if (nm == "") { continue }
+        fr := try(fs.read_file(dir + "/" + fn2))
+        if (!fr[0] || type(fr[1]) != "STRING") { continue }
+        out[nm] = fr[1]
+    }
+    return out
+}
+
+// load(cwd, root) -> {name: body}
+pub load := fn(cwd, root) {
+    out := {}
+    if (type(root) == "STRING" && root != "") {
+        out = merge_dir(out, root + "/prompts")
+    }
+    if (type(cwd) == "STRING" && cwd != "") {
+        out = merge_dir(out, cwd + "/.zodex/prompts")
+    }
+    return out
+}
+
+// expand(body, args) renders the prompt body.
+pub expand := fn(body, args) {
+    if (type(body) != "STRING") { return "" }
+    b := str.trim(body)
+    a := ""
+    if (type(args) == "STRING") { a = str.trim(args) }
+    if (str.contains(b, "$ARGUMENTS")) {
+        return str.replace(b, "$ARGUMENTS", a)
+    }
+    if (a == "") { return b }
+    return b + "\n\n" + a
+}
+
+// resolve(map, builtins, line) -> null | {"name":..., "text":...}.
+// builtins is the array from commands.builtin_names() ("/help", ...).
+pub resolve := fn(map, builtins, line) {
+    if (type(line) != "STRING" || !str.starts_with(line, "/")) { return null }
+    rest := str.slice(line, 1, len(line))
+    name := rest
+    args := ""
+    sp := str.index_of(rest, " ")
+    if (sp >= 0) {
+        name = str.slice(rest, 0, sp)
+        args = str.slice(rest, sp + 1, len(rest))
+    }
+    if (name == "") { return null }
+    if (type(builtins) == "ARRAY" && arr.contains(builtins, "/" + name)) { return null }
+    if (type(map) != "HASH" || !hash.contains(map, name)) { return null }
+    return {"name": name, "text": expand(map[name], args)}
+}
+
+// names(map) -> array of prompt names (empty for non-hash).
+pub names := fn(map) {
+    if (type(map) != "HASH") { return [] }
+    return hash.keys(map)
+}

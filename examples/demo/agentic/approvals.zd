@@ -30,7 +30,7 @@ import "std/json" as json
 
 // Tool names that always pass without approval.
 pub read_only_names := fn() {
-    return ["read_file", "glob", "grep", "update_plan"]
+    return ["read_file", "glob", "grep", "update_plan", "explore"]
 }
 
 is_read_only := fn(name) {
@@ -142,6 +142,11 @@ read_policy := fn(policy) {
         }
     }
     return [mode, rules, session]
+}
+
+// valid_mode(m) reports whether m is a known approvals mode.
+pub valid_mode := fn(mode) {
+    return mode == "untrusted" || mode == "on-failure" || mode == "on-request" || mode == "never"
 }
 
 pub new_policy := fn(mode, rules) {

@@ -13,14 +13,20 @@
 import "harness_lib.zd" as hz
 import "approvals.zd" as approvals
 import "apply_patch.zd" as apply_patch
+import "checkpoints.zd" as checkpoints
 import "cli.zd" as cli
 import "coding_tools.zd" as coding_tools
+import "commands.zd" as commands
 import "config.zd" as config
+import "files.zd" as files
 import "fx.zd" as fx
 import "history.zd" as history
 import "messages.zd" as messages
 import "pi.zd" as pi
+import "pricing.zd" as pricing
+import "prompts.zd" as prompts
 import "render.zd" as render
+import "sandbox.zd" as sandbox
 import "session.zd" as session
 import "tools.zd" as tools
 import "std/array" as arr
@@ -90,6 +96,183 @@ cfg := config.defaults()
 check("config_defaults", cfg["model"] != null && cfg["base_url"] != null && cfg["approvals"] != null)
 merged := config.merge(cfg, {"model": "zzz"})
 check("config_merge_override", merged["model"] == "zzz" && merged["base_url"] == cfg["base_url"])
+
+// ---------------------------------------------------------------------------
+// 3b. profiles, -c overrides, --full-auto
+// ---------------------------------------------------------------------------
+
+b1 := cli.parse(["t.zd", "--profile", "work", "-c", "model=x", "-c", "max_steps=5", "--full-auto", "exec", "hi"])
+check("cli_profile_parses", b1["profile"] == "work" && len(b1["overrides"]) == 2 && b1["overrides"][0] == "model=x" && b1["full_auto"] == true && b1["mode"] == "exec")
+check("cli_usage_new_flags", str.contains(cli.usage(), "--profile") && str.contains(cli.usage(), "--full-auto") && str.contains(cli.usage(), "-c key=value"))
+pcfg := config.defaults()
+pcfg["profiles"] = {"work": {"model": "wm"}}
+pr1 := config.profile_overlay(pcfg, "work")
+check("cfg_profile_applies", pr1["ok"] == true && pr1["cfg"]["model"] == "wm")
+pr2 := config.profile_overlay(pcfg, "nope")
+check("cfg_profile_unknown", pr2["ok"] == false && str.contains(pr2["error"], "nope"))
+pr3 := config.profile_overlay(config.defaults(), null)
+check("cfg_profile_none", pr3["ok"] == true && pr3["cfg"]["model"] == cfg["model"])
+od := config.apply_overrides(config.defaults(), ["model=m1", "max_steps=7", "temperature=0.2", "stream_usage=false"])
+oc := od["cfg"]
+check("cfg_override_types", len(od["errors"]) == 0 && oc["model"] == "m1" && oc["max_steps"] == 7 && type(oc["temperature"]) == "FLOAT" && oc["stream_usage"] == false)
+oe := config.apply_overrides(config.defaults(), ["model", "max_steps=nope"])
+check("cfg_override_errors", len(oe["errors"]) == 2)
+dcfg := config.defaults()
+check("cfg_defaults_new_keys", dcfg["bell"] == true && dcfg["sandbox_tool"] == "auto" && type(dcfg["sandbox_binds"]) == "ARRAY")
+
+// ---------------------------------------------------------------------------
+// 3c. sandbox wrapper argv builder (pure)
+// ---------------------------------------------------------------------------
+
+has_pair := fn(a, x, y) {
+    for (i := 0; i + 1 < len(a); i += 1) {
+        if (a[i] == x && a[i + 1] == y) { return true }
+    }
+    return false
+}
+w1 := sandbox.wrap_argv("read-only", "/proj", null, [], "echo hi")
+check("sandbox_wrap_readonly", has_pair(w1, "--ro-bind", "/") == true && arr.contains(w1, "--bind") == false && has_pair(w1, "--chdir", "/proj") && w1[len(w1) - 3] == "sh" && w1[len(w1) - 2] == "-c" && w1[len(w1) - 1] == "echo hi")
+w2 := sandbox.wrap_argv("workspace-write", "/proj", "/proj/sub", ["/cache"], "ls")
+check("sandbox_wrap_workspace", has_pair(w2, "--bind", "/proj") && has_pair(w2, "--bind", "/proj/sub") && has_pair(w2, "--bind", "/cache") && has_pair(w2, "--chdir", "/proj/sub"))
+w3 := sandbox.wrap_argv("workspace-write", "/proj", "/proj", ["/proj"], "ls")
+nbind := 0
+for (i := 0; i < len(w3); i += 1) {
+    if (w3[i] == "--bind") { nbind += 1 }
+}
+check("sandbox_wrap_no_bind_dedup", nbind == 1)
+check("sandbox_describe", sandbox.describe("bwrap") == "bwrap" && sandbox.describe(null) == "advisory")
+check("sandbox_probe_off", sandbox.probe({"sandbox_tool": "off"}) == null)
+check("sandbox_probe_missing", sandbox.probe({"sandbox_tool": "definitely-not-a-real-tool-xyz"}) == null)
+
+// ---------------------------------------------------------------------------
+// 3d. checkpoints + undo
+// ---------------------------------------------------------------------------
+
+pp := checkpoints.patch_paths("*** Begin Patch\n*** Update File: aa.txt\n@@\n-x\n+y\n*** Add File: sub/bb.txt\n*** Move to: cc.txt\n*** End Patch\nnot a marker line")
+check("ck_patch_paths", len(pp) == 3 && pp[0] == "aa.txt" && pp[1] == "sub/bb.txt" && pp[2] == "cc.txt")
+ckbase := "/tmp/zodex_tests/ck"
+ckdir := "/tmp/zodex_tests/ckproj"
+ignored_c1 := try(fs.rm(ckbase))
+ignored_c2 := try(fs.mkdir(ckdir))
+ignored_c3 := try(fs.mkdir(ckbase))
+ignored_c4 := try(fs.write_file(ckdir + "/a.txt", "one"))
+n1 := checkpoints.capture("tsess", 1, ckdir, ["a.txt", "new.txt"], ckbase)
+check("ck_capture_count", n1 == 2)
+lt := checkpoints.list_turns("tsess", ckbase)
+check("ck_list_turns", type(lt) == "ARRAY" && len(lt) == 1)
+ignored_c5 := try(fs.write_file(ckdir + "/a.txt", "two"))
+ignored_c6 := try(fs.write_file(ckdir + "/new.txt", "created"))
+rep := checkpoints.undo_last("tsess", ckbase)
+check("ck_undo_report", str.contains(rep, "restored 1") && str.contains(rep, "deleted 1"))
+ar := try(fs.read_file(ckdir + "/a.txt"))
+check("ck_undo_restored", ar[0] && string(ar[1]) == "one")
+nx := try(fs.exists(ckdir + "/new.txt"))
+check("ck_undo_deleted_new", nx[0] && nx[1] != true)
+rep2 := checkpoints.undo_last("tsess", ckbase)
+check("ck_nothing_twice", str.contains(rep2, "nothing to undo"))
+ckp2 := "/tmp/zodex_tests/ckproj2"
+ignored_c7 := try(fs.rm(ckp2))
+ignored_c8 := try(fs.mkdir(ckp2))
+ignored_c9 := try(fs.write_file(ckp2 + "/f.txt", "v1"))
+n2 := checkpoints.capture("tsess2", 1, ckp2, ["f.txt"], ckbase)
+ignored_c10 := try(fs.write_file(ckp2 + "/f.txt", "v2"))
+n3 := checkpoints.capture("tsess2", 2, ckp2, ["f.txt"], ckbase)
+ignored_c11 := try(fs.write_file(ckp2 + "/f.txt", "v3"))
+rep3 := checkpoints.undo_last("tsess2", ckbase)
+fr3 := try(fs.read_file(ckp2 + "/f.txt"))
+check("ck_undo_newest_turn", n2 == 1 && n3 == 1 && str.contains(rep3, "002") && fr3[0] && string(fr3[1]) == "v2")
+rep4 := checkpoints.undo_last("tsess2", ckbase)
+fr4 := try(fs.read_file(ckp2 + "/f.txt"))
+check("ck_undo_next_turn", str.contains(rep4, "001") && fr4[0] && string(fr4[1]) == "v1")
+rep5 := checkpoints.undo_last("tsess2", ckbase)
+check("ck_undo_none", str.contains(rep5, "nothing to undo"))
+
+// ---------------------------------------------------------------------------
+// 3e. files + pickers
+// ---------------------------------------------------------------------------
+fw := "/tmp/zodex_tests/fwalk"
+ignored_f1 := try(fs.rm(fw))
+ignored_f2 := try(fs.mkdir(fw + "/sub"))
+ignored_f3 := try(fs.mkdir(fw + "/node_modules"))
+ignored_f4 := try(fs.mkdir(fw + "/.hidden"))
+ignored_f5 := try(fs.write_file(fw + "/a.txt", "a"))
+ignored_f6 := try(fs.write_file(fw + "/sub/b.txt", "b"))
+ignored_f7 := try(fs.write_file(fw + "/node_modules/x.js", "x"))
+ignored_f8 := try(fs.write_file(fw + "/.hidden/c.txt", "c"))
+wl := files.walk(fw, 100)
+check("files_walk_skip", arr.contains(wl, "a.txt") && arr.contains(wl, "sub/b.txt") && !arr.contains(wl, "node_modules/x.js") && !arr.contains(wl, ".hidden/c.txt") && len(wl) == 2)
+check("files_fuzzy", files.fuzzy_score("src/app.zd", "app") >= 0 && files.fuzzy_score("SRC/App.zd", "app") >= 0 && files.fuzzy_score("src/app.zd", "zzz") == -1)
+rk := files.rank(["src/lib/util.zd", "src/app.zd", "README.md"], "app", 10)
+check("files_rank_order", len(rk) >= 1 && rk[0] == "src/app.zd")
+rk2 := files.rank(["one.txt", "two.txt", "three.txt"], "", 2)
+check("files_rank_head", len(rk2) == 2 && rk2[0] == "one.txt" && rk2[1] == "two.txt")
+fpapp := {"tty": true, "ui": hz.new_ui(fw, "m"), "cwd": fw, "file_cache": {"cwd": "", "paths": []}}
+ignored_f9 := hz.open_file_picker(fpapp)
+fpu := fpapp["ui"]
+fpk := fpu["picker"]
+check("fp_open", fpk != null && fpk["kind"] == "file" && type(fpk["items"]) == "ARRAY" && len(fpk["items"]) == 2)
+hz.handle_key(fpu, {"app": fpapp}, "b")
+fpk2 := fpu["picker"]
+check("fp_filter", fpk2["query"] == "b" && len(fpk2["items"]) == 1 && fpk2["items"][0] == "sub/b.txt")
+hz.handle_key(fpu, {"app": fpapp}, "\r")
+check("fp_insert", fpu["picker"] == null && str.contains(fpu["input"], "@sub/b.txt"))
+spbox := {"got": ""}
+spapp := {"tty": true, "ui": hz.new_ui("/tmp", "m")}
+spu := spapp["ui"]
+spu["picker"] = {"kind": "session", "title": "session", "items": ["abc12345  hello"], "ids": ["abc12345"], "sel": 0}
+sctx := {"app": spapp, "on_resume": fn(id) { spbox["got"] = string(id); return "resumed " + string(id) }}
+hz.handle_key(spu, sctx, "\r")
+check("sp_enter", spu["picker"] == null && spbox["got"] == "abc12345")
+reg5 := commands.make_registry(commands.all_commands())
+ctx_line := {"app": {"tty": false}, "on_resume": fn(a) { return "resumed " + string(a) }, "on_picker": null}
+d_line := commands.dispatch(reg5, ctx_line, "/resume")
+check("resume_line_latest", d_line[0] == true && str.contains(string(d_line[1]), "resumed latest"))
+ctx_tui := {"app": {"tty": true}, "on_resume": null, "on_picker": fn(k) { return "picker:" + string(k) }}
+d_tui := commands.dispatch(reg5, ctx_tui, "/resume")
+check("resume_tui_picker", d_tui[0] == true && string(d_tui[1]) == "picker:session")
+
+// ---------------------------------------------------------------------------
+// 3f. prompts + pricing
+// ---------------------------------------------------------------------------
+check("prompts_expand_args", prompts.expand("Do $ARGUMENTS now", "X") == "Do X now")
+check("prompts_expand_append", prompts.expand("Do it", "extra") == "Do it\n\nextra" && prompts.expand("Do it", "") == "Do it")
+pm6 := {"foo": "Run $ARGUMENTS"}
+bl6 := ["/help", "/model"]
+pr6 := prompts.resolve(pm6, bl6, "/foo bar")
+check("prompts_resolve_ok", pr6 != null && pr6["name"] == "foo" && pr6["text"] == "Run bar")
+check("prompts_resolve_builtin_wins", prompts.resolve(pm6, bl6, "/model x") == null)
+check("prompts_resolve_unknown", prompts.resolve(pm6, bl6, "/nope") == null && prompts.resolve(pm6, bl6, "plain") == null)
+proot := "/tmp/zodex_tests/prompts_root"
+ignored_p1 := try(fs.rm(proot))
+ignored_p2 := try(fs.mkdir(proot + "/prompts"))
+ignored_p3 := try(fs.mkdir(proot + "/.zodex/prompts"))
+ignored_p4 := try(fs.write_file(proot + "/prompts/a.md", "root a $ARGUMENTS"))
+ignored_p5 := try(fs.write_file(proot + "/prompts/b.md", "root b"))
+ignored_p6 := try(fs.write_file(proot + "/.zodex/prompts/a.md", "local a $ARGUMENTS"))
+pl6 := prompts.load(proot, proot)
+check("prompts_load_override", str.contains(string(pl6["a"]), "local a") && str.contains(string(pl6["b"]), "root b"))
+check("pricing_lookup_longest", pricing.lookup("openai/gpt-4o-mini") != null && pricing.lookup("openai/gpt-4o-mini")["match"] == "gpt-4o-mini" && pricing.lookup("unknown-xyz") == null)
+pe6 := pricing.estimate("gpt-4o-mini", 1000000, 1000000)
+check("pricing_estimate", pe6 != null && pe6 > 0.7 && pe6 < 0.8)
+check("pricing_fmt", pricing.fmt_cost(0.75) == "$0.7500" && pricing.fmt_cost(null) == "n/a" && pricing.fmt_cost(0.0) == "$0.0000")
+
+// ---------------------------------------------------------------------------
+// 3g. validation + help shadowing (adversarial fixes)
+// ---------------------------------------------------------------------------
+ovd7 := config.apply_overrides({"sandbox": "workspace-write"}, ["sandbox=readonly"])
+check("overrides_badsandbox", len(ovd7["errors"]) == 1 && ovd7["cfg"]["sandbox"] == "workspace-write")
+ovd8 := config.apply_overrides({}, ["approvals=neverr"])
+check("overrides_badapprovals", len(ovd8["errors"]) == 1)
+po7 := config.profile_overlay({"profiles": {"p": {"model": 5, "max_steps": 7}}}, "p")
+check("profile_filters_badtypes", po7["ok"] == true && po7["cfg"]["model"] != 5 && po7["cfg"]["max_steps"] == 7)
+po8 := config.profile_overlay({"profiles": {"p": 5}}, "p")
+check("profile_nonhash", po8["ok"] == false && str.contains(string(po8["error"]), "must be a table"))
+check("approvals_valid_mode", approvals.valid_mode("never") == true && approvals.valid_mode("nope") == false)
+reg7 := commands.make_registry(commands.all_commands())
+ctx7 := {"reg": reg7, "prompts": {"model": "x", "foo": "bar"}}
+d7 := commands.dispatch(reg7, ctx7, "/help")
+h7 := string(d7[1])
+check("help_prompts_filtered", str.contains(h7, "/foo - prompt from .md file") && !str.contains(h7, "/model - prompt from .md file"))
 
 // ---------------------------------------------------------------------------
 // 4. approvals: decide + wrap

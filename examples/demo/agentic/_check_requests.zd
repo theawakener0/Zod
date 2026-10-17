@@ -1,0 +1,167 @@
+// _check_requests.zd — request-shape checks against the mock server.
+// Runs one scripted two-level turn (explore sub-agent) and inspects the wire
+// requests recorded in /tmp/opencode/mock_requests.jsonl. Requires the mock:
+//   python3 examples/demo/agentic/mock_openai.py
+import "client.zd" as client
+import "agent.zd" as agent
+import "harness_lib.zd" as hz
+import "std/fmt" as fmt
+import "std/str" as str
+import "std/array" as arr
+import "std/json" as json
+import "std/fs" as fs
+import "std/os" as os
+
+box := {"fails": 0}
+
+check := fn(name, cond, detail) {
+    if (cond) {
+        fmt.println("PASS " + name)
+    } else {
+        box["fails"] = box["fails"] + 1
+        fmt.println("FAIL " + name + ": " + detail)
+    }
+}
+
+contains := fn(s, sub) {
+    return str.contains(string(s), sub)
+}
+
+tool_names := fn(body) {
+    out := []
+    if (type(body) != "HASH") { return out }
+    tl := body["tools"]
+    if (type(tl) != "ARRAY") { return out }
+    for (i := 0; i < len(tl); i += 1) {
+        t := tl[i]
+        if (type(t) != "HASH") { continue }
+        fnv := t["function"]
+        if (type(fnv) == "HASH" && fnv["name"] != null) { out = arr.push(out, string(fnv["name"])) }
+    }
+    return out
+}
+
+last_msg := fn(body) {
+    if (type(body) != "HASH") { return null }
+    msgs := body["messages"]
+    if (type(msgs) != "ARRAY" || len(msgs) == 0) { return null }
+    m := msgs[len(msgs) - 1]
+    if (type(m) != "HASH") { return null }
+    return m
+}
+
+first_role := fn(body) {
+    if (type(body) != "HASH") { return "" }
+    msgs := body["messages"]
+    if (type(msgs) != "ARRAY" || len(msgs) == 0) { return "" }
+    m := msgs[0]
+    if (type(m) != "HASH") { return "" }
+    return string(m["role"])
+}
+
+has_role := fn(body, role) {
+    if (type(body) != "HASH") { return false }
+    msgs := body["messages"]
+    if (type(msgs) != "ARRAY") { return false }
+    for (i := 0; i < len(msgs); i += 1) {
+        m := msgs[i]
+        if (type(m) == "HASH" && string(m["role"]) == role) { return true }
+    }
+    return false
+}
+
+has_tool_calls := fn(body) {
+    if (type(body) != "HASH") { return false }
+    msgs := body["messages"]
+    if (type(msgs) != "ARRAY") { return false }
+    for (i := 0; i < len(msgs); i += 1) {
+        m := msgs[i]
+        if (type(m) != "HASH") { continue }
+        tc := m["tool_calls"]
+        if (type(tc) == "ARRAY" && len(tc) > 0) { return true }
+    }
+    return false
+}
+
+BASE := "http://127.0.0.1:8791/v1"
+LOG := "/tmp/opencode/mock_requests.jsonl"
+
+// Baseline: count non-empty lines already in the log, so only THIS run's
+// requests are inspected.
+before := 0
+br := try(fs.read_file(LOG))
+if (br[0] && type(br[1]) == "STRING") {
+    pre := str.split(br[1], "\n")
+    for (i := 0; i < len(pre); i += 1) {
+        if (str.trim(pre[i]) != "") { before = before + 1 }
+    }
+}
+
+// One explore turn -> three logged requests (main, nested, main follow-up).
+c := try(client.new_client("test-key", "mock-1", {"base_url": BASE, "timeout_ms": 4000}))
+check("req_client", c[0] && !is_error(c[1]), string(c[1]))
+cl := c[1]
+ex := hz.make_explore_tool(cl, "/tmp/zodex_tests", null)
+ag := agent.new_agent(cl, [ex], "You are a test agent.", 8, null)
+tr := ag["run_turn"]("__mock_explore__ look", null)
+check("req_turn_ok", tr != null && type(tr) == "HASH" && tr["ok"] == true, string(tr))
+
+// Collect this run's lines and parse them.
+ours := []
+ar2 := try(fs.read_file(LOG))
+if (ar2[0] && type(ar2[1]) == "STRING") {
+    post := str.split(ar2[1], "\n")
+    keep := []
+    for (i := 0; i < len(post); i += 1) {
+        if (str.trim(post[i]) != "") { keep = arr.push(keep, post[i]) }
+    }
+    ours = arr.slice(keep, before, len(keep))
+}
+check("req_count", len(ours) == 3, string(len(ours)))
+
+p1 := null
+p2 := null
+p3 := null
+if (len(ours) > 0) {
+    t1 := try(json.parse(ours[0]))
+    if (t1[0]) { p1 = t1[1] }
+}
+if (len(ours) > 1) {
+    t2 := try(json.parse(ours[1]))
+    if (t2[0]) { p2 = t2[1] }
+}
+if (len(ours) > 2) {
+    t3 := try(json.parse(ours[2]))
+    if (t3[0]) { p3 = t3[1] }
+}
+b1 := null
+if (p1 != null) { b1 = p1["body"] }
+b2 := null
+if (p2 != null) { b2 = p2["body"] }
+b3 := null
+if (p3 != null) { b3 = p3["body"] }
+
+// r1: main request, explore tool present, streamed, system first.
+n1 := tool_names(b1)
+check("req1_system_first", first_role(b1) == "system", string(b1))
+check("req1_stream_model", type(b1) == "HASH" && b1["stream"] == true && string(b1["model"]) == "mock-1", string(b1))
+check("req1_tool_explore", arr.contains(n1, "explore"), string(n1))
+lm1 := last_msg(b1)
+check("req1_last_user", lm1 != null && string(lm1["role"]) == "user" && contains(lm1["content"], "__mock_explore__"), string(lm1))
+
+// r2: nested sub-agent gets ONLY the read-only tool set (never explore itself).
+n2 := tool_names(b2)
+check("req2_readonly_only", arr.contains(n2, "read_file") && arr.contains(n2, "grep") && arr.contains(n2, "update_plan") && !arr.contains(n2, "write_file") && !arr.contains(n2, "apply_patch") && !arr.contains(n2, "explore"), string(n2))
+lm2 := last_msg(b2)
+check("req2_user_look", lm2 != null && string(lm2["role"]) == "user" && string(lm2["content"]) == "look", string(lm2))
+
+// r3: main follow-up carries the tool result and the assistant tool_calls.
+n3 := tool_names(b3)
+check("req3_tool_msg", has_role(b3, "tool"), string(b3))
+check("req3_tool_calls", has_tool_calls(b3), string(b3))
+check("req3_main_tools", arr.contains(n3, "explore"), string(n3))
+
+fmt.println("SUMMARY pass_done fails=" + string(box["fails"]))
+if (box["fails"] > 0) {
+    os.exit(1)
+}

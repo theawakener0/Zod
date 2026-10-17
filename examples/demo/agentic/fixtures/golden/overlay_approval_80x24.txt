@@ -1,0 +1,24 @@
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+> clean the build dir                                                           
+                                                                                
+I would like to run a command.                                                  
+                                                                                
+! approval required: shell                                                      
+  {"command":"ls -la"}                                                          
+    1. allow once                                                               
+    2. allow for this session                                                   
+  › 3. deny                                                                     
+  enter deny · y allow · a allow session · n deny · v collapse                  
+  qwen/x · Context 100% left · work                                             
