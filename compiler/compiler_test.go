@@ -7,6 +7,7 @@ import (
 	lx "github.com/theawakener0/Zod/lexer"
 	obj "github.com/theawakener0/Zod/object"
 	ps "github.com/theawakener0/Zod/parser"
+	"strings"
 	"testing"
 )
 
@@ -1121,4 +1122,43 @@ func parse(input string) *ast.Program {
 	l := lx.New(input)
 	p := ps.New(l)
 	return p.ParseProgram()
+}
+
+func TestForwardReferencesCompile(t *testing.T) {
+	sources := []string{
+		`let is_even = fn(n) { if (n == 0) { return true; } else { return is_odd(n - 1); } }; let is_odd = fn(n) { if (n == 0) { return false; } else { return is_even(n - 1); } };`,
+		`let double = fn(x) { return late(x) * 2; }; late := fn(x) { return x; };`,
+	}
+	for _, src := range sources {
+		program := parse(src)
+		if err := New().Compile(program); err != nil {
+			t.Errorf("compile error for %q: %s", src, err)
+		}
+	}
+}
+
+func TestUndefinedIdentifierStillFails(t *testing.T) {
+	program := parse(`let f = fn() { return nope(); };`)
+	err := New().Compile(program)
+	if err == nil || !strings.Contains(err.Error(), "identifier not found: nope") {
+		t.Errorf("expected identifier-not-found error, got %v", err)
+	}
+}
+
+func TestTooManyLocalsCompileError(t *testing.T) {
+	var sb strings.Builder
+	sb.WriteString("let f = fn() {\n")
+	for i := 0; i < 300; i++ {
+		fmt.Fprintf(&sb, "let v = %d;\n", i)
+	}
+	sb.WriteString("};\n")
+
+	program := parse(sb.String())
+	err := New().Compile(program)
+	if err == nil {
+		t.Fatalf("expected operand overflow compile error, got nil")
+	}
+	if !strings.Contains(err.Error(), "out of range") {
+		t.Errorf("expected operand out-of-range error, got %v", err)
+	}
 }

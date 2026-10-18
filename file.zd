@@ -13,7 +13,7 @@ for (i := 0; i < len(x); ++i) {
 		}
 	}
 }
-
+// Hi again from vim (recreated using ZodLang. Also, I am thinking of improving it and rename it to zim.)
 println(x)
 println("--------------")
 println(abs(-10))

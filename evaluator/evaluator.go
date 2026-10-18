@@ -126,6 +126,7 @@ func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
 		if n.Public {
 			env.SetPublic(n.Name.Value)
 		}
+		return NULL
 
 	case *ast.AssignStatement:
 		val := Eval(n.Value, env)
@@ -210,6 +211,7 @@ func Eval(node ast.Node, env *obj.Enviroment) obj.Object {
 				return newError("identifier not found: %s", ident.Value)
 			}
 		}
+		return NULL
 
 	case *ast.Identifier:
 		return evalIdentifier(n, env)
@@ -1209,12 +1211,12 @@ func evalIndexAssignment(idx *ast.IndexExpression, opt string, val obj.Object, e
 				return result
 			}
 			hash.Pairs[hashKey] = obj.HashPair{Key: index, Value: result}
-			return nil
+			return NULL
 		default:
 			return newError("unknown assignment operator: %s", opt)
 		}
 
-		return nil
+		return NULL
 	}
 
 	if matrix, ok := left.(*obj.Matrix); ok {
@@ -1245,7 +1247,7 @@ func evalIndexAssignment(idx *ast.IndexExpression, opt string, val obj.Object, e
 		newRow := make([]obj.Object, matrix.Cols)
 		copy(newRow, arr.Elements)
 		matrix.Data[i.Value] = newRow
-		return nil
+		return NULL
 	}
 
 	// Handle m[row][col] = val where m is Matrix (needs direct Data write, not via copied row)
@@ -1293,11 +1295,11 @@ func evalIndexAssignment(idx *ast.IndexExpression, opt string, val obj.Object, e
 					}
 				}
 				mat.Data[rowIdx.Value][colIdx.Value] = result
-				return nil
+				return NULL
 			default:
 				return newError("unknown assignment operator: %s", opt)
 			}
-			return nil
+			return NULL
 		}
 	}
 
@@ -1325,12 +1327,12 @@ func evalIndexAssignment(idx *ast.IndexExpression, opt string, val obj.Object, e
 			return result
 		}
 		array.Elements[i.Value] = result
-		return nil
+		return NULL
 	default:
 		return newError("unknown assignment operator: %s", opt)
 	}
 
-	return nil
+	return NULL
 }
 
 func evalHashLiteral(h *ast.HashLiteral, env *obj.Enviroment) obj.Object {

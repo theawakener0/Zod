@@ -53,6 +53,8 @@ const (
 	OpGetProp
 	OpMod
 	OpMatrixCell
+	OpSetIndexDeep
+	OpTryEnter
 )
 
 type Definition struct {
@@ -229,6 +231,14 @@ var definition = map[Opcode]*Definition{
 		Name:          "OpMatrixCell",
 		OperandWidths: []int{},
 	},
+	OpSetIndexDeep: {
+		Name:          "OpSetIndexDeep",
+		OperandWidths: []int{1, 1},
+	},
+	OpTryEnter: {
+		Name:          "OpTryEnter",
+		OperandWidths: []int{2},
+	},
 }
 
 var definitionCache [256]*Definition
@@ -244,6 +254,35 @@ func Lookup(op byte) (*Definition, error) {
 		return def, nil
 	}
 	return nil, fmt.Errorf("opcode %d undifined", op)
+}
+
+// FitsOperand reports whether every operand can be encoded at its declared
+// width. It is used by the compiler to turn silent 8/16-bit truncation into
+// explicit compile errors.
+func FitsOperand(op Opcode, operands ...int) error {
+	def, ok := definition[op]
+	if !ok {
+		return fmt.Errorf("opcode %d undifined", op)
+	}
+	widths := def.OperandWidths
+	if len(operands) != len(widths) {
+		return fmt.Errorf("%s expects %d operands, got %d", def.Name, len(widths), len(operands))
+	}
+	for i, operand := range operands {
+		var max int
+		switch widths[i] {
+		case 1:
+			max = 0xFF
+		case 2:
+			max = 0xFFFF
+		default:
+			continue
+		}
+		if operand < 0 || operand > max {
+			return fmt.Errorf("operand %d out of range for %s: %d (max %d)", i+1, def.Name, operand, max)
+		}
+	}
+	return nil
 }
 
 func Make(op Opcode, operands ...int) []byte {

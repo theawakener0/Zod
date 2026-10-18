@@ -177,3 +177,48 @@ func TestRunEvalStateSurvivesErrors(t *testing.T) {
 		t.Fatalf("runEval(42) after errors out = %q, want to contain %q", out.String(), "42")
 	}
 }
+
+func TestForwardReferencesBothEngines(t *testing.T) {
+	const src = `let is_even = fn(n) { if (n == 0) { return true; } else { return is_odd(n - 1); } };
+let is_odd = fn(n) { if (n == 0) { return false; } else { return is_even(n - 1); } };
+is_even(10);`
+
+	for _, engine := range testEngines {
+		var out bytes.Buffer
+		if err := Execute(src, &out, engine, "."); err != nil {
+			t.Fatalf("engine %s: Execute(mutual recursion) err = %v, want nil", engine, err)
+		}
+		if !strings.Contains(out.String(), "true") {
+			t.Fatalf("engine %s: out = %q, want to contain %q", engine, out.String(), "true")
+		}
+	}
+}
+
+func TestNestedIndexAssignBothEngines(t *testing.T) {
+	const src = `let h = {"a": {"b": 0}}; h["a"]["b"] = 5; h["a"]["b"];`
+
+	for _, engine := range testEngines {
+		var out bytes.Buffer
+		if err := Execute(src, &out, engine, "."); err != nil {
+			t.Fatalf("engine %s: Execute(nested index assign) err = %v, want nil", engine, err)
+		}
+		if !strings.Contains(out.String(), "5") {
+			t.Fatalf("engine %s: out = %q, want to contain %q", engine, out.String(), "5")
+		}
+	}
+}
+
+func TestNilReturningStatementsBothEngines(t *testing.T) {
+	const src = `let f = fn() { let x = 1; }; f();`
+
+	for _, engine := range testEngines {
+		var out bytes.Buffer
+		err := Execute(src, &out, engine, ".")
+		if err != nil {
+			t.Fatalf("engine %s: Execute(let-only body) err = %v, want nil", engine, err)
+		}
+		if out.Len() != 0 {
+			t.Fatalf("engine %s: out = %q, want empty (null results are not printed)", engine, out.String())
+		}
+	}
+}

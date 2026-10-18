@@ -7,6 +7,7 @@ import (
 	lx "github.com/theawakener0/Zod/lexer"
 	obj "github.com/theawakener0/Zod/object"
 	ps "github.com/theawakener0/Zod/parser"
+	"strings"
 	"testing"
 )
 
@@ -790,6 +791,92 @@ func TestLoopCaptureVM(t *testing.T) {
 		{"let fns = []; for (i := 0; i < 3; i++) { let t = i * 10; fns = push(fns, fn() { t }) }; fns[0]() + fns[1]() + fns[2]()", 30},
 		{"let f = fn() { let fns = []; for (i := 0; i < 3; i++) { fns = push(fns, fn() { i }) }; fns[0]() + fns[1]() + fns[2]() }; f()", 3},
 		{"let x = 0; for (i := 0; i < 3; i++) { x = x + i }; x;", 3},
+	}
+
+	runVMTests(t, tests)
+}
+
+func TestForwardReferencesVM(t *testing.T) {
+	tests := []vmTestCase{
+		{
+			input:    `let is_even = fn(n) { if (n == 0) { return true; } else { return is_odd(n - 1); } }; let is_odd = fn(n) { if (n == 0) { return false; } else { return is_even(n - 1); } }; is_even(10);`,
+			expected: true,
+		},
+		{
+			input:    `let double = fn(x) { return late(x) * 2; }; late := fn(x) { return x; }; double(21);`,
+			expected: 42,
+		},
+	}
+
+	runVMTests(t, tests)
+}
+
+func TestNestedIndexAssignVM(t *testing.T) {
+	tests := []vmTestCase{
+		{`let h = {"a": {"b": 0}}; h["a"]["b"] = 5; h["a"]["b"]`, 5},
+		{`let arr = [{"x": 0}]; arr[0]["x"] = 7; arr[0]["x"]`, 7},
+		{`let ha = {"a": [1, 2]}; ha["a"][1] = 9; ha["a"][1]`, 9},
+		{`let d = {"a": {"b": {"c": 0}}}; d["a"]["b"]["c"] = 3; d["a"]["b"]["c"]`, 3},
+		{`let grid = [[1, 2], [3, 4]]; grid[1][0] = 8; grid[1][0]`, 8},
+		{`let h = {"a": {"b": 1}}; h["a"]["b"] += 4; h["a"]["b"]`, 5},
+		{`let m = matrix(2, 2, [1, 2, 3, 4]); m[0][0] = 9; m[0][0]`, 9},
+		{`let m = matrix(2, 2, [1, 2, 3, 4]); m[1][1] += 10; m[1][1]`, 14},
+	}
+
+	runVMTests(t, tests)
+}
+
+func TestTryCatchesBoundaryErrorsVM(t *testing.T) {
+	cases := []struct {
+		name    string
+		input   string
+		wantMsg string
+	}{
+		{
+			name:    "error stored in callee",
+			input:   `let f = fn() { x := error("boom"); return 1; }; try(f())`,
+			wantMsg: "boom",
+		},
+		{
+			name:    "error condition in if",
+			input:   `let bad = fn() { if (error("cond")) { return 1; } else { return 2; } }; try(bad())`,
+			wantMsg: "cond",
+		},
+		{
+			name:    "call depth overflow",
+			input:   `let down = fn(n) { if (n == 0) { return 0; } else { return down(n - 1); } }; try(down(20000))`,
+			wantMsg: "maximum call depth exceeded",
+		},
+	}
+	for _, tt := range cases {
+		program := parse(tt.input)
+		comp := compiler.New()
+		if err := comp.Compile(program); err != nil {
+			t.Fatalf("%s: compiler error: %s", tt.name, err)
+		}
+		machine := New(comp.Bytecode())
+		if err := machine.Run(); err != nil {
+			t.Fatalf("%s: vm error: %s", tt.name, err)
+		}
+		arr, ok := machine.LastPoppedStackElem().(*obj.Array)
+		if !ok {
+			t.Fatalf("%s: try did not return Array. got=%T", tt.name, machine.LastPoppedStackElem())
+		}
+		if len(arr.Elements) != 2 {
+			t.Fatalf("%s: try array wrong length. got=%d", tt.name, len(arr.Elements))
+		}
+		if b, ok := arr.Elements[0].(*obj.Boolean); !ok || b.Value != false {
+			t.Fatalf("%s: try ok flag wrong. got=%v", tt.name, arr.Elements[0])
+		}
+		if s, ok := arr.Elements[1].(*obj.String); !ok || !strings.Contains(s.Value, tt.wantMsg) {
+			t.Fatalf("%s: try message wrong. got=%v", tt.name, arr.Elements[1])
+		}
+	}
+}
+
+func TestDeepRecursionVM(t *testing.T) {
+	tests := []vmTestCase{
+		{`let down = fn(n) { if (n == 0) { return 0; } else { return down(n - 1); } }; down(2000)`, 0},
 	}
 
 	runVMTests(t, tests)

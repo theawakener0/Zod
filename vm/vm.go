@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -15,13 +16,16 @@ import (
 	zstdlib "github.com/theawakener0/Zod/stdlib"
 )
 
-// StackSize bounds the operand stack. It is deliberately much larger than
-// MaxFrames*typical-frame so deep recursion trips the frame guard first and
-// reports "maximum call depth exceeded" (matching the evaluator) instead of
-// a generic stack overflow.
+// errUnwound signals that execution was redirected to a try() guard; Run
+// must refresh its cached frame/instruction state and continue.
+var errUnwound = errors.New("vm: unwound to try guard")
+
+// MaxFrames bounds the call depth. It matches the evaluator's maxCallDepth
+// so both engines fail at (roughly) the same depth, and the depth error is
+// an ordinary, try()-catchable Error value.
 const StackSize = 8192
 const GlobalsSize = 65536
-const MaxFrames = 1024
+const MaxFrames = 10000
 
 var True = &obj.Boolean{Value: true}
 var False = &obj.Boolean{Value: false}
@@ -42,6 +46,17 @@ type VM struct {
 	frameIndex int
 
 	lastPopped obj.Object
+
+	// tryGuards tracks active try() expressions. A guard records the frame,
+	// stack depth and the ip of the matching OpTry so error values can be
+	// routed to the innermost try.
+	tryGuards []tryGuard
+}
+
+type tryGuard struct {
+	frameIdx int
+	sp       int
+	tryIp    int
 }
 
 func New(bytecode *compiler.Bytecode) *VM {
@@ -83,6 +98,23 @@ func (vm *VM) Run() error {
 	globals := vm.globals
 	constants := vm.constant
 
+	// handleAbort applies boundary error semantics: fatal when no try() is
+	// active, otherwise execution is redirected (see boundaryError).
+	handleAbort := func(v obj.Object) (bool, error) {
+		err := vm.boundaryError(v)
+		if err == nil {
+			return false, nil
+		}
+		if err == errUnwound {
+			frame = vm.currentFrame()
+			ins = frame.Instructions()
+			globals = vm.globals
+			constants = vm.constant
+			return true, nil
+		}
+		return false, err
+	}
+
 	for frame.ip < len(ins)-1 {
 		frame.ip++
 
@@ -110,8 +142,10 @@ func (vm *VM) Run() error {
 			}
 		case code.OpPop:
 			popped := vm.pop()
-			if err := abortOnError(popped); err != nil {
+			if handled, err := handleAbort(popped); err != nil {
 				return err
+			} else if handled {
+				break
 			}
 		case code.OpTrue:
 			err := vm.push(True)
@@ -146,8 +180,10 @@ func (vm *VM) Run() error {
 			frame.ip += 2
 
 			condition := vm.pop()
-			if err := abortOnError(condition); err != nil {
+			if handled, err := handleAbort(condition); err != nil {
 				return err
+			} else if handled {
+				break
 			}
 			if !isTruthy(condition) {
 				frame.ip = pos - 1
@@ -162,8 +198,10 @@ func (vm *VM) Run() error {
 			frame.ip += 2
 
 			stored := vm.pop()
-			if err := abortOnError(stored); err != nil {
+			if handled, err := handleAbort(stored); err != nil {
 				return err
+			} else if handled {
+				break
 			}
 			globals[globalIndex] = stored
 		case code.OpSetLocal:
@@ -171,8 +209,10 @@ func (vm *VM) Run() error {
 			frame.ip += 1
 
 			v := vm.pop()
-			if err := abortOnError(v); err != nil {
+			if handled, err := handleAbort(v); err != nil {
 				return err
+			} else if handled {
+				break
 			}
 			if cell, ok := vm.stack[frame.basePointer+localIndex].(*obj.Cell); ok && cell != nil {
 				cell.Value = v
@@ -184,8 +224,10 @@ func (vm *VM) Run() error {
 			frame.ip += 1
 
 			v := vm.pop()
-			if err := abortOnError(v); err != nil {
+			if handled, err := handleAbort(v); err != nil {
 				return err
+			} else if handled {
+				break
 			}
 			if v == nil {
 				v = Null
@@ -200,8 +242,10 @@ func (vm *VM) Run() error {
 				return fmt.Errorf("free variable index out of range: %d", freeIndex)
 			}
 			v := vm.pop()
-			if err := abortOnError(v); err != nil {
+			if handled, err := handleAbort(v); err != nil {
 				return err
+			} else if handled {
+				break
 			}
 			if cell, ok := currentClosure.Free[freeIndex].(*obj.Cell); ok && cell != nil {
 				cell.Value = v
@@ -212,20 +256,32 @@ func (vm *VM) Run() error {
 			kind := int(ins[ip+1])
 			frame.ip += 1
 
-			if kind >= 10 {
-				err := vm.executeDoubleIndexAssign(kind - 10)
-				if err != nil {
-					return err
-				}
-			} else {
-				err := vm.executeSingleIndexAssign(kind)
-				if err != nil {
-					return err
-				}
-			}
-			if err := abortOnError(vm.lastPopped); err != nil {
+			err := vm.executeSingleIndexAssign(kind)
+			if err != nil {
 				return err
 			}
+			if handled, err := handleAbort(vm.lastPopped); err != nil {
+				return err
+			} else if handled {
+				break
+			}
+		case code.OpSetIndexDeep:
+			kind := int(ins[ip+1])
+			depth := int(ins[ip+2])
+			frame.ip += 2
+
+			if err := vm.executeDeepIndexAssign(kind, depth); err != nil {
+				return err
+			}
+			if handled, err := handleAbort(vm.lastPopped); err != nil {
+				return err
+			} else if handled {
+				break
+			}
+		case code.OpTryEnter:
+			resumeIp := int(ins[ip+1])<<8 | int(ins[ip+2])
+			frame.ip += 2
+			vm.tryGuards = append(vm.tryGuards, tryGuard{frameIdx: vm.frameIndex - 1, sp: vm.sp, tryIp: resumeIp})
 		case code.OpTry:
 			err := vm.executeTry()
 			if err != nil {
@@ -355,6 +411,7 @@ func (vm *VM) Run() error {
 		case code.OpReturnValue:
 			returnValue := vm.pop()
 			popped := vm.popFrame()
+			vm.pruneTryGuards()
 			vm.sp = popped.basePointer - 1
 
 			if vm.frameIndex == 0 {
@@ -376,6 +433,7 @@ func (vm *VM) Run() error {
 			}
 		case code.OpReturn:
 			popped := vm.popFrame()
+			vm.pruneTryGuards()
 			vm.sp = popped.basePointer - 1
 
 			if vm.frameIndex == 0 {
@@ -511,14 +569,28 @@ func (vm *VM) Run() error {
 }
 
 func (vm *VM) push(o obj.Object) error {
-	if vm.sp >= StackSize {
-		return fmt.Errorf("stack overflow :(")
+	if vm.sp >= len(vm.stack) {
+		vm.growStack(vm.sp + 1)
 	}
 
 	vm.stack[vm.sp] = o
 	vm.sp++
 
 	return nil
+}
+
+// growStack doubles the operand stack until it can hold at least need slots.
+func (vm *VM) growStack(need int) {
+	size := len(vm.stack)
+	if size == 0 {
+		size = StackSize
+	}
+	for size < need {
+		size *= 2
+	}
+	grown := make([]obj.Object, size)
+	copy(grown, vm.stack)
+	vm.stack = grown
 }
 
 func (vm *VM) pop() obj.Object {
@@ -1396,99 +1468,61 @@ func (vm *VM) singleIndexAssign(left, index, val obj.Object, kind int) obj.Objec
 	return Null
 }
 
-func (vm *VM) executeDoubleIndexAssign(kind int) error {
+// executeDeepIndexAssign performs a[]...[] = v for any nesting depth,
+// supporting hash/array/matrix containers at every level (mirrors the
+// evaluator's generic nested index assignment).
+func (vm *VM) executeDeepIndexAssign(kind, depth int) error {
 	val := vm.pop()
-	colIdxObj := vm.pop()
-	rowIdxObj := vm.pop()
-	matObj := vm.pop()
-	if matObj == nil {
-		matObj = Null
+	keys := make([]obj.Object, depth)
+	for i := depth - 1; i >= 0; i-- {
+		keys[i] = vm.pop()
 	}
-	if rowIdxObj == nil {
-		rowIdxObj = Null
-	}
-	if colIdxObj == nil {
-		colIdxObj = Null
+	root := vm.pop()
+	if root == nil {
+		root = Null
 	}
 	if val == nil {
 		val = Null
 	}
-	for _, o := range []obj.Object{matObj, rowIdxObj, colIdxObj, val} {
-		if errObj, ok := o.(*obj.Error); ok {
+	for i := range keys {
+		if keys[i] == nil {
+			keys[i] = Null
+		}
+	}
+	for _, o := range append([]obj.Object{root, val}, keys...) {
+		if errObj, ok := o.(*obj.Error); ok && errObj != nil {
 			vm.stack[vm.sp] = errObj
 			vm.lastPopped = errObj
 			return nil
 		}
 	}
-	result := vm.doubleIndexAssign(matObj, rowIdxObj, colIdxObj, val, kind)
+
+	cur := root
+	// Matrices copy their rows on read (executeMatrixIndex), so m[i][j] = v
+	// must write directly into mat.Data. Matrix elements are numeric, so a
+	// matrix can only ever be the second-to-last container.
+	if mat, ok := cur.(*obj.Matrix); ok && depth == 2 {
+		result := vm.matrixCellAssign(mat, keys[0], keys[1], val, kind)
+		vm.stack[vm.sp] = result
+		vm.lastPopped = result
+		return nil
+	}
+	for i := 0; i < depth-1; i++ {
+		if err := vm.executeIndexExpression(cur, keys[i]); err != nil {
+			return err
+		}
+		cur = vm.pop()
+		if errObj, ok := cur.(*obj.Error); ok && errObj != nil {
+			vm.stack[vm.sp] = errObj
+			vm.lastPopped = errObj
+			return nil
+		}
+	}
+
+	result := vm.singleIndexAssign(cur, keys[depth-1], val, kind)
 	vm.stack[vm.sp] = result
 	vm.lastPopped = result
 	return nil
-}
-
-func (vm *VM) doubleIndexAssign(matObj, rowIdxObj, colIdxObj, val obj.Object, kind int) obj.Object {
-	rowIdx, ok := rowIdxObj.(*obj.Integer)
-	if !ok {
-		return &obj.Error{Message: fmt.Sprintf("index operator requires integer index, got %s", rowIdxObj.Type())}
-	}
-	colIdx, ok := colIdxObj.(*obj.Integer)
-	if !ok {
-		return &obj.Error{Message: fmt.Sprintf("index operator requires integer index, got %s", colIdxObj.Type())}
-	}
-	if mat, ok := matObj.(*obj.Matrix); ok {
-		if rowIdx.Value < 0 || rowIdx.Value >= int64(mat.Rows) {
-			return &obj.Error{Message: fmt.Sprintf("index out of range: %d", rowIdx.Value)}
-		}
-		if colIdx.Value < 0 || colIdx.Value >= int64(mat.Cols) {
-			return &obj.Error{Message: fmt.Sprintf("index out of range: %d", colIdx.Value)}
-		}
-		if _, ok := val.(*obj.Integer); !ok {
-			if _, ok := val.(*obj.Float); !ok {
-				if kind == 0 {
-					return &obj.Error{Message: fmt.Sprintf("matrix element must be numeric, got %s", val.Type())}
-				}
-			}
-		}
-		if kind == 0 {
-			mat.Data[rowIdx.Value][colIdx.Value] = val
-			return Null
-		}
-		curr := mat.Data[rowIdx.Value][colIdx.Value]
-		res := executeBinaryOperation(kindToOpcode(kind), curr, val)
-		if _, ok := res.(*obj.Error); ok {
-			return res
-		}
-		if _, ok := res.(*obj.Integer); !ok {
-			if _, ok := res.(*obj.Float); !ok {
-				return &obj.Error{Message: fmt.Sprintf("matrix element must be numeric, got %s", res.Type())}
-			}
-		}
-		mat.Data[rowIdx.Value][colIdx.Value] = res
-		return Null
-	}
-	if arr, ok := matObj.(*obj.Array); ok {
-		if rowIdx.Value < 0 || rowIdx.Value >= int64(len(arr.Elements)) {
-			return &obj.Error{Message: fmt.Sprintf("index out of range: %d", rowIdx.Value)}
-		}
-		row, ok := arr.Elements[rowIdx.Value].(*obj.Array)
-		if !ok {
-			return &obj.Error{Message: fmt.Sprintf("index assignment requires array or hash, got %s", arr.Elements[rowIdx.Value].Type())}
-		}
-		if colIdx.Value < 0 || colIdx.Value >= int64(len(row.Elements)) {
-			return &obj.Error{Message: fmt.Sprintf("index out of range: %d", colIdx.Value)}
-		}
-		if kind == 0 {
-			row.Elements[colIdx.Value] = val
-			return Null
-		}
-		res := executeBinaryOperation(kindToOpcode(kind), row.Elements[colIdx.Value], val)
-		if _, ok := res.(*obj.Error); ok {
-			return res
-		}
-		row.Elements[colIdx.Value] = res
-		return Null
-	}
-	return &obj.Error{Message: fmt.Sprintf("index assignment requires array or hash, got %s", matObj.Type())}
 }
 
 func kindToOpcode(kind int) code.Opcode {
@@ -1506,6 +1540,52 @@ func kindToOpcode(kind int) code.Opcode {
 	default:
 		return code.OpAdd
 	}
+}
+
+// matrixCellAssign writes m[row][col] directly into the matrix data,
+// supporting = and the compound assignment operators.
+func (vm *VM) matrixCellAssign(mat *obj.Matrix, rowIdxObj, colIdxObj, val obj.Object, kind int) obj.Object {
+	rowIdx, ok := rowIdxObj.(*obj.Integer)
+	if !ok {
+		return &obj.Error{Message: fmt.Sprintf("index operator requires integer index, got %s", rowIdxObj.Type())}
+	}
+	colIdx, ok := colIdxObj.(*obj.Integer)
+	if !ok {
+		return &obj.Error{Message: fmt.Sprintf("index operator requires integer index, got %s", colIdxObj.Type())}
+	}
+	if rowIdx.Value < 0 || rowIdx.Value >= int64(mat.Rows) {
+		return &obj.Error{Message: fmt.Sprintf("index out of range: %d", rowIdx.Value)}
+	}
+	if colIdx.Value < 0 || colIdx.Value >= int64(mat.Cols) {
+		return &obj.Error{Message: fmt.Sprintf("index out of range: %d", colIdx.Value)}
+	}
+	if kind == 0 {
+		if !isNumeric(val) {
+			return &obj.Error{Message: fmt.Sprintf("matrix element must be numeric, got %s", val.Type())}
+		}
+		mat.Data[rowIdx.Value][colIdx.Value] = val
+		return Null
+	}
+	curr := mat.Data[rowIdx.Value][colIdx.Value]
+	res := executeBinaryOperation(kindToOpcode(kind), curr, val)
+	if _, ok := res.(*obj.Error); ok {
+		return res
+	}
+	if !isNumeric(res) {
+		return &obj.Error{Message: fmt.Sprintf("matrix element must be numeric, got %s", res.Type())}
+	}
+	mat.Data[rowIdx.Value][colIdx.Value] = res
+	return Null
+}
+
+func isNumeric(o obj.Object) bool {
+	if _, ok := o.(*obj.Integer); ok {
+		return true
+	}
+	if _, ok := o.(*obj.Float); ok {
+		return true
+	}
+	return false
 }
 
 func kindToOpString(kind int) string {
@@ -1526,6 +1606,9 @@ func kindToOpString(kind int) string {
 }
 
 func (vm *VM) executeTry() error {
+	if n := len(vm.tryGuards); n > 0 {
+		vm.tryGuards = vm.tryGuards[:n-1]
+	}
 	val := vm.pop()
 	if val == nil {
 		val = Null
@@ -1566,6 +1649,16 @@ func (vm *VM) callFunction(cl *obj.Closure, numArgs int) error {
 		return vm.push(&obj.Error{Message: msg})
 	}
 
+	// Call depth overflow is an ordinary Error value so try() can catch it;
+	// an uncaught overflow aborts at the next statement boundary.
+	if vm.frameIndex >= MaxFrames {
+		vm.sp -= numArgs + 1
+		if vm.sp < 0 {
+			vm.sp = 0
+		}
+		return vm.push(&obj.Error{Message: "maximum call depth exceeded"})
+	}
+
 	home := cl.Globals
 	if home == nil {
 		home = vm.globals
@@ -1582,7 +1675,11 @@ func (vm *VM) callFunction(cl *obj.Closure, numArgs int) error {
 
 	vm.globals = home
 	vm.constant = homeConst
-	vm.sp = frame.basePointer + cl.Fn.NumLocals
+	need := frame.basePointer + cl.Fn.NumLocals
+	if need > len(vm.stack) {
+		vm.growStack(need)
+	}
+	vm.sp = need
 	for i := numArgs; i < cl.Fn.NumLocals; i++ {
 		vm.stack[frame.basePointer+i] = nil
 	}
@@ -1620,21 +1717,52 @@ func vmBuiltinAcceptsError(fn obj.Object) bool {
 	return false
 }
 
-// abortOnError halts the VM with the error's message, mirroring the
-// evaluator, which aborts the program on uncaught error values. It is
-// invoked only at points where the evaluator also stops propagating:
-// statement boundaries (OpPop), bindings (stores), index assignment, and
-// jump conditions — never inside pure expression evaluation, so try()
-// still converts errors instead of aborting. A try() argument compiles to
-// <expr> followed by OpTry with no statement boundary in between, which is
-// why no OpTry special-casing is needed here. Known residual gap:
-// try(if <error> { ... }) still aborts (a branch decision cannot propagate
-// an error); the evaluator converts it. Pathological; accepted.
-func abortOnError(v obj.Object) error {
-	if errObj, ok := v.(*obj.Error); ok && errObj != nil {
+// boundaryError applies abort-on-error semantics at statement boundaries
+// (OpPop, stores, index assignment, jump conditions), mirroring the
+// evaluator, which stops propagating only at those points. Without an
+// active try() the error aborts the run. With an active try() guard the
+// error is routed to the innermost guard: same-frame guards abandon the
+// try expression and resume at its OpTry (so try(if <error> {...}) and
+// errors inside branches/stores are catchable), while guards in an outer
+// frame make the current frame return the error as a value.
+func (vm *VM) boundaryError(v obj.Object) error {
+	errObj, ok := v.(*obj.Error)
+	if !ok || errObj == nil {
+		return nil
+	}
+	if len(vm.tryGuards) == 0 {
 		return fmt.Errorf("%s", errObj.Message)
 	}
-	return nil
+	g := vm.tryGuards[len(vm.tryGuards)-1]
+	if g.frameIdx == vm.frameIndex-1 {
+		vm.sp = g.sp
+		if err := vm.push(errObj); err != nil {
+			return err
+		}
+		vm.currentFrame().ip = g.tryIp - 1
+		return errUnwound
+	}
+	// The error surfaced in a deeper frame: return it as that frame's value
+	// and let the caller's boundary handling pick it up again.
+	returnValue := errObj
+	popped := vm.popFrame()
+	vm.pruneTryGuards()
+	vm.sp = popped.basePointer - 1
+	vm.globals = vm.currentFrame().globals
+	if cl := vm.currentFrame().cl; cl != nil && cl.Constants != nil {
+		vm.constant = cl.Constants
+	}
+	if err := vm.push(returnValue); err != nil {
+		return err
+	}
+	return errUnwound
+}
+
+// pruneTryGuards drops guards belonging to frames that no longer exist.
+func (vm *VM) pruneTryGuards() {
+	for len(vm.tryGuards) > 0 && vm.tryGuards[len(vm.tryGuards)-1].frameIdx >= vm.frameIndex {
+		vm.tryGuards = vm.tryGuards[:len(vm.tryGuards)-1]
+	}
 }
 
 func (vm *VM) executeCall(numArgs int) error {

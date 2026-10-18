@@ -83,3 +83,31 @@ func TestReadOperands(t *testing.T) {
 		}
 	}
 }
+
+func TestFitsOperand(t *testing.T) {
+	tests := []struct {
+		op       Opcode
+		operands []int
+		wantErr  bool
+	}{
+		{OpConstant, []int{65535}, false},
+		{OpConstant, []int{65536}, true},
+		{OpConstant, []int{-1}, true},
+		{OpGetLocal, []int{255}, false},
+		{OpGetLocal, []int{256}, true},
+		{OpClosure, []int{65535, 255}, false},
+		{OpClosure, []int{65536, 0}, true},
+		{OpClosure, []int{0, 256}, true},
+		{OpAdd, []int{}, false},
+	}
+
+	for _, tt := range tests {
+		err := FitsOperand(tt.op, tt.operands...)
+		if tt.wantErr && err == nil {
+			t.Errorf("FitsOperand(%v, %v) = nil, want error", tt.op, tt.operands)
+		}
+		if !tt.wantErr && err != nil {
+			t.Errorf("FitsOperand(%v, %v) = %v, want nil", tt.op, tt.operands, err)
+		}
+	}
+}

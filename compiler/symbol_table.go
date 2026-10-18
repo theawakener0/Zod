@@ -27,6 +27,10 @@ type SymbolTable struct {
 	isFunction bool
 
 	scopedGlobals map[string]bool
+
+	// Predefined holds globals reserved by the compiler's top-level
+	// forward-reference prepass, so later Define calls reuse the same slot.
+	Predefined map[string]Symbol
 }
 
 func NewSymbolTable() *SymbolTable {
@@ -53,8 +57,31 @@ func NewBlockSymbolTable(outer *SymbolTable) *SymbolTable {
 	}
 }
 
+// PredefineGlobal reserves a global symbol for name without overwriting an
+// existing global definition. The top-level prepass uses it so function
+// bodies can reference top-level bindings that appear later in the program.
+func (s *SymbolTable) PredefineGlobal(name string) Symbol {
+	if s.Outer != nil {
+		return s.Define(name)
+	}
+	if sym, ok := s.store[name]; ok && sym.Scope == GlobalScope {
+		return sym
+	}
+	symbol := Symbol{Name: name, Index: s.numDefinitions, Scope: GlobalScope}
+	s.store[name] = symbol
+	s.numDefinitions++
+	if s.Predefined == nil {
+		s.Predefined = make(map[string]Symbol)
+	}
+	s.Predefined[name] = symbol
+	return symbol
+}
+
 func (s *SymbolTable) Define(name string) Symbol {
 	if s.Outer == nil {
+		if sym, ok := s.Predefined[name]; ok {
+			return sym
+		}
 		symbol := Symbol{Name: name, Index: s.numDefinitions, Scope: GlobalScope}
 		s.store[name] = symbol
 		s.numDefinitions++

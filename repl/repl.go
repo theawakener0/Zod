@@ -68,7 +68,17 @@ func Start(in io.Reader, out io.Writer, engine string) {
 	}
 }
 
-func runVM(source string, out io.Writer, constants []obj.Object, globals []obj.Object, symbolTable *compiler.SymbolTable, baseDir string) ([]obj.Object, error) {
+func runVM(source string, out io.Writer, constants []obj.Object, globals []obj.Object, symbolTable *compiler.SymbolTable, baseDir string) (constantsOut []obj.Object, err error) {
+	// Internal VM panics must not tear down the whole host (REPL/scripts):
+	// surface them as ordinary errors instead.
+	constantsOut = constants
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("internal error: %v", r)
+			constantsOut = constants
+		}
+	}()
+
 	l := lx.New(source)
 	p := ps.New(l)
 
@@ -131,7 +141,14 @@ func Execute(source string, out io.Writer, engine string, baseDir string) error 
 	return fmt.Errorf("unknown engine %s", engine)
 }
 
-func runEval(source string, env *obj.Enviroment, out io.Writer) error {
+func runEval(source string, env *obj.Enviroment, out io.Writer) (err error) {
+	// Internal evaluator panics must not tear down the whole host.
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("internal error: %v", r)
+		}
+	}()
+
 	l := lx.New(source)
 	p := ps.New(l)
 

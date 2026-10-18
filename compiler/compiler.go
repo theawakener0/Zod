@@ -47,6 +47,11 @@ type Compiler struct {
 	BaseDir    string
 	exports    map[string]int
 	allSymbols map[string]int
+
+	// compileErr records the first operand/constant overflow found while
+	// emitting; Compile surfaces it as an error instead of silently
+	// truncating operands.
+	compileErr error
 }
 
 type Bytecode struct {
@@ -81,13 +86,20 @@ func New() *Compiler {
 }
 
 func (c *Compiler) Compile(node ast.Node) error {
+	if c.compileErr != nil {
+		return c.compileErr
+	}
 	switch node := node.(type) {
 	case *ast.Program:
+		c.predefineTopLevel(node)
 		for _, s := range node.Statements {
 			err := c.Compile(s)
 			if err != nil {
 				return err
 			}
+		}
+		if c.compileErr != nil {
+			return c.compileErr
 		}
 	case *ast.ExpressionStatement:
 		err := c.Compile(node.Expression)
@@ -213,15 +225,19 @@ func (c *Compiler) Compile(node ast.Node) error {
 		if ident, ok := node.Function.(*ast.Identifier); ok && ident.Value == "try" {
 			if len(node.Arguments) != 1 {
 				tryErr := &obj.Error{Message: fmt.Sprintf("wrong number of arguments. got=%d, want=1", len(node.Arguments))}
+				enterPos := c.emit(code.OpTryEnter, 9999)
 				c.emit(code.OpConstant, c.addConstant(tryErr))
-				c.emit(code.OpTry)
+				tryPos := c.emit(code.OpTry)
+				c.changeOperand(enterPos, tryPos)
 				return nil
 			}
+			enterPos := c.emit(code.OpTryEnter, 9999)
 			err := c.Compile(node.Arguments[0])
 			if err != nil {
 				return err
 			}
-			c.emit(code.OpTry)
+			tryPos := c.emit(code.OpTry)
+			c.changeOperand(enterPos, tryPos)
 			return nil
 		}
 		err := c.Compile(node.Function)
@@ -458,6 +474,29 @@ func (c *Compiler) Compile(node ast.Node) error {
 	return nil
 }
 
+// predefineTopLevel reserves global slots for every top-level binding before
+// any statement is compiled, so function bodies may reference bindings that
+// are defined later in the program (mutual recursion).
+func (c *Compiler) predefineTopLevel(p *ast.Program) {
+	if p == nil || !isTopLevel(c) {
+		return
+	}
+	for _, s := range p.Statements {
+		switch node := s.(type) {
+		case *ast.LetStatement:
+			if node.Name != nil {
+				c.symbolTable.PredefineGlobal(node.Name.Value)
+			}
+		case *ast.AssignStatement:
+			if node.Token.Literal == ":=" {
+				if ident, ok := node.Left.(*ast.Identifier); ok {
+					c.symbolTable.PredefineGlobal(ident.Value)
+				}
+			}
+		}
+	}
+}
+
 func (c *Compiler) Bytecode() *Bytecode {
 	exports := map[string]int{}
 	for k, v := range c.exports {
@@ -476,6 +515,9 @@ func (c *Compiler) Bytecode() *Bytecode {
 }
 
 func (c *Compiler) addConstant(obj obj.Object) int {
+	if len(c.constant) > 0xFFFF && c.compileErr == nil {
+		c.compileErr = fmt.Errorf("too many constants: %d (max 65536)", len(c.constant)+1)
+	}
 	c.constant = append(c.constant, obj)
 	return len(c.constant) - 1
 }
@@ -488,6 +530,9 @@ func (c *Compiler) addInstruction(ins []byte) int {
 }
 
 func (c *Compiler) emit(op code.Opcode, operands ...int) int {
+	if err := code.FitsOperand(op, operands...); err != nil && c.compileErr == nil {
+		c.compileErr = err
+	}
 	ins := code.Make(op, operands...)
 	pos := c.addInstruction(ins)
 
@@ -539,6 +584,12 @@ func (c *Compiler) replaceLastPopWithReturn() {
 }
 
 func (c *Compiler) changeOperand(opPos int, operand int) {
+	if operand > 0xFFFF {
+		if c.compileErr == nil {
+			c.compileErr = fmt.Errorf("jump target out of range: %d (max 65535)", operand)
+		}
+		operand = 0xFFFF
+	}
 	ins := c.currentInstruction()
 
 	op := code.Opcode(ins[opPos])
@@ -765,11 +816,21 @@ func (c *Compiler) compileAssignStatement(node *ast.AssignStatement) error {
 }
 
 func (c *Compiler) compileIndexAssign(idx *ast.IndexExpression, value ast.Expression, kind int) error {
-	if inner, ok := idx.Left.(*ast.IndexExpression); ok {
-		if err := c.Compile(inner.Left); err != nil {
-			return err
+	// Collect the index chain, outermost first, so nested writes such as
+	// a[i]["k"][j] = v can be assigned generically (hash/array/matrix at
+	// every level).
+	var chain []*ast.IndexExpression
+	cur := idx
+	for {
+		chain = append(chain, cur)
+		inner, ok := cur.Left.(*ast.IndexExpression)
+		if !ok {
+			break
 		}
-		if err := c.Compile(inner.Index); err != nil {
+		cur = inner
+	}
+	if len(chain) == 1 {
+		if err := c.Compile(idx.Left); err != nil {
 			return err
 		}
 		if err := c.Compile(idx.Index); err != nil {
@@ -778,19 +839,21 @@ func (c *Compiler) compileIndexAssign(idx *ast.IndexExpression, value ast.Expres
 		if err := c.Compile(value); err != nil {
 			return err
 		}
-		c.emit(code.OpSetIndex, 10+kind)
+		c.emit(code.OpSetIndex, kind)
 		return nil
 	}
-	if err := c.Compile(idx.Left); err != nil {
+	if err := c.Compile(cur.Left); err != nil {
 		return err
 	}
-	if err := c.Compile(idx.Index); err != nil {
-		return err
+	for i := len(chain) - 1; i >= 0; i-- {
+		if err := c.Compile(chain[i].Index); err != nil {
+			return err
+		}
 	}
 	if err := c.Compile(value); err != nil {
 		return err
 	}
-	c.emit(code.OpSetIndex, kind)
+	c.emit(code.OpSetIndexDeep, kind, len(chain))
 	return nil
 }
 

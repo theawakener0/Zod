@@ -1515,3 +1515,18 @@ func testNullObject(t *testing.T, object obj.Object) bool {
 	return true
 }
 
+// Regression: statement nodes used to fall through to a Go nil return, which
+// made any function ending in let/assignment crash builtins such as println.
+func TestNilReturningStatements(t *testing.T) {
+	tests := []string{
+		`let f = fn() { let x = 1; }; f();`,
+		`let f = fn() { a := 2; }; f();`,
+		`let f = fn() { let y = [1, 2]; y[0] = 5; }; f();`,
+		`let f = fn() { let h = {"a": 1}; h["a"] = 2; }; f();`,
+	}
+	for _, src := range tests {
+		evaluated := testEval(src)
+		testNullObject(t, evaluated)
+	}
+}
+
