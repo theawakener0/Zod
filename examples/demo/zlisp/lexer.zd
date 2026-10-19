@@ -1,0 +1,68 @@
+
+pub makeLexer := fn(input) {
+    pos := 0
+    readPos := 0
+    ch := null
+
+    readChar := fn() {
+        if (readPos >= len(input)) {
+            ch := null
+        } else {
+            ch := input[readPos]
+        }
+        pos = readPos
+        readPos += 1
+    }
+
+    peekChar := fn() {
+        if (readPos >= len(input)) {
+            ch := null
+        } else {
+            ch := input[readPos]
+        }
+    }
+
+    skipWhitespace := fn() {
+        loop {
+            if (ch == " " || ch == "\t" || ch == "\n" || ch == "\r") {
+                readChar()
+            } else {
+                break
+            }
+        }
+    }
+
+    skipComment := fn() {
+        loop {
+            if (ch == null || ch == "\n") {
+                break
+            }
+            readChar()
+        }
+    }
+
+    isLetter := fn(c) {
+        (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || c == "_" || c == "-" || c == "?" || c == "!" || c == "+" || c == "*" || c == "/" || c == "<" || c == ">" || c == "="
+    }
+
+    isDigit := fn(c) {
+        c >= "0" && c <= "9"
+    }
+
+    readSymbol := fn() {
+        start := pos
+        loop {
+            if (ch == null || !(isLetter(ch) || isDigit(ch))) {
+                break
+            }
+            readChar()
+        }
+
+        result := ""
+        for (i := start; i < pos; ++i) {
+            result += input[i]
+        }
+        result
+    }
+
+}

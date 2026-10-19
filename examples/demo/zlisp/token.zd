@@ -1,0 +1,14 @@
+
+pub TOKEN := {
+    ILLEGAL: "ILLEGAL",
+    EOF: "EOF",
+
+    INT: "INT",
+    FLOAT: "FLOAT",
+    STRING: "STRING",
+    SYMBOL: "SYMBOL",
+
+    LPAREN: "(",
+    RPAREN: ")",
+    QUOTE: "'",
+}
