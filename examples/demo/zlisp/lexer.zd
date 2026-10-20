@@ -1,3 +1,4 @@
+from "token.zd" import TOKEN
 
 pub makeLexer := fn(input) {
     pos := 0
@@ -63,6 +64,98 @@ pub makeLexer := fn(input) {
             result += input[i]
         }
         result
+    }
+
+    readNumber := fn() {
+        start := pos
+        hasDot := false
+        loop {
+            if (ch == null) { break }
+            if (isDigit(ch)) {
+                readChar()
+            } else if (ch == "." && !hasDot) {
+                hasDot = true
+                readChar()
+            } else {
+                break
+            }
+        }
+        result := ""
+        for (i := start; i < pos; ++i) {
+            result += input[i]
+        }
+        {"literal": result, "isFloat": hasDot}
+    }
+
+    readString := fn() {
+        readChar()
+        start := pos
+        loop {
+            if (ch == null || ch == "\"") {
+                break
+            }
+            readChar()
+        }
+        result := ""
+        for (i := start; i < pos; ++i) {
+            result += input[i]
+        }
+        readChar()
+        result
+    }
+
+    nextToken := fn() {
+        skipWhitespace()
+
+        if (ch == ";") {
+            skipComment()
+            return nextToken()
+        }        
+
+        if (ch == null) {
+            return {"type": TOKEN.EOF, "literal": ""}
+        }
+
+        if (ch == "(") {
+            tok := {"type": TOKEN.LPAREN, "literal": "("}
+            readChar()
+            return tok
+        }
+        if (ch == ")") {
+            tok := {"type": TOKEN.RPAREN, "literal": ")"}
+            readChar()
+            return tok
+        }
+        if (ch == "'") {
+            tok := {"type": TOKEN.QUOTE, "literal": "'"}
+            readChar()
+            return tok
+        }
+        if (ch == "\"") {
+            s := readString()
+            return {"type": TOKEN.STRING, "literal": s}
+        }
+        if (isDigit(ch) || (ch == "-" && isDigit(peekChar()))) {
+            num := readNumber()
+            if (num["isFloat"]) {
+                return {"type": TOKEN.FLOAT, "literal": num["literal"]}
+            }
+            return {"type": TOKEN.INT, "literal": num["literal"]}
+        }
+        if (isLetter(ch)) {
+            sym := readSymbol()
+            return {"type": TOKEN.SYMBOL, "literal": sym}
+        }
+    
+        bad := ch
+        readChar()
+        {"type": TOKEN.ILLEGAL, "literal": bad}
+    }
+
+    readChar()
+
+    return {
+        "nextToken": nextToken
     }
 
 }
