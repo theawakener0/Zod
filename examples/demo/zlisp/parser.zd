@@ -1,0 +1,44 @@
+from "token.zd" import TOKEN
+
+pub makeParser := fn(lexer) {
+    curToken := null
+    peekToken := null
+
+    nextToken := fn() {
+        curToken = peekToken
+        peekToken = lexer["nextToken"]()
+    }
+
+    nextToken()
+    nextToken()
+
+    parseAtom := fn() {
+        if (curToken["type"] == TOKEN["INT"]) {
+            v := int(curToken["literal"])
+            nextToken()
+            return {"type": "Integer", "value": v}
+        }
+        if (curToken["type"] == TOKEN["FLOAT"]) {
+            v := float(curToken["literal"])
+            nextToken()
+            return {"type": "Float", "value": v}
+        }
+        if (curToken["type"] == TOKEN["STRING"]) {
+            v := curToken["literal"]
+            nextToken()
+            return {"type": "String", "value": v}
+        }
+        if (curToken["type"] == TOKEN["SYMBOL"]) {
+            v := curToken["literal"]
+            nextToken()
+            if (v == "true") { return {"type": "Boolean", "value": true} }
+            if (v == "false") { return {"type": "Boolean", "value": false} }
+            if (v == "nil") { return {"type": "Nil"} }
+            return {"type": "Symbol", "value": v}
+        }
+
+        {"type": "Error", "value": "Unexpected token in atom" + curToken["literal"]}
+    }
+
+
+} 
