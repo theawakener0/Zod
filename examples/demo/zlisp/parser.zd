@@ -40,5 +40,48 @@ pub makeParser := fn(lexer) {
         {"type": "Error", "value": "Unexpected token in atom" + curToken["literal"]}
     }
 
+    parseList := fn() {
+        nextToken()
+        elements := []
+        
+        loop {
+            if (curToken["type"] == TOKEN["RPAREN"] || curToken["type"] == TOKEN["EOF"]) {
+                break
+            }
+            elements = push(elements, parseExpression())
+        }
+        if (curToken["type"] != TOKEN["RPAREN"]) {
+            return {"type": "Error", "value": "missing closing parenthesis"}
+        }
+        nextToken()
+        return {"type": "List", "value": elements}
+    }
+
+    parseExpression := fn() {
+        if (curToken["type"] == TOKEN["QUOTE"]) {
+            nextToken()
+            expr := parseExpression()
+            return {"type": "List", "value": [{"type": "Symbol", "value": "quote"}, expr]}
+        } else if (curToken["type"] == TOKEN["LPAREN"]) {
+            return parseList()
+        } else {
+            return parseAtom()
+        }
+    }
+
+    parseProgram := fn() {
+        program := []
+        loop {
+            if (curToken["type"] == TOKEN["EOF"]) {
+                break
+            }
+            program = push(program, parseExpression())
+        }
+        program
+    }
+
+    {
+        "parseProgram": parseProgram
+    }
 
 } 
