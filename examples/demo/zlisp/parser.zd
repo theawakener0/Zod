@@ -4,6 +4,10 @@ pub makeParser := fn(lexer) {
     curToken := null
     peekToken := null
 
+    // The VM rejects local forward references, so mutual recursion between
+    // parseList and parseExpression goes through this indirection.
+    exprRef := {"fn": null}
+
     nextToken := fn() {
         curToken = peekToken
         peekToken = lexer["nextToken"]()
@@ -31,37 +35,45 @@ pub makeParser := fn(lexer) {
         if (curToken["type"] == TOKEN["SYMBOL"]) {
             v := curToken["literal"]
             nextToken()
-            if (v == "true") { return {"type": "Boolean", "value": true} }
-            if (v == "false") { return {"type": "Boolean", "value": false} }
-            if (v == "nil") { return {"type": "Nil"} }
+            if (v == "true") {
+                return {"type": "Boolean", "value": true}
+            }
+            if (v == "false") {
+                return {"type": "Boolean", "value": false}
+            }
+            if (v == "nil") {
+                return {"type": "Nil"}
+            }
             return {"type": "Symbol", "value": v}
         }
 
-        {"type": "Error", "value": "Unexpected token in atom" + curToken["literal"]}
+        msg := "unexpected token in atom: " + curToken["literal"]
+        nextToken()
+        return {"type": "Error", "value": msg}
     }
 
     parseList := fn() {
         nextToken()
         elements := []
-        
+
         loop {
             if (curToken["type"] == TOKEN["RPAREN"] || curToken["type"] == TOKEN["EOF"]) {
                 break
             }
-            elements = push(elements, parseExpression())
+            elements = push(elements, exprRef["fn"]())
         }
         if (curToken["type"] != TOKEN["RPAREN"]) {
             return {"type": "Error", "value": "missing closing parenthesis"}
         }
         nextToken()
-        return {"type": "List", "value": elements}
+        return {"type": "List", "elements": elements}
     }
 
     parseExpression := fn() {
         if (curToken["type"] == TOKEN["QUOTE"]) {
             nextToken()
-            expr := parseExpression()
-            return {"type": "List", "value": [{"type": "Symbol", "value": "quote"}, expr]}
+            expr := exprRef["fn"]()
+            return {"type": "List", "elements": [{"type": "Symbol", "value": "quote"}, expr]}
         } else if (curToken["type"] == TOKEN["LPAREN"]) {
             return parseList()
         } else {
@@ -69,19 +81,22 @@ pub makeParser := fn(lexer) {
         }
     }
 
+    exprRef["fn"] = parseExpression
+
     parseProgram := fn() {
         program := []
         loop {
             if (curToken["type"] == TOKEN["EOF"]) {
                 break
             }
-            program = push(program, parseExpression())
+            node := parseExpression()
+            program = push(program, node)
+            if (node["type"] == "Error") {
+                break
+            }
         }
-        program
+        return {"type": "Program", "elements": program}
     }
 
-    {
-        "parseProgram": parseProgram
-    }
-
-} 
+    return {"parseProgram": parseProgram}
+}

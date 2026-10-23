@@ -1,0 +1,21 @@
+pub makeEnv := fn(outer) {
+    return {
+        "store": {},
+        "outer": outer
+    }
+}
+
+pub envGet := fn(env, name) {
+    if (contains(env["store"], name)) {
+        return env["store"][name]
+    }
+    if (env["outer"] != null) {
+        return envGet(env["outer"], name)
+    }
+    return {"type": "Error", "value": "unbound variable: " + name}
+}
+
+pub envSet := fn(env, name, value) {
+    env["store"][name] = value
+    return value
+}

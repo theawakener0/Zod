@@ -1,0 +1,135 @@
+import "std/str" as str
+from "environment.zd" import *
+from "ast.zd" import astToString
+
+builtin := fn(f) {
+    return {"type": "Builtin", "fn": f}
+}
+
+numberValue := fn(node, name) {
+    if (node == null) {
+        return {"type": "Error", "value": name + " expects numbers, got null"}
+    }
+    if (node["type"] != "Integer" && node["type"] != "Float") {
+        return {"type": "Error", "value": name + " expects numbers, got " + node["type"]}
+    }
+    return node
+}
+
+binaryNumber := fn(name, args, op) {
+    if (len(args) != 2) {
+        return {"type": "Error", "value": name + " expects 2 arguments, got " + string(len(args))}
+    }
+    left := numberValue(args[0], name)
+    if (left["type"] == "Error") {
+        return left
+    }
+    right := numberValue(args[1], name)
+    if (right["type"] == "Error") {
+        return right
+    }
+    value := op(left["value"], right["value"])
+    if (type(value) == "FLOAT") {
+        return {"type": "Float", "value": value}
+    }
+    return {"type": "Integer", "value": value}
+}
+
+binaryCompare := fn(name, args, op) {
+    if (len(args) != 2) {
+        return {"type": "Error", "value": name + " expects 2 arguments, got " + string(len(args))}
+    }
+    left := numberValue(args[0], name)
+    if (left["type"] == "Error") {
+        return left
+    }
+    right := numberValue(args[1], name)
+    if (right["type"] == "Error") {
+        return right
+    }
+    return {"type": "Boolean", "value": op(left["value"], right["value"])}
+}
+
+divide := fn(args) {
+    if (len(args) != 2) {
+        return {"type": "Error", "value": "/ expects 2 arguments, got " + string(len(args))}
+    }
+    left := numberValue(args[0], "/")
+    if (left["type"] == "Error") {
+        return left
+    }
+    right := numberValue(args[1], "/")
+    if (right["type"] == "Error") {
+        return right
+    }
+    if (right["value"] == 0) {
+        return {"type": "Error", "value": "division by zero"}
+    }
+    if (left["type"] == "Integer" && right["type"] == "Integer" && left["value"] % right["value"] == 0) {
+        return {"type": "Integer", "value": left["value"] / right["value"]}
+    }
+    return {"type": "Float", "value": float(left["value"]) / float(right["value"])}
+}
+
+equal := fn(args) {
+    if (len(args) != 2) {
+        return {"type": "Error", "value": "= expects 2 arguments, got " + string(len(args))}
+    }
+    left := args[0]
+    right := args[1]
+    if (left["type"] != right["type"]) {
+        return {"type": "Boolean", "value": false}
+    }
+    if (left["type"] == "Nil") {
+        return {"type": "Boolean", "value": true}
+    }
+    if (left["type"] == "List") {
+        return {"type": "Boolean", "value": astToString(left) == astToString(right)}
+    }
+    return {"type": "Boolean", "value": left["value"] == right["value"]}
+}
+
+pub makeGlobalEnv := fn() {
+    env := makeEnv(null)
+
+    envSet(env, "+", builtin(fn(args) {
+        return binaryNumber("+", args, fn(a, b) { return a + b })
+    }))
+    envSet(env, "-", builtin(fn(args) {
+        return binaryNumber("-", args, fn(a, b) { return a - b })
+    }))
+    envSet(env, "*", builtin(fn(args) {
+        return binaryNumber("*", args, fn(a, b) { return a * b })
+    }))
+    envSet(env, "/", builtin(fn(args) {
+        return divide(args)
+    }))
+    envSet(env, "=", builtin(fn(args) {
+        return equal(args)
+    }))
+    envSet(env, "<", builtin(fn(args) {
+        return binaryCompare("<", args, fn(a, b) { return a < b })
+    }))
+    envSet(env, ">", builtin(fn(args) {
+        return binaryCompare(">", args, fn(a, b) { return a > b })
+    }))
+    envSet(env, "<=", builtin(fn(args) {
+        return binaryCompare("<=", args, fn(a, b) { return a <= b })
+    }))
+    envSet(env, ">=", builtin(fn(args) {
+        return binaryCompare(">=", args, fn(a, b) { return a >= b })
+    }))
+    envSet(env, "list", builtin(fn(args) {
+        return {"type": "List", "elements": args}
+    }))
+    envSet(env, "print", builtin(fn(args) {
+        parts := []
+        for (i := 0; i < len(args); i++) {
+            parts = push(parts, astToString(args[i]))
+        }
+        println(str.join(parts, " "))
+        return {"type": "Nil"}
+    }))
+
+    return env
+}

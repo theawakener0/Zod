@@ -1,3 +1,4 @@
+import "std/str" as str
 from "token.zd" import TOKEN
 
 pub makeLexer := fn(input) {
@@ -5,11 +6,18 @@ pub makeLexer := fn(input) {
     readPos := 0
     ch := null
 
+    charAt := fn(i) {
+        if (i < 0 || i >= len(input)) {
+            return null
+        }
+        return str.slice(input, i, i + 1)
+    }
+
     readChar := fn() {
         if (readPos >= len(input)) {
-            ch := null
+            ch = null
         } else {
-            ch := input[readPos]
+            ch = charAt(readPos)
         }
         pos = readPos
         readPos += 1
@@ -17,10 +25,9 @@ pub makeLexer := fn(input) {
 
     peekChar := fn() {
         if (readPos >= len(input)) {
-            ch := null
-        } else {
-            ch := input[readPos]
+            return null
         }
+        return charAt(readPos)
     }
 
     skipWhitespace := fn() {
@@ -43,11 +50,17 @@ pub makeLexer := fn(input) {
     }
 
     isLetter := fn(c) {
-        (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || c == "_" || c == "-" || c == "?" || c == "!" || c == "+" || c == "*" || c == "/" || c == "<" || c == ">" || c == "="
+        if (c == null) {
+            return false
+        }
+        return str.contains("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_-?!+*/><=", c)
     }
 
     isDigit := fn(c) {
-        c >= "0" && c <= "9"
+        if (c == null) {
+            return false
+        }
+        return str.contains("0123456789", c)
     }
 
     readSymbol := fn() {
@@ -58,19 +71,19 @@ pub makeLexer := fn(input) {
             }
             readChar()
         }
-
-        result := ""
-        for (i := start; i < pos; ++i) {
-            result += input[i]
-        }
-        result
+        return str.slice(input, start, pos)
     }
 
     readNumber := fn() {
         start := pos
         hasDot := false
+        if (ch == "-" || ch == "+") {
+            readChar()
+        }
         loop {
-            if (ch == null) { break }
+            if (ch == null) {
+                break
+            }
             if (isDigit(ch)) {
                 readChar()
             } else if (ch == "." && !hasDot) {
@@ -80,82 +93,103 @@ pub makeLexer := fn(input) {
                 break
             }
         }
-        result := ""
-        for (i := start; i < pos; ++i) {
-            result += input[i]
-        }
-        {"literal": result, "isFloat": hasDot}
+        return {"literal": str.slice(input, start, pos), "isFloat": hasDot}
     }
 
     readString := fn() {
         readChar()
-        start := pos
+        result := ""
+        terminated := false
         loop {
-            if (ch == null || ch == "\"") {
+            if (ch == null) {
                 break
             }
-            readChar()
+            if (ch == "\"") {
+                terminated = true
+                readChar()
+                break
+            }
+            if (ch == "\\") {
+                readChar()
+                if (ch == null) {
+                    break
+                }
+                if (ch == "n") {
+                    result += "\n"
+                } else if (ch == "t") {
+                    result += "\t"
+                } else if (ch == "r") {
+                    result += "\r"
+                } else if (ch == "\\") {
+                    result += "\\"
+                } else if (ch == "\"") {
+                    result += "\""
+                } else {
+                    result += "\\" + ch
+                }
+                readChar()
+            } else {
+                result += ch
+                readChar()
+            }
         }
-        result := ""
-        for (i := start; i < pos; ++i) {
-            result += input[i]
-        }
-        readChar()
-        result
+        return {"literal": result, "terminated": terminated}
     }
 
     nextToken := fn() {
-        skipWhitespace()
-
-        if (ch == ";") {
-            skipComment()
-            return nextToken()
-        }        
+        loop {
+            skipWhitespace()
+            if (ch == ";") {
+                skipComment()
+            } else {
+                break
+            }
+        }
 
         if (ch == null) {
-            return {"type": TOKEN.EOF, "literal": ""}
+            return {"type": TOKEN["EOF"], "literal": ""}
         }
 
         if (ch == "(") {
-            tok := {"type": TOKEN.LPAREN, "literal": "("}
+            tok := {"type": TOKEN["LPAREN"], "literal": "("}
             readChar()
             return tok
         }
         if (ch == ")") {
-            tok := {"type": TOKEN.RPAREN, "literal": ")"}
+            tok := {"type": TOKEN["RPAREN"], "literal": ")"}
             readChar()
             return tok
         }
         if (ch == "'") {
-            tok := {"type": TOKEN.QUOTE, "literal": "'"}
+            tok := {"type": TOKEN["QUOTE"], "literal": "'"}
             readChar()
             return tok
         }
         if (ch == "\"") {
             s := readString()
-            return {"type": TOKEN.STRING, "literal": s}
+            if (!s["terminated"]) {
+                return {"type": TOKEN["ILLEGAL"], "literal": "unterminated string"}
+            }
+            return {"type": TOKEN["STRING"], "literal": s["literal"]}
         }
-        if (isDigit(ch) || (ch == "-" && isDigit(peekChar()))) {
+        if (isDigit(ch) || ((ch == "-" || ch == "+") && isDigit(peekChar()))) {
             num := readNumber()
             if (num["isFloat"]) {
-                return {"type": TOKEN.FLOAT, "literal": num["literal"]}
+                return {"type": TOKEN["FLOAT"], "literal": num["literal"]}
             }
-            return {"type": TOKEN.INT, "literal": num["literal"]}
+            return {"type": TOKEN["INT"], "literal": num["literal"]}
         }
         if (isLetter(ch)) {
             sym := readSymbol()
-            return {"type": TOKEN.SYMBOL, "literal": sym}
+            return {"type": TOKEN["SYMBOL"], "literal": sym}
         }
-    
+
         bad := ch
         readChar()
-        {"type": TOKEN.ILLEGAL, "literal": bad}
+        return {"type": TOKEN["ILLEGAL"], "literal": bad}
     }
 
     readChar()
 
-    return {
-        "nextToken": nextToken
-    }
-
+    return {"nextToken": nextToken}
 }

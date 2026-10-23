@@ -1,0 +1,36 @@
+from "lexer.zd" import *
+from "parser.zd" import *
+from "evaluator.zd" import *
+from "ast.zd" import *
+from "builtins.zd" import *
+
+runREPL := fn() {
+    global := makeGlobalEnv()
+    println("Z-Lisp REPL (type 'exit' or 'quit' to quit)")
+    loop {
+        printf("z-lisp> ")
+        line := input()
+        if (line == "exit" || line == "quit") {
+            break
+        }
+        if (line == "") {
+            continue
+        }
+
+        lex := makeLexer(line)
+        pars := makeParser(lex)
+        program := pars["parseProgram"]()
+        forms := program["elements"]
+
+        for (i := 0; i < len(forms); i++) {
+            result := eval(forms[i], global)
+            if (result["type"] == "Error") {
+                println("error: " + result["value"])
+            } else if (result["type"] != "Nil") {
+                println(astToString(result))
+            }
+        }
+    }
+}
+
+runREPL()

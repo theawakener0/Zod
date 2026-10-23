@@ -1,0 +1,77 @@
+import "std/os" as os
+from "lexer.zd" import makeLexer
+from "parser.zd" import makeParser
+from "evaluator.zd" import eval
+from "ast.zd" import astToString
+from "builtins.zd" import makeGlobalEnv
+
+stats := {"checks": 0, "failures": 0}
+
+run := fn(src) {
+    lex := makeLexer(src)
+    pars := makeParser(lex)
+    program := pars["parseProgram"]()
+    env := makeGlobalEnv()
+    result := {"type": "Nil"}
+    forms := program["elements"]
+    for (i := 0; i < len(forms); i++) {
+        result = eval(forms[i], env)
+        if (result["type"] == "Error") {
+            return astToString(result)
+        }
+    }
+    return astToString(result)
+}
+
+check := fn(name, src, expected) {
+    stats["checks"] += 1
+    actual := run(src)
+    if (actual == expected) {
+        println("PASS " + name)
+    } else {
+        stats["failures"] += 1
+        println("FAIL " + name + ": expected " + expected + ", got " + actual)
+    }
+}
+
+check("integer addition", "(+ 1 2)", "3")
+check("nested arithmetic", "(+ 1 (* 2 3))", "7")
+check("subtraction", "(- 10 4)", "6")
+check("exact division", "(/ 8 2)", "4")
+check("float division", "(/ 5 2)", "2.5")
+check("float arithmetic", "(+ 1.5 2.5)", "4.0")
+check("negative literal", "-5", "-5")
+check("signed literal", "+5", "5")
+check("negative float", "-1.5", "-1.5")
+check("define and symbol", "(define x 5) x", "5")
+check("if true", "(if true 1 2)", "1")
+check("if false", "(if false 1 2)", "2")
+check("if truthy number", "(if 0 1 2)", "1")
+check("if without else", "(if false 1)", "nil")
+check("lambda identity", "((lambda (x) x) 7)", "7")
+check("lambda arithmetic", "((lambda (x) (+ x 1)) 41)", "42")
+check("lambda multi-form body", "((lambda (x) (define y 2) (+ x y)) 5)", "7")
+check("closure", "(define add5 (lambda (n) (lambda (x) (+ x n)))) ((add5 5) 3)", "8")
+check("begin", "(begin (define y 2) (* y 3))", "6")
+check("quote list", "'(1 2 3)", "(1 2 3)")
+check("empty quote", "'()", "()")
+check("quote symbol", "'foo", "foo")
+check("string literal", "\"hello\"", "\"hello\"")
+check("string escape", "\"a\\\"b\"", "\"a\\\"b\"")
+check("nil literal", "nil", "nil")
+check("equality", "(= 1 1)", "true")
+check("comparison", "(< 1 2)", "true")
+check("list builtin", "(list 1 2 3)", "(1 2 3)")
+check("unbound variable", "nope", "error: unbound variable: nope")
+check("wrong arity", "((lambda (x) x) 1 2)", "error: wrong number of arguments: expected 1, got 2")
+check("parse error", "(+ 1", "error: missing closing parenthesis")
+check("comments", "; ignored\n(+ 1 2)", "3")
+
+println("")
+if (stats["failures"] == 0) {
+    println("OK: " + string(stats["checks"]) + " checks passed")
+    os.exit(0)
+} else {
+    println("FAILED: " + string(stats["failures"]) + " of " + string(stats["checks"]) + " checks failed")
+    os.exit(1)
+}

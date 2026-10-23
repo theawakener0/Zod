@@ -1,24 +1,64 @@
 import "std/str" as str
 
-pub astToString := fn(node) {
-    if (node["type"] == "Integer" || node["type"] == "Float") {
-        string(node["value"])
-    } else if (node["type"] == "String") {
-        "\"" + node["value"] + "\""
-    } else if (node["type"] == "Symbol") {
-        node["value"]
-    } else if (node["type"] == "Boolean") {
-        if (node["value"]) { "true" } else { "false" }
-    } else if (node["type"] == "Nil") {
-        "nil"
-    } else if (node["type"] == "List") {
-        parts := []
-        for (i := 0; i < len(node["elements"]); i++) {
-            parts = push(parts, astToString(node["elements"][i]))
+escapeString := fn(s) {
+    result := ""
+    for (i := 0; i < len(s); i++) {
+        c := str.slice(s, i, i + 1)
+        if (c == "\"") {
+            result += "\\\""
+        } else if (c == "\\") {
+            result += "\\\\"
+        } else if (c == "\n") {
+            result += "\\n"
+        } else if (c == "\t") {
+            result += "\\t"
+        } else if (c == "\r") {
+            result += "\\r"
+        } else {
+            result += c
         }
-        "(" + str.join(parts, " ") + ")"
-    } else {
-        "<unknown>"
     }
-} 
+    return result
+}
 
+pub astToString := fn(node) {
+    if (node == null) {
+        return "<null>"
+    }
+    if (node["type"] == "Integer" || node["type"] == "Float") {
+        return string(node["value"])
+    }
+    if (node["type"] == "String") {
+        return "\"" + escapeString(node["value"]) + "\""
+    }
+    if (node["type"] == "Symbol") {
+        return node["value"]
+    }
+    if (node["type"] == "Boolean") {
+        if (node["value"]) {
+            return "true"
+        }
+        return "false"
+    }
+    if (node["type"] == "Nil") {
+        return "nil"
+    }
+    if (node["type"] == "Error") {
+        return "error: " + node["value"]
+    }
+    if (node["type"] == "Function") {
+        return "<function>"
+    }
+    if (node["type"] == "Builtin") {
+        return "<builtin>"
+    }
+    if (node["type"] == "List") {
+        parts := []
+        elements := node["elements"]
+        for (i := 0; i < len(elements); i++) {
+            parts = push(parts, astToString(elements[i]))
+        }
+        return "(" + str.join(parts, " ") + ")"
+    }
+    return "<unknown:" + node["type"] + ">"
+}

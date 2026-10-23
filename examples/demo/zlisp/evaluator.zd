@@ -1,0 +1,171 @@
+from "environment.zd" import *
+
+isError := fn(node) {
+    return node != null && node["type"] == "Error"
+}
+
+pub eval := fn(node, env) {
+    if (node == null) {
+        return {"type": "Error", "value": "cannot evaluate null node"}
+    }
+    if (node["type"] == "Error") {
+        return node
+    }
+    if (node["type"] == "Integer" || node["type"] == "Float" || node["type"] == "String" || node["type"] == "Boolean" || node["type"] == "Nil") {
+        return node
+    }
+    if (node["type"] == "Symbol") {
+        return envGet(env, node["value"])
+    }
+    if (node["type"] == "List") {
+        return evalList(node, env)
+    }
+    return {"type": "Error", "value": "unknown node type: " + node["type"]}
+}
+
+evalSequence := fn(nodes, env) {
+    result := {"type": "Nil"}
+    for (i := 0; i < len(nodes); i++) {
+        result = eval(nodes[i], env)
+        if (isError(result)) {
+            return result
+        }
+    }
+    return result
+}
+
+pub evalList := fn(list, env) {
+    elements := list["elements"]
+    if (len(elements) == 0) {
+        return {"type": "Nil"}
+    }
+
+    first := elements[0]
+
+    if (first["type"] == "Symbol") {
+        name := first["value"]
+
+        if (name == "quote") {
+            if (len(elements) != 2) {
+                return {"type": "Error", "value": "quote expects 1 argument"}
+            }
+            return elements[1]
+        }
+
+        if (name == "if") {
+            if (len(elements) < 3 || len(elements) > 4) {
+                return {"type": "Error", "value": "if expects 2 or 3 arguments"}
+            }
+            test := eval(elements[1], env)
+            if (isError(test)) {
+                return test
+            }
+            if (isTruthy(test)) {
+                return eval(elements[2], env)
+            }
+            if (len(elements) == 4) {
+                return eval(elements[3], env)
+            }
+            return {"type": "Nil"}
+        }
+
+        if (name == "define") {
+            if (len(elements) != 3) {
+                return {"type": "Error", "value": "define expects a name and a value"}
+            }
+            nameNode := elements[1]
+            if (nameNode["type"] != "Symbol") {
+                return {"type": "Error", "value": "define expects a symbol name"}
+            }
+            value := eval(elements[2], env)
+            if (isError(value)) {
+                return value
+            }
+            envSet(env, nameNode["value"], value)
+            return value
+        }
+
+        if (name == "lambda") {
+            if (len(elements) < 3) {
+                return {"type": "Error", "value": "lambda expects parameters and a body"}
+            }
+            paramsNode := elements[1]
+            if (paramsNode["type"] != "List") {
+                return {"type": "Error", "value": "lambda parameters must be a list"}
+            }
+            params := paramsNode["elements"]
+            for (i := 0; i < len(params); i++) {
+                if (params[i]["type"] != "Symbol") {
+                    return {"type": "Error", "value": "lambda parameters must be symbols"}
+                }
+            }
+            body := []
+            for (i := 2; i < len(elements); i++) {
+                body = push(body, elements[i])
+            }
+            return {
+                "type": "Function",
+                "params": params,
+                "body": body,
+                "env": env
+            }
+        }
+
+        if (name == "begin") {
+            body := []
+            for (i := 1; i < len(elements); i++) {
+                body = push(body, elements[i])
+            }
+            return evalSequence(body, env)
+        }
+    }
+
+    op := eval(first, env)
+    if (isError(op)) {
+        return op
+    }
+
+    args := []
+    for (i := 1; i < len(elements); i++) {
+        arg := eval(elements[i], env)
+        if (isError(arg)) {
+            return arg
+        }
+        args = push(args, arg)
+    }
+    return apply(op, args)
+}
+
+isTruthy := fn(obj) {
+    if (obj == null) {
+        return false
+    }
+    if (obj["type"] == "Nil") {
+        return false
+    }
+    if (obj["type"] == "Boolean") {
+        return obj["value"]
+    }
+    return true
+}
+
+apply := fn(fnObj, args) {
+    if (fnObj == null) {
+        return {"type": "Error", "value": "attempt to call null"}
+    }
+    if (fnObj["type"] == "Builtin") {
+        return fnObj["fn"](args)
+    }
+    if (fnObj["type"] == "Function") {
+        params := fnObj["params"]
+        if (len(args) != len(params)) {
+            return {"type": "Error", "value": "wrong number of arguments: expected " + string(len(params)) + ", got " + string(len(args))}
+        }
+        newEnv := makeEnv(fnObj["env"])
+        for (i := 0; i < len(params); i++) {
+            envSet(newEnv, params[i]["value"], args[i])
+        }
+        return evalSequence(fnObj["body"], newEnv)
+    }
+    return {"type": "Error", "value": "attempt to call non-function: " + fnObj["type"]}
+}

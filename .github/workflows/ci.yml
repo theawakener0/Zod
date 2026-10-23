@@ -55,3 +55,5 @@ jobs:
       - name: Stdlib fs smoke (non-Windows)
         if: runner.os != 'Windows'
         run: go run . --eng=eval examples/std_fs_demo.zd && go run . --eng=vm examples/std_fs_demo.zd
+      - name: Z-Lisp demo tests (eval + vm)
+        run: go run . --eng=eval examples/demo/zlisp/tests.zd && go run . --eng=vm examples/demo/zlisp/tests.zd
