@@ -25,10 +25,13 @@ go run . examples/demo/zlisp/tests.zd
 go run . --eng=eval examples/demo/zlisp/tests.zd
 ```
 
-`tests.zd` is a self-contained suite (32 checks) that exercises the lexer,
-parser, evaluator, closures, quoting, errors, and both engines.
+`tests.zd` is a self-contained suite (98 checks) that exercises the lexer,
+parser, evaluator, closures, quoting, and errors. It is engine-agnostic; the
+commands above run it on both the VM and the eval engine.
 
 ## Example session
+
+The startup banner is omitted below.
 
 ```text
 Z-Lisp REPL (type 'exit' or 'quit' to quit)
@@ -69,8 +72,11 @@ booleans (`true`, `false`), `nil`, and lists.
 
 `+`, `-`, `*`, `/`, `=`, `<`, `>`, `<=`, `>=`, `list`, `print`.
 
-Only `nil` and `false` are falsey. `/` returns an integer when the division is
-exact, otherwise a float.
+Only `nil` and `false` are falsey. `/` returns an integer when both operands
+are integers and the division is exact; otherwise it returns a float. `=` is
+type-strict (`1` is not `1.0`) and structural for lists; functions and builtins
+never compare equal. `<`, `>`, `<=`, and `>=` compare numbers only. Numeric
+literals outside the 64-bit range produce an error instead of aborting.
 
 ## Layout
 
@@ -89,10 +95,23 @@ exact, otherwise a float.
 ## Notes and limitations
 
 - The REPL reads one line at a time, so multi-line forms are not supported.
-- `input()` cannot distinguish an empty line from end-of-file; when piping
-  input, finish with `exit` or `quit`.
+- `input()` cannot distinguish an empty line from end-of-file. When piping
+  input, finish with `exit` or `quit`; closing stdin without one makes the REPL
+  loop, because every read returns an empty string.
 - Strings are byte-oriented in ZodLang. The lexer uses `str.slice` to read
   characters because strings do not support `s[i]` indexing.
 - Local forward references are rejected by the VM, so the parser's mutually
   recursive functions go through a small hash indirection (`exprRef`).
+- Numeric literals are 64-bit and do not support exponent notation (`1e3` is
+  rejected as an invalid number). Runtime integer arithmetic wraps on overflow;
+  only out-of-range literals produce an error. Float arithmetic follows
+  IEEE-754, so overflow can produce `+Inf.0` or `NaN.0`, which the reader
+  cannot parse back.
+- Deep non-tail recursion can exceed the VM call-depth limit and abort the
+  process.
+- The empty form `()` evaluates to `nil`.
+- Signed literals (`-5`, `+5`) are single tokens. Without whitespace, a sign
+  continues the token: `1-2` is rejected as an invalid number rather than read
+  as `1` followed by `-2`.
+- Identifiers are ASCII only; unknown string escapes are preserved literally.
 - No macros, vectors, `set!`, or tail-call optimization yet.

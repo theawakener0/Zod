@@ -3,9 +3,29 @@ from "parser.zd" import *
 from "evaluator.zd" import *
 from "ast.zd" import *
 from "builtins.zd" import *
+import "std/term" as term
+
+BANNER := "
+
+                                                   .
+                                  i   t           ;Wt
+                                 LE   Ej         f#EED.
+       ,##############Wf.       L#E   E#,      .E#f E#K:
+        ........jW##Wt         G#W.   E#t     iWW;  E##W;
+              tW##Kt          D#K.    E#t    L##LffiE#E##t
+            tW##E;           E#K.     E#t   tLLG##L E#ti##f
+          tW##E;           .E#E.      E#t     ,W#i  E#t ;##D.
+       .fW##D,            .K#E        E#t    j#E.   E#ELLE##K:
+     .f###D,             .K#D         E#t  .D#j     E#L;;;;;;,
+   .f####Gfffffffffff;  .W#G          E#t ,WK,      E#t
+  .fLLLLLLLLLLLLLLLLLi :W##########Wt E#t EG.       E#t
+                       :,,,,,,,,,,,,,.,;. ,
+
+"
 
 runREPL := fn() {
     global := makeGlobalEnv()
+    println(term.color("YELLOW", BANNER) + term.reset())
     println("Z-Lisp REPL (type 'exit' or 'quit' to quit)")
     loop {
         printf("z-lisp> ")

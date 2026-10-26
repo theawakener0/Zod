@@ -15,7 +15,11 @@ pub eval := fn(node, env) {
         return node
     }
     if (node["type"] == "Symbol") {
-        return envGet(env, node["value"])
+        value := envGet(env, node["value"])
+        if (value == null) {
+            return {"type": "Error", "value": "unbound variable: " + node["value"]}
+        }
+        return value
     }
     if (node["type"] == "List") {
         return evalList(node, env)
@@ -97,6 +101,11 @@ pub evalList := fn(list, env) {
             for (i := 0; i < len(params); i++) {
                 if (params[i]["type"] != "Symbol") {
                     return {"type": "Error", "value": "lambda parameters must be symbols"}
+                }
+                for (j := i + 1; j < len(params); j++) {
+                    if (params[i]["value"] == params[j]["value"]) {
+                        return {"type": "Error", "value": "duplicate lambda parameter: " + params[i]["value"]}
+                    }
                 }
             }
             body := []

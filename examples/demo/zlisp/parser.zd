@@ -18,14 +18,22 @@ pub makeParser := fn(lexer) {
 
     parseAtom := fn() {
         if (curToken["type"] == TOKEN["INT"]) {
-            v := int(curToken["literal"])
+            lit := curToken["literal"]
+            parsed := try(int(lit))
             nextToken()
-            return {"type": "Integer", "value": v}
+            if (!parsed[0]) {
+                return {"type": "Error", "value": "invalid integer literal: " + lit}
+            }
+            return {"type": "Integer", "value": parsed[1]}
         }
         if (curToken["type"] == TOKEN["FLOAT"]) {
-            v := float(curToken["literal"])
+            lit := curToken["literal"]
+            parsed := try(float(lit))
             nextToken()
-            return {"type": "Float", "value": v}
+            if (!parsed[0]) {
+                return {"type": "Error", "value": "invalid float literal: " + lit}
+            }
+            return {"type": "Float", "value": parsed[1]}
         }
         if (curToken["type"] == TOKEN["STRING"]) {
             v := curToken["literal"]
@@ -47,7 +55,10 @@ pub makeParser := fn(lexer) {
             return {"type": "Symbol", "value": v}
         }
 
-        msg := "unexpected token in atom: " + curToken["literal"]
+        msg := "unexpected end of input"
+        if (curToken["literal"] != "") {
+            msg = "unexpected token in atom: " + curToken["literal"]
+        }
         nextToken()
         return {"type": "Error", "value": msg}
     }
@@ -60,7 +71,11 @@ pub makeParser := fn(lexer) {
             if (curToken["type"] == TOKEN["RPAREN"] || curToken["type"] == TOKEN["EOF"]) {
                 break
             }
-            elements = push(elements, exprRef["fn"]())
+            node := exprRef["fn"]()
+            if (node["type"] == "Error") {
+                return node
+            }
+            elements = push(elements, node)
         }
         if (curToken["type"] != TOKEN["RPAREN"]) {
             return {"type": "Error", "value": "missing closing parenthesis"}
@@ -73,6 +88,9 @@ pub makeParser := fn(lexer) {
         if (curToken["type"] == TOKEN["QUOTE"]) {
             nextToken()
             expr := exprRef["fn"]()
+            if (expr["type"] == "Error") {
+                return expr
+            }
             return {"type": "List", "elements": [{"type": "Symbol", "value": "quote"}, expr]}
         } else if (curToken["type"] == TOKEN["LPAREN"]) {
             return parseList()

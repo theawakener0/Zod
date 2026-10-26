@@ -1,23 +1,40 @@
 import "std/str" as str
 
 escapeString := fn(s) {
-    result := ""
+    needsEscape := false
     for (i := 0; i < len(s); i++) {
         c := str.slice(s, i, i + 1)
-        if (c == "\"") {
-            result += "\\\""
-        } else if (c == "\\") {
-            result += "\\\\"
-        } else if (c == "\n") {
-            result += "\\n"
-        } else if (c == "\t") {
-            result += "\\t"
-        } else if (c == "\r") {
-            result += "\\r"
-        } else {
-            result += c
+        if (c == "\"" || c == "\\" || c == "\n" || c == "\t" || c == "\r") {
+            needsEscape = true
+            break
         }
     }
+    if (!needsEscape) {
+        return s
+    }
+
+    result := ""
+    start := 0
+    for (i := 0; i < len(s); i++) {
+        c := str.slice(s, i, i + 1)
+        replacement := null
+        if (c == "\"") {
+            replacement = "\\\""
+        } else if (c == "\\") {
+            replacement = "\\\\"
+        } else if (c == "\n") {
+            replacement = "\\n"
+        } else if (c == "\t") {
+            replacement = "\\t"
+        } else if (c == "\r") {
+            replacement = "\\r"
+        }
+        if (replacement != null) {
+            result += str.slice(s, start, i) + replacement
+            start = i + 1
+        }
+    }
+    result += str.slice(s, start, len(s))
     return result
 }
 

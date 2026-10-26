@@ -42,7 +42,7 @@ pub makeLexer := fn(input) {
 
     skipComment := fn() {
         loop {
-            if (ch == null || ch == "\n") {
+            if (ch == null || ch == "\n" || ch == "\r") {
                 break
             }
             readChar()
@@ -61,6 +61,25 @@ pub makeLexer := fn(input) {
             return false
         }
         return str.contains("0123456789", c)
+    }
+
+    isNumberStart := fn() {
+        if (isDigit(ch)) {
+            return true
+        }
+        if (ch == ".") {
+            return isDigit(peekChar())
+        }
+        if (ch == "-" || ch == "+") {
+            p := peekChar()
+            if (isDigit(p)) {
+                return true
+            }
+            if (p == "." && isDigit(charAt(readPos + 1))) {
+                return true
+            }
+        }
+        return false
     }
 
     readSymbol := fn() {
@@ -98,42 +117,61 @@ pub makeLexer := fn(input) {
 
     readString := fn() {
         readChar()
-        result := ""
+        start := pos
+        end := start
         terminated := false
         loop {
             if (ch == null) {
+                end = pos
                 break
             }
             if (ch == "\"") {
                 terminated = true
+                end = pos
                 readChar()
                 break
             }
             if (ch == "\\") {
                 readChar()
                 if (ch == null) {
+                    end = pos
                     break
-                }
-                if (ch == "n") {
-                    result += "\n"
-                } else if (ch == "t") {
-                    result += "\t"
-                } else if (ch == "r") {
-                    result += "\r"
-                } else if (ch == "\\") {
-                    result += "\\"
-                } else if (ch == "\"") {
-                    result += "\""
-                } else {
-                    result += "\\" + ch
                 }
                 readChar()
             } else {
-                result += ch
                 readChar()
             }
         }
-        return {"literal": result, "terminated": terminated}
+
+        chars := str.split(str.slice(input, start, end), "")
+        i := 0
+        loop {
+            if (i >= len(chars)) {
+                break
+            }
+            if (chars[i] == "\\" && i + 1 < len(chars)) {
+                next := chars[i + 1]
+                if (next == "n") {
+                    chars[i] = ""
+                    chars[i + 1] = "\n"
+                } else if (next == "t") {
+                    chars[i] = ""
+                    chars[i + 1] = "\t"
+                } else if (next == "r") {
+                    chars[i] = ""
+                    chars[i + 1] = "\r"
+                } else if (next == "\\") {
+                    chars[i] = ""
+                    chars[i + 1] = "\\"
+                } else if (next == "\"") {
+                    chars[i] = ""
+                    chars[i + 1] = "\""
+                }
+                i += 1
+            }
+            i += 1
+        }
+        return {"literal": str.join(chars, ""), "terminated": terminated}
     }
 
     nextToken := fn() {
@@ -172,8 +210,18 @@ pub makeLexer := fn(input) {
             }
             return {"type": TOKEN["STRING"], "literal": s["literal"]}
         }
-        if (isDigit(ch) || ((ch == "-" || ch == "+") && isDigit(peekChar()))) {
+        if (isNumberStart()) {
+            start := pos
             num := readNumber()
+            if (isLetter(ch) || ch == ".") {
+                loop {
+                    if (ch == null || !(isLetter(ch) || isDigit(ch) || ch == ".")) {
+                        break
+                    }
+                    readChar()
+                }
+                return {"type": TOKEN["ILLEGAL"], "literal": "invalid number: " + str.slice(input, start, pos)}
+            }
             if (num["isFloat"]) {
                 return {"type": TOKEN["FLOAT"], "literal": num["literal"]}
             }

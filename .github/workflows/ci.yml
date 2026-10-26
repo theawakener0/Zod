@@ -57,3 +57,15 @@ jobs:
         run: go run . --eng=eval examples/std_fs_demo.zd && go run . --eng=vm examples/std_fs_demo.zd
       - name: Z-Lisp demo tests (eval + vm)
         run: go run . --eng=eval examples/demo/zlisp/tests.zd && go run . --eng=vm examples/demo/zlisp/tests.zd
+      - name: Z-Lisp REPL smoke (eval + vm)
+        shell: bash
+        run: |
+          out=$(mktemp)
+          echo exit | go run . --eng=eval examples/demo/zlisp/repl.zd > "$out"
+          grep -q "f####Gfffffffffff" "$out"
+          grep -q "Z-Lisp REPL" "$out"
+          grep -q "z-lisp>" "$out"
+          echo exit | go run . --eng=vm examples/demo/zlisp/repl.zd > "$out"
+          grep -q "f####Gfffffffffff" "$out"
+          grep -q "Z-Lisp REPL" "$out"
+          grep -q "z-lisp>" "$out"

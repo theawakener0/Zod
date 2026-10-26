@@ -71,22 +71,40 @@ divide := fn(args) {
     return {"type": "Float", "value": float(left["value"]) / float(right["value"])}
 }
 
+equalNodes := fn(left, right) {
+    if (left == null || right == null) {
+        return left == right
+    }
+    if (left["type"] != right["type"]) {
+        return false
+    }
+    if (left["type"] == "Nil") {
+        return true
+    }
+    if (left["type"] == "Function" || left["type"] == "Builtin") {
+        return false
+    }
+    if (left["type"] == "List") {
+        leftElements := left["elements"]
+        rightElements := right["elements"]
+        if (len(leftElements) != len(rightElements)) {
+            return false
+        }
+        for (i := 0; i < len(leftElements); i++) {
+            if (!equalNodes(leftElements[i], rightElements[i])) {
+                return false
+            }
+        }
+        return true
+    }
+    return left["value"] == right["value"]
+}
+
 equal := fn(args) {
     if (len(args) != 2) {
         return {"type": "Error", "value": "= expects 2 arguments, got " + string(len(args))}
     }
-    left := args[0]
-    right := args[1]
-    if (left["type"] != right["type"]) {
-        return {"type": "Boolean", "value": false}
-    }
-    if (left["type"] == "Nil") {
-        return {"type": "Boolean", "value": true}
-    }
-    if (left["type"] == "List") {
-        return {"type": "Boolean", "value": astToString(left) == astToString(right)}
-    }
-    return {"type": "Boolean", "value": left["value"] == right["value"]}
+    return {"type": "Boolean", "value": equalNodes(args[0], args[1])}
 }
 
 pub makeGlobalEnv := fn() {
