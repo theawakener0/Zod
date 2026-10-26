@@ -50,22 +50,46 @@ jobs:
           go tool cover -func=coverage.out | tail -20
       - name: Test (native, no cross-arch env)
         run: go test -count=1 ./...
-      - name: Stdlib smoke (eval + vm)
-        run: go run . --eng=eval examples/std_demo.zd && go run . --eng=vm examples/std_demo.zd && go run . --eng=eval examples/std_bytes_demo.zd && go run . --eng=vm examples/std_bytes_demo.zd && go run . --eng=eval examples/std_err_demo.zd && go run . --eng=vm examples/std_err_demo.zd
-      - name: Stdlib fs smoke (non-Windows)
+      - name: Verify evaluator is archived
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          if go list ./... | grep -qx 'github.com/theawakener0/Zod/evaluator'; then
+            echo "evaluator package is still present" >&2
+            exit 1
+          fi
+          echo "evaluator package is archived"
+      - name: Verify eval engine is rejected
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set +e
+          out=$(mktemp)
+          go run . --eng=eval examples/hello.zd >"$out" 2>&1
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "expected --eng=eval to fail, but it exited 0" >&2
+            cat "$out" >&2
+            exit 1
+          fi
+          if ! grep -q "eval engine was removed" "$out"; then
+            echo "expected error containing 'eval engine was removed'" >&2
+            cat "$out" >&2
+            exit 1
+          fi
+      - name: Stdlib smoke (VM)
+        run: go run . examples/std_demo.zd && go run . examples/std_bytes_demo.zd && go run . examples/std_err_demo.zd
+      - name: Stdlib fs smoke (VM, non-Windows)
         if: runner.os != 'Windows'
-        run: go run . --eng=eval examples/std_fs_demo.zd && go run . --eng=vm examples/std_fs_demo.zd
-      - name: Z-Lisp demo tests (eval + vm)
-        run: go run . --eng=eval examples/demo/zlisp/tests.zd && go run . --eng=vm examples/demo/zlisp/tests.zd
-      - name: Z-Lisp REPL smoke (eval + vm)
+        run: go run . examples/std_fs_demo.zd
+      - name: Z-Lisp demo tests (VM)
+        run: go run . examples/demo/zlisp/tests.zd
+      - name: Z-Lisp REPL smoke (VM)
         shell: bash
         run: |
           out=$(mktemp)
-          echo exit | go run . --eng=eval examples/demo/zlisp/repl.zd > "$out"
-          grep -q "f####Gfffffffffff" "$out"
-          grep -q "Z-Lisp REPL" "$out"
-          grep -q "z-lisp>" "$out"
-          echo exit | go run . --eng=vm examples/demo/zlisp/repl.zd > "$out"
+          echo exit | go run . examples/demo/zlisp/repl.zd > "$out"
           grep -q "f####Gfffffffffff" "$out"
           grep -q "Z-Lisp REPL" "$out"
           grep -q "z-lisp>" "$out"

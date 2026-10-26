@@ -1,7 +1,6 @@
 // std_fs_demo.zd - demo of fs/path/os/time (writes only to /tmp).
 // Run from the repo root:
 //   go run . examples/std_fs_demo.zd
-//   go run . --eng=eval examples/std_fs_demo.zd
 import "std/fmt" as fmt
 import "std/fs" as fs
 import "std/path" as path

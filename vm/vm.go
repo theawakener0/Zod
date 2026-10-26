@@ -20,9 +20,8 @@ import (
 // must refresh its cached frame/instruction state and continue.
 var errUnwound = errors.New("vm: unwound to try guard")
 
-// MaxFrames bounds the call depth. It matches the evaluator's maxCallDepth
-// so both engines fail at (roughly) the same depth, and the depth error is
-// an ordinary, try()-catchable Error value.
+// MaxFrames bounds the call depth. The depth error is an ordinary,
+// try()-catchable Error value.
 const StackSize = 8192
 const GlobalsSize = 65536
 const MaxFrames = 10000
@@ -336,9 +335,9 @@ func (vm *VM) Run() error {
 			numElements := int(ins[ip+1])<<8 | int(ins[ip+2])
 			frame.ip += 2
 
-			// Mirror the evaluator (evalExpressions): any error element
-			// propagates as the error itself instead of an array
-			// containing it. First error in evaluation order wins.
+			// Any error element propagates as the error itself
+			// instead of an array containing it. First error in
+			// evaluation order wins.
 			var firstErr obj.Object
 			for i := vm.sp - numElements; i < vm.sp; i++ {
 				if errObj, ok := vm.stack[i].(*obj.Error); ok && errObj != nil {
@@ -1469,8 +1468,7 @@ func (vm *VM) singleIndexAssign(left, index, val obj.Object, kind int) obj.Objec
 }
 
 // executeDeepIndexAssign performs a[]...[] = v for any nesting depth,
-// supporting hash/array/matrix containers at every level (mirrors the
-// evaluator's generic nested index assignment).
+// supporting hash/array/matrix containers at every level.
 func (vm *VM) executeDeepIndexAssign(kind, depth int) error {
 	val := vm.pop()
 	keys := make([]obj.Object, depth)
@@ -1699,9 +1697,9 @@ func (vm *VM) callBuiltin(builtin *obj.Builtin, numArgs int) error {
 	return vm.push(Null)
 }
 
-// vmErrorTolerantBuiltins mirrors evaluator.builtinAcceptsError: these
-// builtins meaningfully accept error values, so an error argument must be
-// delivered to them instead of short-circuiting the call.
+// vmErrorTolerantBuiltins lists builtins that meaningfully accept error
+// values, so an error argument must be delivered to them instead of
+// short-circuiting the call.
 var vmErrorTolerantBuiltins = []string{"string", "type", "is_error", "__print", "__eprint", "__panic"}
 
 func vmBuiltinAcceptsError(fn obj.Object) bool {
@@ -1718,8 +1716,7 @@ func vmBuiltinAcceptsError(fn obj.Object) bool {
 }
 
 // boundaryError applies abort-on-error semantics at statement boundaries
-// (OpPop, stores, index assignment, jump conditions), mirroring the
-// evaluator, which stops propagating only at those points. Without an
+// (OpPop, stores, index assignment, jump conditions). Without an
 // active try() the error aborts the run. With an active try() guard the
 // error is routed to the innermost guard: same-frame guards abandon the
 // try expression and resume at its OpTry (so try(if <error> {...}) and
@@ -1777,9 +1774,9 @@ func (vm *VM) executeCall(numArgs int) error {
 		}
 		return vm.push(errObj)
 	}
-	// Mirror the evaluator (evalExpressions): any error argument
-	// short-circuits the call (the callee never executes) unless it is
-	// a builtin that accepts errors. First error in order wins.
+	// Any error argument short-circuits the call (the callee never
+	// executes) unless it is a builtin that accepts errors. First error
+	// in order wins.
 	if numArgs >= 1 && !vmBuiltinAcceptsError(callee) {
 		for i := vm.sp - numArgs; i < vm.sp; i++ {
 			if errObj, ok := vm.stack[i].(*obj.Error); ok && errObj != nil {

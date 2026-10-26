@@ -80,7 +80,7 @@ go build -o zod .
 ```
 
 > [!NOTE]
-> ZodLang now has a new engine, the VM, which is faster and more powerful. You can run the old engine with `--eng=eval`.
+> v0.8.0 removed the legacy tree-walking evaluator and the `--eng=eval` flag. The VM is now the only engine. `--eng=vm` is still accepted for compatibility, but the default command runs the VM.
 
 ### Run the REPL
 
@@ -100,14 +100,8 @@ Inside the REPL, type `/clear` to clear the screen and `/exit` to quit.
 # if you installed using the script
 zod file.zd
 
-# if you installed using the script and want to run the eval engine
-zod --eng=eval file.zd
-
 # if you installed using go install
 Zod file.zd
-
-# if you installed using go install and want to run the eval engine
-Zod --eng=eval file.zd
 ```
 
 ## Examples
@@ -199,8 +193,8 @@ fmt.println("Hello, World!")
 
 - The `__*` names (about 50 intrinsics such as `__print`, `__str_split`, `__read_file`) are private implementation details backing `std/*`. Do not call them directly.
 - New types: `Bytes` (`type(x)` returns `"BYTES"`) and `Error` values (`type(error("x"))` returns `"ERROR"`). New globals are `error(msg)` (creates an error value) and `is_error(x)` (tests for one); `string()` also formats `Array`, `Hash`, `Matrix`, `Bytes`, `null`, and `Error` (`string(error("x"))` returns `"Error: x"`).
-- Capture errors with `try()`: `let r = try(error("x"))` returns `[false, "x"]`. A bare `let e = error("x")` halts evaluation by design, so always wrap error-producing expressions in `try()` (or nest them, e.g. `string(error("x"))`, which works on both engines).
-- An imported name shadows a same-named core built-in (e.g. `array.push` vs `push`) on both engines. Several modules export the same name (`join` in `str`/`array`/`path`, `contains` in `str`/`array`/`hash`), so always import with an alias and call through it.
+- Capture errors with `try()`: `let r = try(error("x"))` returns `[false, "x"]`. A bare `let e = error("x")` halts evaluation by design, so always wrap error-producing expressions in `try()` (or nest them, e.g. `string(error("x"))`, which the VM supports).
+- An imported name shadows a same-named core built-in (e.g. `array.push` vs `push`) on the VM. Several modules export the same name (`join` in `str`/`array`/`path`, `contains` in `str`/`array`/`hash`), so always import with an alias and call through it.
 - `std/` lookup order and runnable examples are documented in [docs](docs/introduction.md).
 
 ### Legacy core (kept for compat)

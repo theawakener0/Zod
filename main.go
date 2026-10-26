@@ -5,11 +5,11 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"strings"
 
 	obj "github.com/theawakener0/Zod/object"
 	"github.com/theawakener0/Zod/repl"
 )
-
 
 const Banner = ` 
                                                  
@@ -22,35 +22,59 @@ const Banner = `
                                             ▀▀▀  
 `
 
-var version = "v0.7.5"
+var version = "v0.8.0"
+
+type cliOptions struct {
+	file        string
+	showVersion bool
+}
+
+func parseArgs(args []string) (cliOptions, error) {
+	if len(args) == 0 {
+		return cliOptions{}, nil
+	}
+
+	first := args[0]
+	switch first {
+	case "-v", "--version":
+		return cliOptions{showVersion: true}, nil
+	case "--eng=vm":
+		if len(args) > 1 {
+			return cliOptions{file: args[1]}, nil
+		}
+		return cliOptions{}, nil
+	case "--eng=eval":
+		return cliOptions{}, fmt.Errorf("the eval engine was removed in %s; use the VM (default) or --eng=vm", version)
+	default:
+		if strings.HasPrefix(first, "--eng=") {
+			return cliOptions{}, fmt.Errorf("unknown engine %s (expected --eng=vm)", first)
+		}
+		return cliOptions{file: first}, nil
+	}
+}
 
 func main() {
-	if len(os.Args) > 1 && (os.Args[1] == "-v" || os.Args[1] == "--version") {
+	opts, err := parseArgs(os.Args[1:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if opts.showVersion {
 		fmt.Printf("zod %s\n", version)
 		return
 	}
 
-	defer func ()  {
+	defer func() {
 		_ = obj.TermDisableRaw()
 	}()
 
-	engine := "--eng=vm"
-	fileIdx := 1
-	if len(os.Args) > 1 && (os.Args[1] == "--eng=eval" || os.Args[1] == "--eng=vm") {
-		engine = os.Args[1]
-		fileIdx = 2
-	} else if len(os.Args) > 1 && len(os.Args[1]) > 6 && os.Args[1][:6] == "--eng=" {
-		fmt.Fprintln(os.Stderr, "unknown engine "+os.Args[1]+" (expected --eng=vm or --eng=eval)")
-		os.Exit(1)
-	}
-
-	if len(os.Args) > fileIdx {
-		source, err := os.ReadFile(os.Args[fileIdx])
+	if opts.file != "" {
+		source, err := os.ReadFile(opts.file)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		err = repl.Execute(string(source), os.Stdout, engine, filepath.Dir(os.Args[fileIdx]))
+		err = repl.Execute(string(source), os.Stdout, filepath.Dir(opts.file))
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -58,27 +82,16 @@ func main() {
 		return
 	}
 
-	if fileIdx == 2 {
-		user, err := user.Current()
-		if err != nil {
-			panic(err)
-		}
+	printWelcome()
+	repl.Start(os.Stdin, os.Stdout)
+}
 
-		fmt.Printf("\x1b[0;34m%s\x1b[0m\n", Banner)
-		fmt.Printf("\nHello %s! Type the command here.\n", user.Username)
-
-		repl.Start(os.Stdin, os.Stdout, engine)
-		return
-	}
-
-	user, err := user.Current()
+func printWelcome() {
+	current, err := user.Current()
 	if err != nil {
 		panic(err)
 	}
 
 	fmt.Printf("\x1b[0;34m%s\x1b[0m\n", Banner)
-	fmt.Printf("\nHello %s! Type the command here.\n", user.Username)
-
-	repl.Start(os.Stdin, os.Stdout, "--eng=vm")
-
+	fmt.Printf("\nHello %s! Type the command here.\n", current.Username)
 }

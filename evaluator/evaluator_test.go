@@ -1,4 +1,4 @@
-// DEPRECATED
+//go:build legacy_eval
 
 package evaluator
 
@@ -14,7 +14,7 @@ import (
 
 func TestEvalIntegerExpression(t *testing.T) {
 	tests := []struct {
-		input string
+		input    string
 		expected int64
 	}{
 		{"5", 5},
@@ -165,7 +165,7 @@ func TestFloatInspect(t *testing.T) {
 
 func TestEvalBooleanExpression(t *testing.T) {
 	tests := []struct {
-		input string
+		input    string
 		expected bool
 	}{
 		{"true", true},
@@ -197,7 +197,7 @@ func TestEvalBooleanExpression(t *testing.T) {
 
 func TestBangOperator(t *testing.T) {
 	tests := []struct {
-		input string
+		input    string
 		expected bool
 	}{
 		{"!true", false},
@@ -216,9 +216,9 @@ func TestBangOperator(t *testing.T) {
 
 func TestIfElseExpression(t *testing.T) {
 	tests := []struct {
-		input		string
-		expected	any
-	} {
+		input    string
+		expected any
+	}{
 		{"if (true) { 10 }", 10},
 		{"if (false) { 10 }", nil},
 		{"if (1) { 10 }", 10},
@@ -247,8 +247,8 @@ func TestIfElseExpression(t *testing.T) {
 
 func TestEvalReturnStatements(t *testing.T) {
 	tests := []struct {
-		input		string
-		expected	int64
+		input    string
+		expected int64
 	}{
 		{"return 10;", 10},
 		{"return 10; 9;", 10},
@@ -274,8 +274,8 @@ func TestEvalReturnStatements(t *testing.T) {
 
 func TestErrorHandling(t *testing.T) {
 	tests := []struct {
-		input		string
-		expected	string
+		input    string
+		expected string
 	}{
 		{
 			"5 + true;",
@@ -343,8 +343,8 @@ func TestErrorHandling(t *testing.T) {
 
 func TestLetStatements(t *testing.T) {
 	tests := []struct {
-		input		string
-		expected	int64
+		input    string
+		expected int64
 	}{
 		{"let a = 5; a;", 5},
 		{"let a = 5 * 5; a;", 25},
@@ -360,8 +360,8 @@ func TestLetStatements(t *testing.T) {
 
 func TestAssignStatements(t *testing.T) {
 	tests := []struct {
-		input		string
-		expected	int64
+		input    string
+		expected int64
 	}{
 		{"a := 5; a;", 5},
 		{"a := 5 * 5; a;", 25},
@@ -405,9 +405,9 @@ func TestFunctionObject(t *testing.T) {
 
 func TestFunctionApplication(t *testing.T) {
 	tests := []struct {
-		input		string
-		expected	int64
-	} {
+		input    string
+		expected int64
+	}{
 		{"let identity = fn(x) { x; }; identity(5);", 5},
 		{"let identity = fn(x) { return x; }; identity(5);", 5},
 		{"let double = fn(x) { x * 2; }; double(5);", 10},
@@ -542,9 +542,9 @@ func TestStringConcatenation(t *testing.T) {
 
 func TestBuiltinFunction(t *testing.T) {
 	tests := []struct {
-		input		string
-		expected	any
-	} {
+		input    string
+		expected any
+	}{
 		{`len("")`, 0},
 		{`len("four")`, 4},
 		{`len("hello world")`, 11},
@@ -810,8 +810,8 @@ func TestIndexAssignment(t *testing.T) {
 
 func TestIndexAssignmentErrors(t *testing.T) {
 	tests := []struct {
-		input      string
-		expected   string
+		input    string
+		expected string
 	}{
 		{"x := [1, 2, 3]; x[5] = 10;", "index out of range: 5"},
 		{"x := [1, 2, 3]; x[-1] = 10;", "index out of range: -1"},
@@ -852,9 +852,9 @@ func TestArrayLiteral(t *testing.T) {
 
 func TestIndexExpression(t *testing.T) {
 	tests := []struct {
-		input		string
-		expected	any
-	} {
+		input    string
+		expected any
+	}{
 		{
 			"[1, 2, 3][0]",
 			1,
@@ -918,20 +918,20 @@ func TestHashLiterals(t *testing.T) {
 		true: 5,
 		false: 6
 	}`
-	
+
 	eval := testEval(input)
 	result, ok := eval.(*obj.Hash)
 	if !ok {
 		t.Fatalf("Eval didn't return Hash. got=%T (%+v)", eval, eval)
 	}
 
-	expected := map[obj.HashKey]int64 {
-		(&obj.String{Value: "one"}).HashKey(): 1,
-		(&obj.String{Value: "two"}).HashKey(): 2,
+	expected := map[obj.HashKey]int64{
+		(&obj.String{Value: "one"}).HashKey():   1,
+		(&obj.String{Value: "two"}).HashKey():   2,
 		(&obj.String{Value: "three"}).HashKey(): 3,
-		(&obj.Integer{Value: 4}).HashKey(): 4,
-		TRUE.HashKey(): 5,
-		FALSE.HashKey(): 6,
+		(&obj.Integer{Value: 4}).HashKey():      4,
+		TRUE.HashKey():                          5,
+		FALSE.HashKey():                         6,
 	}
 
 	if len(result.Pairs) != len(expected) {
@@ -950,9 +950,9 @@ func TestHashLiterals(t *testing.T) {
 
 func TestHashIndexExpression(t *testing.T) {
 	tests := []struct {
-		input		string
-		expected	any
-	} {
+		input    string
+		expected any
+	}{
 		{
 			`{"foo": 5}["foo"]`,
 			5,
@@ -996,9 +996,9 @@ func TestHashIndexExpression(t *testing.T) {
 
 func TestHashBuiltins(t *testing.T) {
 	tests := []struct {
-		input		string
-		expected	any
-	} {
+		input    string
+		expected any
+	}{
 		{`len({"a": 1, "b": 2})`, 2},
 		{`len({})`, 0},
 		{`insert({"a": 1}, "b", 2)["b"]`, 2},
@@ -1040,8 +1040,8 @@ func TestHashBuiltins(t *testing.T) {
 
 func TestHashBuiltinErrors(t *testing.T) {
 	tests := []struct {
-		input      string
-		expected   string
+		input    string
+		expected string
 	}{
 		{`insert({"a": 1})`, "wrong number of arguments. got=1, want=3"},
 		{`insert([1, 2], "a", 1)`, "argument to `insert` not supported. got=ARRAY"},
@@ -1531,4 +1531,3 @@ func TestNilReturningStatements(t *testing.T) {
 		testNullObject(t, evaluated)
 	}
 }
-

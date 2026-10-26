@@ -22,12 +22,10 @@ go build -o zod .
 
 ```sh
 go run . examples/demo/zlisp/tests.zd
-go run . --eng=eval examples/demo/zlisp/tests.zd
 ```
 
 `tests.zd` is a self-contained suite (98 checks) that exercises the lexer,
-parser, evaluator, closures, quoting, and errors. It is engine-agnostic; the
-commands above run it on both the VM and the eval engine.
+parser, evaluator, closures, quoting, and errors. It runs on the VM.
 
 ## Example session
 

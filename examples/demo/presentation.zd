@@ -157,7 +157,7 @@ let scene5 = fn() {
 	println("")
 	pipe("source.zd", "LEXER", "tokens", "873")
 	pipe("tokens", "PARSER", "AST", "2,185")
-	pipe("AST", "EVALUATOR", "result", "3,018")
+	pipe("AST", "COMPILER + VM", "result", "3,018")
 	println("")
 	println("   " + DIM + "plus ast 565  ·  object 390  ·  token 93  ·  repl 73  ·  main 51" + RST)
 	wait()

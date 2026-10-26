@@ -263,9 +263,8 @@ inspectable and testable.
   (`object/stream_idle_test.go`). `__http_post_headers` accepts up to
   `300000` ms.
 - Modules avoid letting `error()` values cross more than one function
-  boundary: on the VM engine, an error propagating further fails with
+  boundary: on the VM, an error propagating further fails with
   `executing bytecode failed:` instead of being catchable. All fallible calls
-  use envelopes or are wrapped in `try()` at the direct call site. The eval
-  engine (`--eng=eval`) does not have this restriction.
+  use envelopes or are wrapped in `try()` at the direct call site.
 - All definitions precede their call sites (the VM bytecode compiler rejects
   forward references); a few cycles are broken with hash indirection.

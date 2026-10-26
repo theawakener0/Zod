@@ -1,7 +1,6 @@
 // std_matrix_demo.zd - demo of std/matrix mul + det2.
 // Run from the repo root:
 //   go run . examples/std_matrix_demo.zd
-//   go run . --eng=eval examples/std_matrix_demo.zd
 import "std/matrix" as m
 import "std/fmt" as fmt
 

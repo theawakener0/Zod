@@ -101,7 +101,7 @@ Zod is designed to be small, simple, and easy to use. It is not a general-purpos
 > [!NOTE]
 > `try(expr)` is a special form, not a built-in, and is documented separately below. It requires exactly one argument.
 
-For complete signatures, see `evaluator/builtins.go`.
+For complete signatures, see `object/builtins.go`.
 
 ## Standard Library
 
@@ -160,7 +160,7 @@ fmt.println(str.join(["a", "b"], "-")) // a-b
 fmt.println(path.join("a", "b"))       // a/b
 ```
 
-An imported name also shadows a same-named core built-in (e.g. `array.push` vs `push`) on both the eval and VM engines.
+An imported name also shadows a same-named core built-in (e.g. `array.push` vs `push`) on the VM.
 
 ### Example: bytes and error values
 
@@ -172,7 +172,7 @@ let b = bytes.from_str("hello")
 fmt.println(bytes.len(b))                  // 5
 fmt.println(bytes.to_str(bytes.slice(b, 1, 4))) // ell
 
-// string() formats errors too: nested string(error()) works on both engines.
+// string() formats errors too: nested string(error()) works on the VM.
 fmt.println(string(error("boom")))         // Error: boom
 fmt.println(type(error("boom")))           // ERROR
 fmt.println(is_error(error("boom")))       // true
@@ -208,7 +208,7 @@ fmt.println(iter.take([1, 2, 3, 4, 5], 3)) // [1, 2, 3]
 fmt.println(iter.drop([1, 2, 3, 4, 5], 2)) // [3, 4, 5]
 ```
 
-See `examples/std_iter_demo.zd` (run with `go run . examples/std_iter_demo.zd` and `go run . --eng=eval examples/std_iter_demo.zd`).
+See `examples/std_iter_demo.zd` (run with `go run . examples/std_iter_demo.zd`).
 
 ### Example: http (offline-safe)
 
@@ -273,7 +273,7 @@ let r2 = try(m.inv(m.new(2, 2, [1, 2, 2, 4])))
 fmt.println(r2[0]) // false (singular matrix)
 ```
 
-See `examples/std_matrix_demo.zd` and `examples/std_matrix2_demo.zd` (run each with `go run . <file>` and `go run . --eng=eval <file>`).
+See `examples/std_matrix_demo.zd` and `examples/std_matrix2_demo.zd` (run each with `go run . <file>`).
 
 ## Peek: Error Handling with try()
 

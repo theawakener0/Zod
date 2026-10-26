@@ -1,7 +1,6 @@
 // std_demo.zd - demo of the new stdlib (fmt/str/array/hash/math/json).
 // Run from the repo root:
 //   go run . examples/std_demo.zd
-//   go run . --eng=eval examples/std_demo.zd
 import "std/fmt" as fmt
 import "std/str" as str
 import "std/array" as arr

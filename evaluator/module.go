@@ -1,4 +1,4 @@
-// DEPRECATED
+//go:build legacy_eval
 
 package evaluator
 

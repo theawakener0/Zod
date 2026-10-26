@@ -1,7 +1,6 @@
 // std_bytes_demo.zd - demo of std/bytes (from_str/to_str/len/slice/concat roundtrip).
 // Run from the repo root:
 //   go run . examples/std_bytes_demo.zd
-//   go run . --eng=eval examples/std_bytes_demo.zd
 import "std/bytes" as bytes
 import "std/fmt" as fmt
 
