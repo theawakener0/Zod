@@ -5,7 +5,6 @@ import (
 
 	"github.com/theawakener0/Zod/ast"
 	"github.com/theawakener0/Zod/compiler"
-	eval "github.com/theawakener0/Zod/evaluator"
 	lx "github.com/theawakener0/Zod/lexer"
 	obj "github.com/theawakener0/Zod/object"
 	ps "github.com/theawakener0/Zod/parser"
@@ -62,10 +61,11 @@ func benchRunVM(bytecode *compiler.Bytecode) (obj.Object, error) {
 	return machine.LastPoppedStackElem(), nil
 }
 
-func benchRunEval(program *ast.Program) obj.Object {
-	env := obj.NewEnviroment()
-	return eval.Eval(program, env)
-}
+// The evaluator is deprecated and will be removed in a future release.
+// func benchRunEval(program *ast.Program) obj.Object {
+// 	env := obj.NewEnviroment()
+// 	return eval.Eval(program, env)
+// }
 
 func benchIsError(o obj.Object) bool {
 	if o == nil {
@@ -101,42 +101,45 @@ func benchmarkVM(b *testing.B, src string, fatal bool) {
 	}
 }
 
-func benchmarkEval(b *testing.B, src string, fatal bool) {
-	b.Helper()
-	b.ReportAllocs()
-	program, ok := benchParse(b, src)
-	if !ok {
-		if fatal {
-			b.Fatalf("eval parse failed for %q", src)
-		}
-		b.Skipf("eval parse unsupported, skipping: %q", src)
-	}
-	if got := benchRunEval(program); benchIsError(got) {
-		if fatal {
-			b.Fatalf("eval trial run returned error: %s", got.Inspect())
-		}
-		b.Skipf("eval trial run unsupported, skipping: %s", got.Inspect())
-	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		env := obj.NewEnviroment()
-		got := eval.Eval(program, env)
-		if errObj, isErr := got.(*obj.Error); isErr {
-			b.Fatalf("eval error: %s", errObj.Message)
-		}
-		benchSink = got
-	}
-}
+// The evaluator is deprecated and will be removed in a future release.
+// func benchmarkEval(b *testing.B, src string, fatal bool) {
+// 	b.Helper()
+// 	b.ReportAllocs()
+// 	program, ok := benchParse(b, src)
+// 	if !ok {
+// 		if fatal {
+// 			b.Fatalf("eval parse failed for %q", src)
+// 		}
+// 		b.Skipf("eval parse unsupported, skipping: %q", src)
+// 	}
+// 	if got := benchRunEval(program); benchIsError(got) {
+// 		if fatal {
+// 			b.Fatalf("eval trial run returned error: %s", got.Inspect())
+// 		}
+// 		b.Skipf("eval trial run unsupported, skipping: %s", got.Inspect())
+// 	}
+// 	b.ResetTimer()
+// 	for i := 0; i < b.N; i++ {
+// 		env := obj.NewEnviroment()
+// 		got := eval.Eval(program, env)
+// 		if errObj, isErr := got.(*obj.Error); isErr {
+// 			b.Fatalf("eval error: %s", errObj.Message)
+// 		}
+// 		benchSink = got
+// 	}
+// }
 
 // BenchmarkFibVM15 compiles fib(15) once, then measures VM execution only.
 func BenchmarkFibVM15(b *testing.B) {
 	benchmarkVM(b, benchFib15Src, true)
 }
 
+// The evaluator is deprecated and will be removed in a future release.
 // BenchmarkFibEval15 parses fib(15) once, then measures tree-walking eval only.
-func BenchmarkFibEval15(b *testing.B) {
-	benchmarkEval(b, benchFib15Src, true)
-}
+// func BenchmarkFibEval15(b *testing.B) {
+// 	benchmarkEval(b, benchFib15Src, true)
+// }
+//
 
 // BenchmarkArithLoop covers both engines via sub-benchmarks.
 func BenchmarkArithLoop(b *testing.B) {
@@ -144,9 +147,11 @@ func BenchmarkArithLoop(b *testing.B) {
 	b.Run("vm", func(b *testing.B) {
 		benchmarkVM(b, benchArithLoopSrc, true)
 	})
-	b.Run("eval", func(b *testing.B) {
-		benchmarkEval(b, benchArithLoopSrc, true)
-	})
+
+	// The evaluator is deprecated and will be removed in a future release.
+	// b.Run("eval", func(b *testing.B) {
+	// 	benchmarkEval(b, benchArithLoopSrc, true)
+	// })
 }
 
 // BenchmarkArithLoopVM measures a simple integer for-loop on the VM.
@@ -154,10 +159,12 @@ func BenchmarkArithLoopVM(b *testing.B) {
 	benchmarkVM(b, benchArithLoopSrc, true)
 }
 
+// The evaluator is deprecated and will be removed in a future release.
 // BenchmarkArithLoopEval measures a simple integer for-loop on the evaluator.
-func BenchmarkArithLoopEval(b *testing.B) {
-	benchmarkEval(b, benchArithLoopSrc, true)
-}
+// func BenchmarkArithLoopEval(b *testing.B) {
+// 	benchmarkEval(b, benchArithLoopSrc, true)
+// }
+
 
 // BenchmarkArrayPush covers both engines via sub-benchmarks; skips gracefully
 // if the VM does not support the push builtin.
@@ -166,9 +173,11 @@ func BenchmarkArrayPush(b *testing.B) {
 	b.Run("vm", func(b *testing.B) {
 		benchmarkVM(b, benchArrayPushSrc, false)
 	})
-	b.Run("eval", func(b *testing.B) {
-		benchmarkEval(b, benchArrayPushSrc, false)
-	})
+
+	// The evaluator is deprecated and will be removed in a future release.
+	// b.Run("eval", func(b *testing.B) {
+	// 	benchmarkEval(b, benchArrayPushSrc, false)
+	// })
 }
 
 // BenchmarkArrayPushVM measures repeated push() in a loop on the VM.
@@ -176,10 +185,11 @@ func BenchmarkArrayPushVM(b *testing.B) {
 	benchmarkVM(b, benchArrayPushSrc, false)
 }
 
+// The evaluator is deprecated and will be removed in a future release.
 // BenchmarkArrayPushEval measures repeated push() in a loop on the evaluator.
-func BenchmarkArrayPushEval(b *testing.B) {
-	benchmarkEval(b, benchArrayPushSrc, false)
-}
+// func BenchmarkArrayPushEval(b *testing.B) {
+// 	benchmarkEval(b, benchArrayPushSrc, false)
+// }
 
 // BenchmarkHashInsert covers both engines via sub-benchmarks; skips gracefully
 // if the VM does not support the insert builtin.
@@ -188,9 +198,11 @@ func BenchmarkHashInsert(b *testing.B) {
 	b.Run("vm", func(b *testing.B) {
 		benchmarkVM(b, benchHashInsertSrc, false)
 	})
-	b.Run("eval", func(b *testing.B) {
-		benchmarkEval(b, benchHashInsertSrc, false)
-	})
+
+	// The evaluator is deprecated and will be removed in a future release.
+	// b.Run("eval", func(b *testing.B) {
+	// 	benchmarkEval(b, benchHashInsertSrc, false)
+	// })
 }
 
 // BenchmarkHashInsertVM measures repeated insert() in a loop on the VM.
@@ -198,10 +210,11 @@ func BenchmarkHashInsertVM(b *testing.B) {
 	benchmarkVM(b, benchHashInsertSrc, false)
 }
 
+// The evaluator is deprecated and will be removed in a future release.
 // BenchmarkHashInsertEval measures repeated insert() in a loop on the evaluator.
-func BenchmarkHashInsertEval(b *testing.B) {
-	benchmarkEval(b, benchHashInsertSrc, false)
-}
+// func BenchmarkHashInsertEval(b *testing.B) {
+// 	benchmarkEval(b, benchHashInsertSrc, false)
+// }
 
 // BenchmarkStringConcat covers both engines via sub-benchmarks.
 func BenchmarkStringConcat(b *testing.B) {
@@ -209,9 +222,11 @@ func BenchmarkStringConcat(b *testing.B) {
 	b.Run("vm", func(b *testing.B) {
 		benchmarkVM(b, benchStringConcatSrc, false)
 	})
-	b.Run("eval", func(b *testing.B) {
-		benchmarkEval(b, benchStringConcatSrc, false)
-	})
+
+	// The evaluator is deprecated and will be removed in a future release.
+	// b.Run("eval", func(b *testing.B) {
+	// 	benchmarkEval(b, benchStringConcatSrc, false)
+	// })
 }
 
 // BenchmarkStringConcatVM measures repeated string "+" in a loop on the VM.
@@ -219,10 +234,11 @@ func BenchmarkStringConcatVM(b *testing.B) {
 	benchmarkVM(b, benchStringConcatSrc, false)
 }
 
+// The evaluator is deprecated and will be removed in a future release.
 // BenchmarkStringConcatEval measures repeated string "+" in a loop on the evaluator.
-func BenchmarkStringConcatEval(b *testing.B) {
-	benchmarkEval(b, benchStringConcatSrc, false)
-}
+// func BenchmarkStringConcatEval(b *testing.B) {
+// 	benchmarkEval(b, benchStringConcatSrc, false)
+// }
 
 // BenchmarkMatrixCell covers both engines via sub-benchmarks; skips gracefully
 // if the VM does not support builtins used by the canvas loop.
@@ -231,9 +247,11 @@ func BenchmarkMatrixCell(b *testing.B) {
 	b.Run("vm", func(b *testing.B) {
 		benchmarkVM(b, benchMatrixCellSrc, false)
 	})
-	b.Run("eval", func(b *testing.B) {
-		benchmarkEval(b, benchMatrixCellSrc, false)
-	})
+
+	// The evaluator is deprecated and will be removed in a future release.
+	// b.Run("eval", func(b *testing.B) {
+	// 	benchmarkEval(b, benchMatrixCellSrc, false)
+	// })
 }
 
 // BenchmarkMatrixCellVM measures a 48x120 matrix double-index read loop on the VM.
@@ -241,7 +259,8 @@ func BenchmarkMatrixCellVM(b *testing.B) {
 	benchmarkVM(b, benchMatrixCellSrc, false)
 }
 
+// The evaluator is deprecated and will be removed in a future release.
 // BenchmarkMatrixCellEval measures a 48x120 matrix double-index read loop on the evaluator.
-func BenchmarkMatrixCellEval(b *testing.B) {
-	benchmarkEval(b, benchMatrixCellSrc, false)
-}
+// func BenchmarkMatrixCellEval(b *testing.B) {
+// 	benchmarkEval(b, benchMatrixCellSrc, false)
+// }

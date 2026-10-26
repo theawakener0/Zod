@@ -5,11 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/theawakener0/Zod/compiler"
-	ev "github.com/theawakener0/Zod/evaluator"
 	lx "github.com/theawakener0/Zod/lexer"
 	obj "github.com/theawakener0/Zod/object"
 	ps "github.com/theawakener0/Zod/parser"
@@ -20,7 +18,6 @@ const PROMPT = "\x1b[0;32m>>\x1b[0m "
 
 func Start(in io.Reader, out io.Writer, engine string) {
 	scanner := bufio.NewScanner(in)
-	env := obj.NewEnviroment()
 
 	constants := make([]obj.Object, 0, 256)
 	globals := make([]obj.Object, vm.GlobalsSize)
@@ -57,20 +54,19 @@ func Start(in io.Reader, out io.Writer, engine string) {
 			continue
 		}
 
-		if engine == "--eng=eval" {
-			err := runEval(line, env, out)
-			if err != nil {
-				fmt.Fprintf(out, "Oh shit here we go again! %s\n", err)
-			}
-			continue
-		}
+		// The evaluator is DEPRECATED and will be removed in the future.
+		// if engine == "--eng=eval" {
+		// 	err := runEval(line, env, out)
+		// 	if err != nil {
+		// 		fmt.Fprintf(out, "Oh shit here we go again! %s\n", err)
+		// 	}
+		// 	continue
+		// }
 
 	}
 }
 
 func runVM(source string, out io.Writer, constants []obj.Object, globals []obj.Object, symbolTable *compiler.SymbolTable, baseDir string) (constantsOut []obj.Object, err error) {
-	// Internal VM panics must not tear down the whole host (REPL/scripts):
-	// surface them as ordinary errors instead.
 	constantsOut = constants
 	defer func() {
 		if r := recover(); r != nil {
@@ -126,49 +122,51 @@ func Execute(source string, out io.Writer, engine string, baseDir string) error 
 		_, err := runVM(source, out, constants, globals, symbolTable, baseDir)
 		return err
 	}
-	if engine == "--eng=eval" {
-		env := obj.NewEnviroment()
-		if baseDir != "" {
-			abs := baseDir
-			if a, err := filepath.Abs(baseDir); err == nil {
-				abs = a
-			}
-			ev.PushModuleDir(abs)
-			defer ev.PopModuleDir()
-		}
-		return runEval(source, env, out)
-	}
+
+	// The evaluator is DEPRECATED and will be removed in the future.
+	// if engine == "--eng=eval" {
+	// 	env := obj.NewEnviroment()
+	// 	if baseDir != "" {
+	// 		abs := baseDir
+	// 		if a, err := filepath.Abs(baseDir); err == nil {
+	// 			abs = a
+	// 		}
+	// 		ev.PushModuleDir(abs)
+	// 		defer ev.PopModuleDir()
+	// 	}
+	// 	return runEval(source, env, out)
+	// }
 	return fmt.Errorf("unknown engine %s", engine)
 }
 
-func runEval(source string, env *obj.Enviroment, out io.Writer) (err error) {
-	// Internal evaluator panics must not tear down the whole host.
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("internal error: %v", r)
-		}
-	}()
-
-	l := lx.New(source)
-	p := ps.New(l)
-
-	program := p.ParseProgram()
-	if len(p.Errors()) != 0 {
-		return fmt.Errorf("%s", formatParseErrors(p.Errors()))
-	}
-
-	eval := ev.Eval(program, env)
-	if err, ok := eval.(*obj.Error); ok {
-		return fmt.Errorf("%s", err.Message)
-	}
-	if eval != nil && eval.Type() != obj.NULL_OBJ {
-		io.WriteString(out, eval.Inspect())
-		io.WriteString(out, "\n")
-	}
-
-	return nil
-}
-
+// The evaluator is DEPRECATED and will be removed in the future.
+// func runEval(source string, env *obj.Enviroment, out io.Writer) (err error) {
+// 	defer func() {
+// 		if r := recover(); r != nil {
+// 			err = fmt.Errorf("internal error: %v", r)
+// 		}
+// 	}()
+//
+// 	l := lx.New(source)
+// 	p := ps.New(l)
+//
+// 	program := p.ParseProgram()
+// 	if len(p.Errors()) != 0 {
+// 		return fmt.Errorf("%s", formatParseErrors(p.Errors()))
+// 	}
+//
+// 	eval := ev.Eval(program, env)
+// 	if err, ok := eval.(*obj.Error); ok {
+// 		return fmt.Errorf("%s", err.Message)
+// 	}
+// 	if eval != nil && eval.Type() != obj.NULL_OBJ {
+// 		io.WriteString(out, eval.Inspect())
+// 		io.WriteString(out, "\n")
+// 	}
+//
+// 	return nil
+// }
+//
 func formatParseErrors(errors []string) string {
 	var sb strings.Builder
 	sb.WriteString("We ran into some problems while parsing your program.\nParse errors:\n")

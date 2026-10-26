@@ -1,3 +1,5 @@
+// DEPRECATED
+
 package evaluator
 
 import obj "github.com/theawakener0/Zod/object"
