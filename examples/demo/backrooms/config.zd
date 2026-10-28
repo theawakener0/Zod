@@ -1,0 +1,61 @@
+// config.zd — tuning constants for the Backrooms raycaster.
+//
+// The view is a fixed 80x30 terminal-cell buffer backed by a 80x60
+// subrow grid (two half-block pixels per cell). All geometry is in
+// world cells; the camera is a point at height 0.5.
+
+pub W := 80
+pub H := 30
+pub SUB_H := 60
+
+// Horizontal field of view: plane length 0.66 ~= 66.4 degrees.
+pub FOV_PLANE := 0.66
+
+// Projection scale in subrows: a 1-cell-tall wall at distance 1 covers
+// 60 subrows, i.e. the full view height.
+pub PROJ := 60.0
+
+// Movement and look tuning.
+pub MOVE_SPEED := 2.8
+pub TURN_SPEED := 1.8
+pub MOUSE_YAW := 0.008
+pub MOUSE_PITCH := 0.25
+pub PITCH_LIMIT := 18.0
+
+// Horizon is expressed in subrows. Pitch shifts it up/down.
+pub HORIZON := 30.0
+pub HORIZON_MIN := 12
+pub HORIZON_MAX := 48
+
+// Distance fog. The chunk window covers at least 32 cells in every
+// direction from the player, so a ray never sees the window edge.
+pub FOG_END := 24.0
+
+// World chunks. The 5x5 window is 80x80 cells.
+pub CHUNK := 16
+pub WIN_CHUNKS := 5
+pub WIN := 80
+// A diagonal ray needs about 34 grid crossings to reach FOG_END (24
+// cells); 48 leaves margin so distant walls are never replaced by a fog
+// band just because the DDA ran out of steps.
+pub MAX_STEPS := 48
+
+// Collision: circle radius, max frame delta, substep length.
+pub PLAYER_R := 0.24
+pub DT_MAX := 0.05
+pub SUBSTEP := 0.2
+
+// Keyboard repeat window (terminals do not report key-up).
+pub KEY_TIMEOUT := 300
+
+// Palette: six 16-shade families (ceiling, floor, wall z, wall x,
+// trim, light). Cell index = (top * PALETTE_N + bottom) * GLYPH_N + glyph.
+pub PALETTE_N := 96
+pub GLYPH_N := 24
+
+// Distance fog is quantized to 16 steps, then curved so nearby surfaces
+// stay clear while the far end melts into the dark olive distance.
+pub FOG_STEPS := 16
+pub FOG_CURVE := [0, 0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+
+pub FPS := 30

@@ -1,0 +1,56 @@
+// collision.zd — circle-vs-grid movement with axis-separated sliding.
+//
+// A 0.24-cell radius plus 0.2-cell substeps cannot tunnel through a
+// one-cell wall. Moving each axis separately gives natural sliding along
+// walls and around corners.
+
+import "config.zd" as config
+import "std/math" as math
+import "world.zd" as world
+
+let SUBSTEP = config.SUBSTEP
+
+pub circle_hits := fn(win, cx, cz, r) {
+  let minx = math.floor(cx - r)
+  let maxx = math.floor(cx + r)
+  let minz = math.floor(cz - r)
+  let maxz = math.floor(cz + r)
+  let rr = r * r
+  for (gz := minz; gz <= maxz; gz++) {
+    for (gx := minx; gx <= maxx; gx++) {
+      if (world.is_wall_cell(win, gx, gz)) {
+        let nx = math.clamp(cx, float(gx), float(gx + 1))
+        let nz = math.clamp(cz, float(gz), float(gz + 1))
+        let dx = cx - nx
+        let dz = cz - nz
+        if (dx * dx + dz * dz < rr) {
+          return true
+        }
+      }
+    }
+  }
+  return false
+}
+
+pub move := fn(win, px, pz, dx, dz, r) {
+  let ax = math.abs(dx)
+  let az = math.abs(dz)
+  let m = ax
+  if (az > m) {
+    m = az
+  }
+  let n = int(m / SUBSTEP) + 1
+  let sx = dx / float(n)
+  let sz = dz / float(n)
+  let x = px
+  let z = pz
+  for (i := 0; i < n; i++) {
+    if (!circle_hits(win, x + sx, z, r)) {
+      x = x + sx
+    }
+    if (!circle_hits(win, x, z + sz, r)) {
+      z = z + sz
+    }
+  }
+  return [x, z]
+}

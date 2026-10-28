@@ -1,0 +1,320 @@
+// textures.zd — procedural 64x64 material atlases.
+//
+// Every texel stores a palette index and, separately, an ASCII glyph id.
+// The half-block renderer only reads the colour atlas; ASCII mode reads
+// both. The floor and ceiling atlases repeat every eight world cells;
+// the wall atlas maps u across a wall cell and v from top to bottom.
+//
+// Textures are deterministic, so the same world seed always produces
+// the same carpet stains, wallpaper seams, and fluorescent panels.
+
+import "std/math" as math
+
+pub TEX_N := 64
+pub TEX_SCALE := 8.0
+pub TEX_OFFSET := 10000000.0
+
+let TEX_MASK = 63
+
+// hash2 is a small deterministic integer hash used only while building
+// the atlases. It is not called from the render loop.
+let hash2 = fn(x, y) {
+  let h = (x * 374761393 + y * 668265263 + 1013904223) % 2147483647
+  h = (h * 1274126177) % 2147483647
+  if (h < 0) {
+    h = -h
+  }
+  return h
+}
+
+// build_floor: damp office carpet. Fine grain, broad stains, darker
+// seams every two cells, and a subtle checker in the pile.
+let build_floor = fn() {
+  let color = make(TEX_N * TEX_N, 0)
+  let glyph = make(TEX_N * TEX_N, 0)
+  for (ty := 0; ty < TEX_N; ty++) {
+    for (tx := 0; tx < TEX_N; tx++) {
+      let idx = ty * TEX_N + tx
+      let n = hash2(tx + 11, ty + 23) % 100
+      let broad = hash2(tx / 8 + 31, ty / 8 + 47) % 100
+      let shade = 4
+      if (n < 28) {
+        shade = shade + 1
+      }
+      if (n > 86) {
+        shade = shade + 2
+      }
+      if (broad < 16) {
+        shade = shade + 3
+      }
+      if (broad > 94) {
+        shade = shade - 1
+      }
+      if (tx % 16 == 0 || ty % 16 == 0) {
+        shade = shade + 2
+      }
+      if ((tx / 8 + ty / 8) % 2 == 0) {
+        shade = shade + 1
+      }
+      if (shade < 0) {
+        shade = 0
+      }
+      if (shade > 15) {
+        shade = 15
+      }
+      color[idx] = 16 + shade
+      let g = 4
+      if (shade >= 7) {
+        g = 9
+      }
+      if (shade >= 10) {
+        g = 8
+      }
+      if (shade >= 13) {
+        g = 7
+      }
+      glyph[idx] = g
+    }
+  }
+  return {"color": color, "glyph": glyph}
+}
+
+// build_ceiling: acoustic tiles with a 2x1 fluorescent panel every
+// eight cells. The panel glow is baked into the tile shades so the
+// renderer only pays for one atlas lookup per pixel.
+let build_ceiling = fn() {
+  let color = make(TEX_N * TEX_N, 0)
+  let glyph = make(TEX_N * TEX_N, 0)
+  for (ty := 0; ty < TEX_N; ty++) {
+    for (tx := 0; tx < TEX_N; tx++) {
+      let idx = ty * TEX_N + tx
+      let n = hash2(tx + 101, ty + 211) % 100
+      let shade = 4
+      if (n < 24) {
+        shade = shade + 1
+      }
+      if (n > 90) {
+        shade = shade + 2
+      }
+      let fx = tx % 8
+      let fz = ty % 8
+      if (fx == 0 || fz == 0) {
+        shade = shade + 3
+      }
+
+      // Distance to the nearest panel centre, wrapped across the tile.
+      let dx = tx - 23
+      if (dx < 0) {
+        dx = -dx
+      }
+      if (dx > 32) {
+        dx = 64 - dx
+      }
+      let dz = ty - 19
+      if (dz < 0) {
+        dz = -dz
+      }
+      if (dz > 32) {
+        dz = 64 - dz
+      }
+      if (dx < 18 && dz < 14) {
+        shade = shade - 1
+      }
+      if (dx < 11 && dz < 8) {
+        shade = shade - 1
+      }
+      if (shade < 0) {
+        shade = 0
+      }
+      if (shade > 15) {
+        shade = 15
+      }
+
+      let c = shade
+      let g = 5
+      if (dx < 10 && dz < 7) {
+        g = 9
+      }
+
+      if (tx >= 17 && tx <= 30 && ty >= 17 && ty <= 22) {
+        c = 80 + (n % 3)
+        g = 7
+      } else if ((tx == 16 || tx == 31) && ty >= 16 && ty <= 23) {
+        c = 64 + 4 + (n % 2)
+        g = 2
+      } else if ((ty == 16 || ty == 23) && tx >= 16 && tx <= 31) {
+        c = 64 + 4 + (n % 2)
+        g = 6
+      }
+
+      color[idx] = c
+      glyph[idx] = g
+    }
+  }
+  return {"color": color, "glyph": glyph}
+}
+
+// build_wall styles:
+//   1 wallpaper (z-side base 32, x-side base 48)
+//   2 concrete pillar
+//   3 stained wallpaper
+//   4 dark door-frame trim
+let build_wall = fn(base, style) {
+  let color = make(TEX_N * TEX_N, 0)
+  let glyph = make(TEX_N * TEX_N, 0)
+  for (ty := 0; ty < TEX_N; ty++) {
+    for (tx := 0; tx < TEX_N; tx++) {
+      let idx = ty * TEX_N + tx
+      let n = hash2(tx + style * 37, ty + style * 53) % 100
+      let broad = hash2(tx / 8 + style * 11, ty / 8 + style * 17) % 100
+      let shade = 5
+      let g = 1
+
+      if (style == 1) {
+        let stripe = (tx / 4) % 2
+        if (stripe == 0) {
+          shade = 6
+        } else {
+          shade = 8
+        }
+        if (n < 18) {
+          shade = shade - 1
+        }
+        if (n > 86) {
+          shade = shade + 2
+        }
+        if (broad < 12) {
+          shade = shade + 3
+        }
+        if (tx % 16 == 0) {
+          shade = shade + 2
+          g = 2
+        }
+        if (broad < 8) {
+          g = 8
+        }
+        if (n > 94) {
+          g = 9
+        }
+      } else if (style == 2) {
+        shade = 7
+        if (n < 30) {
+          shade = shade + 1
+        }
+        if (n > 82) {
+          shade = shade + 2
+        }
+        if (ty % 16 == 0) {
+          shade = shade + 3
+          g = 2
+        } else {
+          g = 7
+        }
+        if (tx % 16 == 0) {
+          shade = shade + 2
+          g = 1
+        }
+        if (broad < 18) {
+          shade = shade + 2
+          g = 8
+        }
+      } else if (style == 3) {
+        let stripe = (tx / 5) % 2
+        if (stripe == 0) {
+          shade = 7
+        } else {
+          shade = 9
+        }
+        if (n < 20) {
+          shade = shade - 1
+        }
+        if (n > 78) {
+          shade = shade + 2
+        }
+        if (broad < 24) {
+          shade = shade + 3
+        }
+        if (tx % 20 == 0) {
+          shade = shade + 2
+        }
+        g = 8
+        if (broad < 12) {
+          g = 7
+        }
+        if (n > 90) {
+          g = 9
+        }
+      } else {
+        shade = 6
+        if ((tx / 2) % 2 == 0) {
+          shade = shade + 1
+        }
+        if (tx % 8 == 0) {
+          shade = shade + 2
+          g = 1
+        } else {
+          g = 17
+        }
+        if (n > 88) {
+          shade = shade + 2
+        }
+        if (n > 94) {
+          g = 7
+        }
+      }
+
+      if (ty <= 1) {
+        shade = shade + 3
+        g = 15
+      }
+
+      if ((style == 1 || style == 3) && ty >= 38 && ty <= 41) {
+        color[idx] = 64 + 4 + (n % 2)
+        glyph[idx] = 6
+      } else if (ty >= 56) {
+        let bs = 3 + (ty - 56) / 3
+        if (bs > 9) {
+          bs = 9
+        }
+        color[idx] = 64 + bs
+        glyph[idx] = 6
+      } else {
+        if (shade < 0) {
+          shade = 0
+        }
+        if (shade > 15) {
+          shade = 15
+        }
+        color[idx] = base + shade
+        glyph[idx] = g
+      }
+    }
+  }
+  return {"color": color, "glyph": glyph}
+}
+
+pub build := fn() {
+  let floor = build_floor()
+  let ceil = build_ceiling()
+  let w1z = build_wall(32, 1)
+  let w1x = build_wall(48, 1)
+  let w2 = build_wall(48, 2)
+  let w3 = build_wall(48, 3)
+  let w4 = build_wall(64, 4)
+  return {
+    "floor_color": floor["color"],
+    "floor_glyph": floor["glyph"],
+    "ceil_color": ceil["color"],
+    "ceil_glyph": ceil["glyph"],
+    "wall1z_color": w1z["color"],
+    "wall1z_glyph": w1z["glyph"],
+    "wall1x_color": w1x["color"],
+    "wall1x_glyph": w1x["glyph"],
+    "wall2_color": w2["color"],
+    "wall2_glyph": w2["glyph"],
+    "wall3_color": w3["color"],
+    "wall3_glyph": w3["glyph"],
+    "wall4_color": w4["color"],
+    "wall4_glyph": w4["glyph"]
+  }
+}

@@ -10,16 +10,13 @@ import (
 	"golang.org/x/term"
 )
 
-var (
-	termRawActive bool
-	termOldState  *term.State
-)
-
 func TermDisableRaw() error {
 	return termDisableRaw()
 }
 
 func termEnableRaw() error {
+	termStateMu.Lock()
+	defer termStateMu.Unlock()
 	if termRawActive {
 		return nil
 	}
@@ -38,8 +35,11 @@ func termEnableRaw() error {
 }
 
 func termDisableRaw() error {
+	mouseErr := termDisableMouse()
+	termStateMu.Lock()
+	defer termStateMu.Unlock()
 	if !termRawActive {
-		return nil
+		return mouseErr
 	}
 	fd := int(os.Stdin.Fd())
 	if termOldState != nil {
@@ -51,7 +51,21 @@ func termDisableRaw() error {
 	termRawActive = false
 	termOldState = nil
 
-	return nil
+	return mouseErr
+}
+
+// termRestoreRawOnly restores the console input mode without touching
+// stdout, so signal cleanup cannot block on a full output buffer.
+func termRestoreRawOnly() {
+	termStateMu.Lock()
+	old := termOldState
+	active := termRawActive
+	termRawActive = false
+	termOldState = nil
+	termStateMu.Unlock()
+	if active && old != nil {
+		_ = term.Restore(int(os.Stdin.Fd()), old)
+	}
 }
 
 func termWinsizeDim(width bool) int {
@@ -86,7 +100,7 @@ func termHasInput() (bool, error) {
 	return event == windows.WAIT_OBJECT_0, nil
 }
 
-func termReadKey() (string, error) {
+func termReadKeyRaw() (string, error) {
 	var b [1]byte
 	n, err := os.Stdin.Read(b[:])
 	if err != nil {

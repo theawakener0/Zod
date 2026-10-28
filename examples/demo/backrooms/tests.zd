@@ -1,0 +1,552 @@
+// tests.zd — unit and integration tests for the Backrooms demo.
+//
+// Run with:
+//   go run . examples/demo/backrooms/tests.zd
+//
+// The mouse parser tests cover stdlib/term.zd; the rest cover world
+// generation, DDA casting, collision, input, palette, and the presenter.
+
+import "std/term" as term
+import "std/math" as math
+import "std/crypto" as crypto
+import "std/str" as str
+
+import "config.zd" as config
+import "world.zd" as world
+import "render.zd" as render
+import "collision.zd" as collision
+import "input.zd" as input
+import "palette.zd" as palette
+
+let test_state = {"failures": 0}
+
+let check = fn(name, cond) {
+  if (!cond) {
+    println("FAIL " + name)
+    test_state["failures"] = test_state["failures"] + 1
+  }
+}
+
+let near = fn(a, b, eps) {
+  return math.abs(a - b) <= eps
+}
+
+// ---- mouse parser -------------------------------------------------------
+
+let press = term.parse_mouse("\x1b[<0;10;5M")
+check("press parsed", press != null)
+check("press x", press != null && press["x"] == 10)
+check("press y", press != null && press["y"] == 5)
+check("press button", press != null && press["button"] == 0)
+check("press action", press != null && press["action"] == "press")
+check("press no motion", press != null && press["motion"] == false)
+check("press no wheel", press != null && press["wheel"] == false)
+check("press no shift", press != null && press["shift"] == false)
+
+let release = term.parse_mouse("\x1b[<0;10;5m")
+check("release action", release != null && release["action"] == "release")
+let generic_release = term.parse_mouse("\x1b[<3;10;5m")
+check("generic release button", generic_release != null && generic_release["button"] == 0)
+check("generic release action", generic_release != null && generic_release["action"] == "release")
+
+let drag = term.parse_mouse("\x1b[<32;11;5M")
+check("drag action", drag != null && drag["action"] == "move")
+check("drag button", drag != null && drag["button"] == 0)
+check("drag motion", drag != null && drag["motion"] == true)
+
+let hover = term.parse_mouse("\x1b[<35;12;6M")
+check("hover action", hover != null && hover["action"] == "move")
+check("hover button", hover != null && hover["button"] == 3)
+
+let wheel_up = term.parse_mouse("\x1b[<64;10;5M")
+check("wheel up", wheel_up != null && wheel_up["wheel"] == true && wheel_up["button"] == 64)
+let wheel_down = term.parse_mouse("\x1b[<65;10;5M")
+check("wheel down", wheel_down != null && wheel_down["wheel"] == true && wheel_down["button"] == 65)
+
+let shift = term.parse_mouse("\x1b[<4;10;5M")
+check("shift", shift != null && shift["shift"] == true)
+let alt = term.parse_mouse("\x1b[<8;10;5M")
+check("alt", alt != null && alt["alt"] == true)
+let ctrl = term.parse_mouse("\x1b[<16;10;5M")
+check("ctrl", ctrl != null && ctrl["ctrl"] == true)
+
+let tiny = term.parse_mouse("\x1b[<0;1;1M")
+check("9-byte report", tiny != null && tiny["x"] == 1 && tiny["y"] == 1)
+
+let large = term.parse_mouse("\x1b[<0;120;40M")
+check("large x", large != null && large["x"] == 120)
+check("large y", large != null && large["y"] == 40)
+
+let extended = term.parse_mouse("\x1b[<128;10;5M")
+check("extended flag", extended != null && extended["extended"] == true)
+check("extended button", extended != null && extended["button"] == 8)
+let ext_wheel = term.parse_mouse("\x1b[<192;10;5M")
+check("extended wheel", ext_wheel != null && ext_wheel["extended"] == true && ext_wheel["wheel"] == true)
+check("extended wheel button", ext_wheel != null && ext_wheel["button"] == 64)
+check("hex cb rejected", term.parse_mouse("\x1b[<0x10;10;5M") == null)
+check("signed cb rejected", term.parse_mouse("\x1b[<+10;10;5M") == null)
+check("space x rejected", term.parse_mouse("\x1b[<0; 10;5M") == null)
+check("decimal y rejected", term.parse_mouse("\x1b[<0;10;5.0M") == null)
+
+check("missing y", term.parse_mouse("\x1b[<0;10M") == null)
+check("bad terminator", term.parse_mouse("\x1b[<0;10;5X") == null)
+check("bad prefix", term.parse_mouse("hello") == null)
+check("empty", term.parse_mouse("") == null)
+check("zero x", term.parse_mouse("\x1b[<0;0;5M") == null)
+check("empty cb", term.parse_mouse("\x1b[<;10;5M") == null)
+check("space cb", term.parse_mouse("\x1b[< ;10;5M") == null)
+check("bad x", term.parse_mouse("\x1b[<0;abc;5M") == null)
+check("negative cb", term.parse_mouse("\x1b[<-1;10;5M") == null)
+check("oversized cb", term.parse_mouse("\x1b[<256;10;5M") == null)
+
+// ---- world coordinates --------------------------------------------------
+
+check("floor_div 0", world.floor_div(0, 16) == 0)
+check("floor_div 15", world.floor_div(15, 16) == 0)
+check("floor_div 16", world.floor_div(16, 16) == 1)
+check("floor_div -1", world.floor_div(-1, 16) == -1)
+check("floor_div -15", world.floor_div(-15, 16) == -1)
+check("floor_div -16", world.floor_div(-16, 16) == -1)
+check("floor_div -17", world.floor_div(-17, 16) == -2)
+check("local 0", world.local_coord(0) == 0)
+check("local 15", world.local_coord(15) == 15)
+check("local 16", world.local_coord(16) == 0)
+check("local -1", world.local_coord(-1) == 15)
+check("local -16", world.local_coord(-16) == 0)
+check("chunk -0.1", int(world.chunk_coord_f(-0.1)) == -1)
+check("chunk -16.0", int(world.chunk_coord_f(-16.0)) == -1)
+check("chunk -16.1", int(world.chunk_coord_f(-16.1)) == -2)
+check("chunk 15.9", int(world.chunk_coord_f(15.9)) == 0)
+check("chunk 16.0", int(world.chunk_coord_f(16.0)) == 1)
+
+// ---- world generation ---------------------------------------------------
+
+let win_a = world.new_window(42)
+world.rebuild(win_a, 42, 1, -1)
+let win_b = world.new_window(42)
+world.rebuild(win_b, 42, 1, -1)
+
+let grid_a = win_a["grid"]
+let grid_b = win_b["grid"]
+let same = 1
+for (i := 0; i < config.WIN * config.WIN; i++) {
+  if (grid_a[i] != grid_b[i]) {
+    same = 0
+  }
+}
+check("deterministic window", same == 1)
+
+// Regenerating after visiting another chunk must reproduce the window.
+world.rebuild(win_b, 42, -1, 1)
+world.rebuild(win_b, 42, 1, -1)
+let same_again = 1
+for (i := 0; i < config.WIN * config.WIN; i++) {
+  if (grid_a[i] != grid_b[i]) {
+    same_again = 0
+  }
+}
+check("rebuild reproducible", same_again == 1)
+
+// A chunk generated standalone at the window origin must match the same
+// chunk embedded in a 5x5 window, proving seams are origin-independent.
+let solo = world.new_window(42)
+world.gen_chunk_into(solo["grid"], config.CHUNK, -config.CHUNK, 1, -1, 42)
+let solo_grid = solo["grid"]
+let bx = 1 * config.CHUNK - win_a["ox"]
+let bz = -1 * config.CHUNK - win_a["oz"]
+let seam_ok = 1
+for (lz := 0; lz < config.CHUNK; lz++) {
+  for (lx := 0; lx < config.CHUNK; lx++) {
+    if (solo_grid[lz * config.WIN + lx] != grid_a[(bz + lz) * config.WIN + bx + lx]) {
+      seam_ok = 0
+    }
+  }
+}
+check("chunk origin independent", seam_ok == 1)
+
+// Every owned boundary has a two-cell opening.
+let openings_ok = 1
+for (dz := 0; dz < 5; dz++) {
+  for (dx := 0; dx < 5; dx++) {
+    let cbx = dx * config.CHUNK
+    let cbz = dz * config.CHUNK
+    let north_run = 0
+    for (lx := 0; lx < config.CHUNK - 1; lx++) {
+      if (grid_a[cbz * config.WIN + cbx + lx] == 0 &&
+          grid_a[cbz * config.WIN + cbx + lx + 1] == 0) {
+        north_run = 1
+      }
+    }
+    let west_run = 0
+    for (lz := 0; lz < config.CHUNK - 1; lz++) {
+      if (grid_a[(cbz + lz) * config.WIN + cbx] == 0 &&
+          grid_a[(cbz + lz + 1) * config.WIN + cbx] == 0) {
+        west_run = 1
+      }
+    }
+    if (north_run == 0 || west_run == 0) {
+      openings_ok = 0
+    }
+  }
+}
+check("boundary openings", openings_ok == 1)
+
+// Every floor cell in the window is reachable from the spawn cell.
+let win_c = world.new_window(42)
+world.rebuild(win_c, 42, 0, 0)
+let grid_c = win_c["grid"]
+let spawn = world.find_spawn(win_c, 0, 0)
+check("spawn x", near(spawn[0], 2.5, 0.0001))
+check("spawn z", near(spawn[1], 12.5, 0.0001))
+check("spawn floor", !world.is_wall_cell(win_c, int(spawn[0]), int(spawn[1])))
+check("spawn clear", !collision.circle_hits(win_c, spawn[0], spawn[1], config.PLAYER_R))
+
+let seen = make(config.WIN * config.WIN, 0)
+let queue = make(config.WIN * config.WIN, 0)
+let slx = int(math.floor(spawn[0])) - win_c["ox"]
+let slz = int(math.floor(spawn[1])) - win_c["oz"]
+let head = 0
+let tail = 0
+let start_idx = slz * config.WIN + slx
+seen[start_idx] = 1
+queue[tail] = start_idx
+tail = tail + 1
+loop {
+  if (head >= tail) {
+    break
+  }
+  let cur = queue[head]
+  head = head + 1
+  let cx = cur % config.WIN
+  let cz = cur / config.WIN
+  if (cx > 0) {
+    let ni = cur - 1
+    if (grid_c[ni] == 0 && seen[ni] == 0) {
+      seen[ni] = 1
+      queue[tail] = ni
+      tail = tail + 1
+    }
+  }
+  if (cx < config.WIN - 1) {
+    let ni = cur + 1
+    if (grid_c[ni] == 0 && seen[ni] == 0) {
+      seen[ni] = 1
+      queue[tail] = ni
+      tail = tail + 1
+    }
+  }
+  if (cz > 0) {
+    let ni = cur - config.WIN
+    if (grid_c[ni] == 0 && seen[ni] == 0) {
+      seen[ni] = 1
+      queue[tail] = ni
+      tail = tail + 1
+    }
+  }
+  if (cz < config.WIN - 1) {
+    let ni = cur + config.WIN
+    if (grid_c[ni] == 0 && seen[ni] == 0) {
+      seen[ni] = 1
+      queue[tail] = ni
+      tail = tail + 1
+    }
+  }
+}
+let floor_count = 0
+for (i := 0; i < config.WIN * config.WIN; i++) {
+  if (grid_c[i] == 0) {
+    floor_count = floor_count + 1
+  }
+}
+check("window fully connected", tail == floor_count)
+check("window has floor", floor_count > 4000)
+check("outside is wall", world.cell_at(win_c, win_c["ox"] - 1, 0) == 1)
+check("outside is wall 2", world.cell_at(win_c, 0, win_c["oz"] + config.WIN) == 1)
+
+let mat_counts = make(5, 0)
+for (i := 0; i < config.WIN * config.WIN; i++) {
+  if (grid_c[i] >= 0 && grid_c[i] <= 4) {
+    mat_counts[grid_c[i]] = mat_counts[grid_c[i]] + 1
+  }
+}
+check("door frames present", mat_counts[4] > 0)
+check("wall material variety", mat_counts[1] > 0 && mat_counts[2] > 0 && mat_counts[3] > 0)
+
+// ---- DDA ----------------------------------------------------------------
+
+let blank = fn(seed, pcx, pcz) {
+  let w = world.new_window(seed)
+  world.rebuild(w, seed, pcx, pcz)
+  let g = w["grid"]
+  for (i := 0; i < config.WIN * config.WIN; i++) {
+    g[i] = 0
+  }
+  return w
+}
+
+let put_wall = fn(w, wx, wz, mat) {
+  w["grid"][(wz - w["oz"]) * config.WIN + (wx - w["ox"])] = mat
+}
+
+// Straight-on hit two and a half cells east.
+let dw = blank(1, 0, 0)
+put_wall(dw, 43, 40, 1)
+let cols = render.new_cols()
+render.cast_columns(dw, 40.5, 40.5, 0.0, cols, 30)
+check("dda hit", cols["hit"][40] == 1)
+check("dda x side", cols["side"][40] == 0)
+check("dda material", cols["mat"][40] == 1)
+check("dda distance", near(cols["dist"][40], 2.5, 0.02))
+check("dda top", cols["top"][40] >= 17 && cols["top"][40] <= 18)
+check("dda bottom", cols["bottom"][40] >= 41 && cols["bottom"][40] <= 42)
+check("dda wall colour", cols["wall"][40] >= 48 && cols["wall"][40] <= 63)
+check("dda wall x", cols["wallx"][40] > 0.0 && cols["wallx"][40] < 1.0)
+check("dda ray dir", near(cols["rdx"][40], 1.0, 0.01) && near(cols["rdz"][40], 0.0, 0.01))
+check("dda camera", near(cols["px"], 40.5, 0.0001) && near(cols["pz"], 40.5, 0.0001))
+
+// Near-axis ray: yaw = pi/2 looks south, so the hit must be a z side.
+let dw2 = blank(1, 0, 0)
+put_wall(dw2, 40, 43, 2)
+let cols2 = render.new_cols()
+render.cast_columns(dw2, 40.5, 40.5, math.pi / 2.0, cols2, 30)
+check("dda near-axis hit", cols2["hit"][40] == 1)
+check("dda z side", cols2["side"][40] == 1)
+check("dda near-axis dist", near(cols2["dist"][40], 2.5, 0.02))
+check("dda near-axis material", cols2["mat"][40] == 2)
+
+// No wall within MAX_STEPS: the column stays open at fog distance.
+// Start at the window centre (local 40,40) so 30 steps stay in bounds.
+let dw3 = blank(1, 0, 0)
+let cols3 = render.new_cols()
+render.cast_columns(dw3, 8.5, 8.5, 0.0, cols3, 30)
+check("dda no hit", cols3["hit"][40] == 0)
+check("dda fog distance", cols3["dist"][40] == config.FOG_END)
+// Every open column must use one fog band and one ASCII edge side,
+// regardless of the direction of its last DDA step.
+let fog_ok = 1
+for (x := 0; x < config.W; x++) {
+  if (cols3["hit"][x] != 0 || cols3["wall"][x] != 63 || cols3["side"][x] != 0) {
+    fog_ok = 0
+  }
+}
+check("dda fog uniform", fog_ok == 1)
+check("dda fog stored", cols3["fog"][40] == 15)
+
+// Negative world coordinates use the correct local window offset.
+let nw = blank(3, -1, 0)
+put_wall(nw, -5, 8, 1)
+let ncols = render.new_cols()
+render.cast_columns(nw, -8.5, 8.5, 0.0, ncols, 30)
+check("dda negative window hit", ncols["hit"][40] == 1)
+check("dda negative window dist", near(ncols["dist"][40], 3.5, 0.02))
+check("dda negative window side", ncols["side"][40] == 0)
+
+// ---- collision ----------------------------------------------------------
+
+let cw = blank(5, 0, 0)
+put_wall(cw, 41, 39, 1)
+put_wall(cw, 41, 40, 1)
+put_wall(cw, 41, 41, 1)
+let stop = collision.move(cw, 40.5, 40.5, 2.0, 0.0, config.PLAYER_R)
+check("collision stops", stop[0] < 41.0 - config.PLAYER_R + 0.001)
+check("collision advances", stop[0] > 40.5)
+check("collision no z drift", near(stop[1], 40.5, 0.0001))
+
+let slide = collision.move(cw, 40.5, 40.5, 1.0, 1.0, config.PLAYER_R)
+check("slide blocked x", slide[0] < 41.0 - config.PLAYER_R + 0.001)
+check("slide moves z", slide[1] > 41.0)
+
+let tunnel = collision.move(cw, 40.5, 40.5, 5.0, 0.0, config.PLAYER_R)
+check("no tunnelling", tunnel[0] < 41.0 - config.PLAYER_R + 0.001)
+
+let open = collision.move(cw, 40.5, 40.5, 0.0, 2.0, config.PLAYER_R)
+check("open movement z", near(open[1], 42.5, 0.0001))
+check("open movement x", near(open[0], 40.5, 0.0001))
+check("wall circle hit", collision.circle_hits(cw, 40.8, 40.5, config.PLAYER_R))
+check("wall circle miss", !collision.circle_hits(cw, 40.7, 40.5, config.PLAYER_R))
+
+// ---- palette and presenter ---------------------------------------------
+
+check("palette size", len(palette.R) == config.PALETTE_N && len(palette.G) == config.PALETTE_N && len(palette.B) == config.PALETTE_N)
+check("palette families", config.PALETTE_N == 96 && config.GLYPH_N == 24)
+check("glyph count", len(palette.glyphs(0)) == config.GLYPH_N)
+check("plain glyph count", len(palette.glyphs(1)) == config.GLYPH_N)
+check("unicode glyph box", palette.glyphs(0)[1] == "│" && palette.glyphs(0)[7] == "▓")
+check("plain glyph ascii", palette.glyphs(1)[1] == "|" && palette.glyphs(1)[10] == "\\" && palette.glyphs(1)[23] == "~")
+check("xterm black", palette.xterm256(0, 0, 0) == 16)
+check("xterm white", palette.xterm256(255, 255, 255) == 231)
+check("xterm red", palette.xterm256(255, 0, 0) == 196)
+check("xterm grey ramp", palette.xterm256(128, 128, 128) == 244)
+
+let ramps_ok = 1
+for (f := 0; f < 6; f++) {
+  let base = f * 16
+  if (palette.R[base] <= palette.R[base + 15] || palette.G[base] <= palette.G[base + 15] || palette.B[base] <= palette.B[base + 15]) {
+    ramps_ok = 0
+  }
+  if (palette.R[base + 7] < palette.R[base + 15] || palette.R[base + 7] > palette.R[base]) {
+    ramps_ok = 0
+  }
+}
+check("palette ramps descend", ramps_ok == 1)
+
+let pal_true = palette.build("true", 0)
+let pal_256 = palette.build("256", 0)
+let pal_plain = palette.build("true", 1)
+check("palette mode", pal_true["mode"] == "true" && pal_256["mode"] == "256")
+check("palette plain flag", pal_true["plain"] == 0 && pal_plain["plain"] == 1)
+check("fog family clamp", pal_true["fog"][0 * 16 + 0] == 0 && pal_true["fog"][0 * 16 + 15] == 15)
+check("fog light family", pal_true["fog"][80 * 16 + 15] == 95)
+check("darken family", pal_true["darken"][0] == 2 && pal_true["darken"][15] == 15)
+
+let fw = world.new_window(1)
+world.rebuild(fw, 1, 0, 0)
+let fspawn = world.find_spawn(fw, 0, 0)
+let fcols = render.new_cols()
+render.cast_columns(fw, fspawn[0], fspawn[1], 0.0 - math.pi / 2.0, fcols, 30)
+let cells = make(config.W * config.H, 0)
+render.fill_halfblock(fcols, cells, 30, pal_true)
+let parts = make(5000, "")
+let frame = render.present(cells, pal_true, parts)
+
+let rows = str.split(frame, "\r\n")
+check("frame rows", len(rows) == 30)
+let glyph_total = 0
+for (i := 0; i < len(rows); i++) {
+  glyph_total = glyph_total + len(str.split(rows[i], "▀")) - 1
+}
+check("frame cells", glyph_total == config.W * config.H)
+check("one reset", len(str.split(frame, "\x1b[0m")) - 1 == 1)
+check("frame ends reset", str.ends_with(frame, "\x1b[0m"))
+check("truecolor heads", str.index_of(frame, "38;2;") >= 0)
+
+// The spawn frame should exercise several palette families at once:
+// ceiling, floor, wallpaper, trim, and the fluorescent panel.
+let colour_hits = 0
+let light_hits = 0
+for (c := 0; c < config.PALETTE_N; c++) {
+  let fg = "\x1b[38;2;" + string(palette.R[c]) + ";" + string(palette.G[c]) + ";" + string(palette.B[c]) + "m"
+  let bg = "\x1b[48;2;" + string(palette.R[c]) + ";" + string(palette.G[c]) + ";" + string(palette.B[c]) + "m"
+  if (str.index_of(frame, fg) >= 0 || str.index_of(frame, bg) >= 0) {
+    colour_hits = colour_hits + 1
+    if (c >= 80) {
+      light_hits = light_hits + 1
+    }
+  }
+}
+check("frame colour variety", colour_hits >= 20)
+check("frame light panels", light_hits >= 1)
+
+let frame_256 = render.present(cells, pal_256, parts)
+check("256 heads", str.index_of(frame_256, "38;5;") >= 0)
+check("256 no truecolor", str.index_of(frame_256, "38;2;") == -1)
+
+// ASCII mode must never emit the half-block glyph and every row must be
+// exactly 80 printable cells.
+render.fill_ascii(fcols, cells, 30, pal_true)
+let ascii_frame = render.present(cells, pal_true, parts)
+check("ascii no halfblock", str.index_of(ascii_frame, "▀") == -1)
+check("ascii rows", len(str.split(ascii_frame, "\r\n")) == 30)
+check("ascii one reset", len(str.split(ascii_frame, "\x1b[0m")) - 1 == 1)
+check("ascii texture glyphs", str.index_of(ascii_frame, "▓") >= 0 || str.index_of(ascii_frame, "▒") >= 0 || str.index_of(ascii_frame, "░") >= 0)
+
+render.fill_ascii(fcols, cells, 30, pal_plain)
+let plain_frame = render.present(cells, pal_plain, parts)
+check("plain no halfblock", str.index_of(plain_frame, "▀") == -1)
+check("plain no box glyphs", str.index_of(plain_frame, "│") == -1 && str.index_of(plain_frame, "▓") == -1 && str.index_of(plain_frame, "═") == -1)
+check("plain rows", len(str.split(plain_frame, "\r\n")) == 30)
+
+// Golden frame: seed 5, spawn cell, facing north, horizon 30, half-block.
+let gw = world.new_window(5)
+world.rebuild(gw, 5, 0, 0)
+let gspawn = world.find_spawn(gw, 0, 0)
+let gcols = render.new_cols()
+render.cast_columns(gw, gspawn[0], gspawn[1], 0.0 - math.pi / 2.0, gcols, 30)
+let gcells = make(config.W * config.H, 0)
+render.fill_halfblock(gcols, gcells, 30, pal_true)
+let gparts = make(5000, "")
+let gframe = render.present(gcells, pal_true, gparts)
+let golden = crypto.sha256(gframe)
+let GOLDEN = "0e12b6d9e1e5a3356535e4d39da50e7fa42d740f171230a46a24c6415f9092af"
+check("golden frame " + golden, golden == GOLDEN)
+
+// ---- input --------------------------------------------------------------
+
+let inp = input.new()
+let drag_events = [
+  {"type": "mouse", "mouse": {"action": "press", "button": 0, "x": 10, "y": 5}},
+  {"type": "mouse", "mouse": {"action": "move", "button": 0, "x": 13, "y": 4}},
+  {"type": "mouse", "mouse": {"action": "move", "button": 0, "x": 15, "y": 6}},
+  {"type": "mouse", "mouse": {"action": "release", "button": 0, "x": 15, "y": 6}}
+]
+let drag_quit = input.handle(inp, drag_events, 1000)
+check("drag no quit", !drag_quit)
+check("drag yaw coalesced", near(inp["yaw"], 5.0 * config.MOUSE_YAW, 0.000001))
+check("drag pitch coalesced", near(inp["pitch"], -1.0 * config.MOUSE_PITCH, 0.000001))
+check("drag released", inp["dragging"] == false)
+
+// The game camera reads inp["yaw"]; apply_turn advances the same field.
+let cam = input.new()
+input.handle(cam, drag_events, 1000)
+check("camera uses drag yaw", near(input.apply_turn(cam, 0, 0.0), 5.0 * config.MOUSE_YAW, 0.000001))
+cam["yaw"] = 0.0
+check("turn applies", near(input.apply_turn(cam, 1, 0.5), config.TURN_SPEED * 0.5, 0.000001))
+check("wrap 3pi", near(input.wrap_angle(3.0 * math.pi), 0.0 - math.pi, 0.000001))
+check("wrap -3pi", near(input.wrap_angle(-3.0 * math.pi), 0.0 - math.pi, 0.000001))
+
+let yaw_before = inp["yaw"]
+let after_release = input.handle(inp, [
+  {"type": "mouse", "mouse": {"action": "move", "button": 0, "x": 30, "y": 6}}
+], 1001)
+check("release ignores motion", inp["yaw"] == yaw_before)
+
+let warp = input.new()
+input.handle(warp, [
+  {"type": "mouse", "mouse": {"action": "press", "button": 0, "x": 10, "y": 5}},
+  {"type": "mouse", "mouse": {"action": "move", "button": 0, "x": 60, "y": 5}}
+], 1002)
+check("pointer warp ignored", warp["yaw"] == 0.0)
+
+let right_click = input.new()
+input.handle(right_click, [
+  {"type": "mouse", "mouse": {"action": "press", "button": 2, "x": 10, "y": 5}},
+  {"type": "mouse", "mouse": {"action": "move", "button": 2, "x": 12, "y": 5}}
+], 1003)
+check("non-left ignored", right_click["yaw"] == 0.0)
+
+let keys = input.new()
+input.handle(keys, [{"type": "key", "key": "w"}], 1000)
+check("forward axis active", input.axis(keys, 1299)[0] == 1)
+check("forward axis timeout", input.axis(keys, 1300)[0] == 0)
+
+input.handle(keys, [{"type": "key", "key": "s"}], 2000)
+check("back axis", input.axis(keys, 2000)[0] == -1)
+
+input.handle(keys, [{"type": "key", "key": "d"}], 3000)
+input.handle(keys, [{"type": "key", "key": "\x1b[C"}], 3000)
+let ax = input.axis(keys, 3000)
+check("strafe axis", ax[1] == 1)
+check("turn axis", ax[2] == 1)
+
+let qinp = input.new()
+check("q quits", input.handle(qinp, [{"type": "key", "key": "q"}], 0))
+check("esc quits", input.handle(qinp, [{"type": "key", "key": "\x1b"}], 0))
+check("ctrl-c quits", input.handle(qinp, [{"type": "key", "key": "\x03"}], 0))
+
+let minp = input.new()
+check("m does not quit", !input.handle(minp, [{"type": "key", "key": "m"}], 0))
+check("m toggles ascii", minp["toggle_ascii"] == true)
+
+let hinp = input.new()
+hinp["pitch"] = 100.0
+check("horizon high clamp", input.horizon(hinp, 0.0) == config.HORIZON_MAX)
+hinp["pitch"] = -100.0
+check("horizon low clamp", input.horizon(hinp, 0.0) == config.HORIZON_MIN)
+
+// ---- result -------------------------------------------------------------
+
+if (test_state["failures"] > 0) {
+  println(string(test_state["failures"]) + " test(s) failed")
+  __exit(1)
+}
+println("all backrooms tests passed")

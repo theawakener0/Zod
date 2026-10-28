@@ -11,16 +11,13 @@ import (
 	"golang.org/x/term"
 )
 
-var (
-	termRawActive bool
-	termOldState  *term.State
-)
-
 func TermDisableRaw() error {
 	return termDisableRaw()
 }
 
 func termEnableRaw() error {
+	termStateMu.Lock()
+	defer termStateMu.Unlock()
 	if termRawActive {
 		return nil
 	}
@@ -60,8 +57,11 @@ func termKeepOutputTranslation(fd int) error {
 }
 
 func termDisableRaw() error {
+	mouseErr := termDisableMouse()
+	termStateMu.Lock()
+	defer termStateMu.Unlock()
 	if !termRawActive {
-		return nil
+		return mouseErr
 	}
 	fd := int(os.Stdin.Fd())
 	if termOldState != nil {
@@ -73,7 +73,22 @@ func termDisableRaw() error {
 	termRawActive = false
 	termOldState = nil
 
-	return nil
+	return mouseErr
+}
+
+// termRestoreRawOnly restores termios without touching stdout. Signal
+// cleanup calls it first so a blocked terminal write cannot delay the
+// one operation that makes the shell usable again.
+func termRestoreRawOnly() {
+	termStateMu.Lock()
+	old := termOldState
+	active := termRawActive
+	termRawActive = false
+	termOldState = nil
+	termStateMu.Unlock()
+	if active && old != nil {
+		_ = term.Restore(int(os.Stdin.Fd()), old)
+	}
 }
 
 func termWinsizeDim(width bool) int {
@@ -112,25 +127,43 @@ func termHasInput() (bool, error) {
 	}
 }
 
-func termReadKey() (string, error) {
+// readByte retries syscall.Read when a signal interrupts it. EINTR is
+// transient and must not turn a key press into an input error.
+func readByte(fd int, buf []byte) (int, error) {
+	for {
+		n, err := syscall.Read(fd, buf)
+		if err == syscall.EINTR {
+			continue
+		}
+		return n, err
+	}
+}
+
+func termReadKeyRaw() (string, error) {
 	fd := int(os.Stdin.Fd())
 
-	var saved *term.State
-	if !termRawActive {
-		if term.IsTerminal(fd) {
-			old, err := term.MakeRaw(fd)
-			if err != nil {
-				return "", fmt.Errorf("could not set terminal to raw mode: %w", err)
-			}
-			saved = old
-			defer func() {
-				_ = term.Restore(fd, saved)
-			}()
+	// read_key without enable_raw temporarily enters raw mode. Publish
+	// the saved state before blocking so signal cleanup can restore it;
+	// a local defer alone is skipped when the process exits on a signal.
+	termStateMu.Lock()
+	if !termRawActive && term.IsTerminal(fd) {
+		old, err := term.MakeRaw(fd)
+		if err != nil {
+			termStateMu.Unlock()
+			return "", fmt.Errorf("could not set terminal to raw mode: %w", err)
 		}
+		termOldState = old
+		termRawActive = true
+		termStateMu.Unlock()
+		defer func() {
+			_ = termDisableRaw()
+		}()
+	} else {
+		termStateMu.Unlock()
 	}
 
 	var b [1]byte
-	n, err := syscall.Read(fd, b[:])
+	n, err := readByte(fd, b[:])
 	if err != nil {
 		return "", fmt.Errorf("could not read key: %w", err)
 	}
@@ -149,7 +182,7 @@ func termReadKey() (string, error) {
 			return 0, false
 		}
 		var eb [1]byte
-		m, err := syscall.Read(fd, eb[:])
+		m, err := readByte(fd, eb[:])
 		if err != nil || m == 0 {
 			return 0, false
 		}

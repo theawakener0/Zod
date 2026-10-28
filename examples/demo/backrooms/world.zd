@@ -1,0 +1,263 @@
+// world.zd — deterministic infinite Backrooms chunks.
+//
+// A 5x5 window of 16x16 chunks is generated around the player's chunk.
+// The chunk at (cx,cz) owns its north row (local z=0) and west column
+// (local x=0); its south row and east column are always floor. A wall on
+// a chunk boundary therefore has exactly one owner, so adjacent chunks
+// cannot disagree about it.
+//
+// Every owned boundary has one guaranteed two-cell opening. The clear
+// ring (local rows/cols 1..3 and 12..14) connects those openings, and
+// interior wall segments live strictly inside local 4..11, so every
+// chunk is connected to its neighbours without a maze search.
+
+import "config.zd" as config
+import "std/math" as math
+
+let W = config.W
+let CHUNK = config.CHUNK
+let WIN = config.WIN
+
+// floor_div divides integers rounding toward negative infinity. Zod's
+// `/` truncates toward zero and `%` keeps the dividend's sign, which is
+// wrong for negative world coordinates.
+pub floor_div := fn(a, b) {
+  let q = a / b
+  let r = a % b
+  if (r < 0) {
+    q = q - 1
+  }
+  return q
+}
+
+// chunk_coord_f maps a float world coordinate to its chunk index.
+pub chunk_coord_f := fn(x) {
+  return math.floor(x / float(CHUNK))
+}
+
+// local_coord maps an integer world cell to 0..15 within its chunk.
+pub local_coord := fn(x) {
+  return x - floor_div(x, CHUNK) * CHUNK
+}
+
+// rng_seed hashes (seed,cx,cz) into a nonzero Park-Miller state. All
+// arithmetic stays below 2^63.
+let rng_seed = fn(seed, cx, cz) {
+  let m = 2147483647
+  let s = seed % m
+  if (s < 0) {
+    s = s + m
+  }
+  let a = cx % m
+  if (a < 0) {
+    a = a + m
+  }
+  let b = cz % m
+  if (b < 0) {
+    b = b + m
+  }
+  s = (s + (a * 73856093) % m + (b * 19349663) % m) % m
+  if (s == 0) {
+    s = 1
+  }
+  return s
+}
+
+// rng_next advances a Park-Miller generator held in r["s"] and returns
+// the new value. Park-Miller's high-quality low bits are fine for the
+// small ranges used by the generator.
+let rng_next = fn(r) {
+  let s = (r["s"] * 48271) % 2147483647
+  if (s == 0) {
+    s = 1
+  }
+  r["s"] = s
+  return s
+}
+
+// gen_chunk_into writes one chunk directly into the shared window grid.
+// ox/oz are the window's world origin; bx/bz are the chunk's local window
+// offset. No per-chunk arrays are allocated.
+pub gen_chunk_into := fn(grid, ox, oz, cx, cz, seed) {
+  let bx = cx * CHUNK - ox
+  let bz = cz * CHUNK - oz
+
+  // Floor.
+  for (lz := 0; lz < CHUNK; lz++) {
+    let row = (bz + lz) * WIN + bx
+    for (lx := 0; lx < CHUNK; lx++) {
+      grid[row + lx] = 0
+    }
+  }
+
+  // Owned boundary walls: north row and west column.
+  for (lx := 0; lx < CHUNK; lx++) {
+    grid[bz * WIN + bx + lx] = 1
+  }
+  for (lz := 0; lz < CHUNK; lz++) {
+    grid[(bz + lz) * WIN + bx] = 1
+  }
+
+  let r = {"s": rng_seed(seed, cx, cz)}
+
+  // One guaranteed two-cell opening in each owned boundary. Avoid the
+  // corners so the clear ring always has a floor path around them.
+  let nox = 2 + rng_next(r) % 12
+  grid[bz * WIN + bx + nox] = 0
+  grid[bz * WIN + bx + nox + 1] = 0
+  let woz = 2 + rng_next(r) % 12
+  grid[(bz + woz) * WIN + bx] = 0
+  grid[(bz + woz + 1) * WIN + bx] = 0
+
+  // Dark door-frame trim on the two wall cells flanking each opening.
+  // This is material-only: the opening stays two cells wide and every
+  // connectivity guarantee is unchanged.
+  grid[bz * WIN + bx + nox - 1] = 4
+  grid[bz * WIN + bx + nox + 2] = 4
+  grid[(bz + woz - 1) * WIN + bx] = 4
+  grid[(bz + woz + 2) * WIN + bx] = 4
+
+  // Interior walls live strictly inside local 4..11. They never touch
+  // the clear ring, so the ring remains a connected corridor around
+  // every compartment. Materials 1..3 give wallpaper, concrete, and
+  // stained variants without changing collision geometry.
+  let vx1 = 5 + rng_next(r) % 2
+  let v1a = 4 + rng_next(r) % 2
+  let v1b = 10 + rng_next(r) % 2
+  let m1 = 1 + rng_next(r) % 3
+  for (z := v1a; z <= v1b; z++) {
+    grid[(bz + z) * WIN + bx + vx1] = m1
+  }
+
+  let vx2 = 9 + rng_next(r) % 2
+  let v2a = 4 + rng_next(r) % 2
+  let v2b = 10 + rng_next(r) % 2
+  let m2 = 1 + rng_next(r) % 3
+  for (z := v2a; z <= v2b; z++) {
+    grid[(bz + z) * WIN + bx + vx2] = m2
+  }
+
+  // A horizontal cross-wall with a one-cell doorway between the
+  // vertical walls. The cross-wall makes the interior read as small
+  // rooms instead of one open hall.
+  let hz = 7 + rng_next(r) % 2
+  let gap = 7 + rng_next(r) % 2
+  let m3 = 1 + rng_next(r) % 3
+  for (x := 4; x <= 11; x++) {
+    if (x != gap) {
+      grid[(bz + hz) * WIN + bx + x] = m3
+    }
+  }
+
+  // Occasional 2x2 pillars, but only where all four cells are still
+  // floor. Pillars are isolated, so they cannot enclose a pocket.
+  if (rng_next(r) % 2 == 0) {
+    let px = 4
+    let pz = 4
+    let free = 1
+    for (dz := 0; dz < 2; dz++) {
+      for (dx := 0; dx < 2; dx++) {
+        if (grid[(bz + pz + dz) * WIN + bx + px + dx] != 0) {
+          free = 0
+        }
+      }
+    }
+    if (free == 1) {
+      for (dz := 0; dz < 2; dz++) {
+        for (dx := 0; dx < 2; dx++) {
+          grid[(bz + pz + dz) * WIN + bx + px + dx] = 2
+        }
+      }
+    }
+  }
+  if (rng_next(r) % 2 == 0) {
+    let px = 7
+    let pz = 10
+    let free = 1
+    for (dz := 0; dz < 2; dz++) {
+      for (dx := 0; dx < 2; dx++) {
+        if (grid[(bz + pz + dz) * WIN + bx + px + dx] != 0) {
+          free = 0
+        }
+      }
+    }
+    if (free == 1) {
+      for (dz := 0; dz < 2; dz++) {
+        for (dx := 0; dx < 2; dx++) {
+          grid[(bz + pz + dz) * WIN + bx + px + dx] = 2
+        }
+      }
+    }
+  }
+}
+
+pub new_window := fn(seed) {
+  return {
+    "seed": seed,
+    "grid": make(WIN * WIN, 0),
+    "ox": 0,
+    "oz": 0,
+    "pcx": 0,
+    "pcz": 0
+  }
+}
+
+// rebuild regenerates all 25 chunks into the existing flat grid. This
+// happens only when the player's chunk changes (about 3 ms).
+pub rebuild := fn(win, seed, pcx, pcz) {
+  let ox = (pcx - 2) * CHUNK
+  let oz = (pcz - 2) * CHUNK
+  win["ox"] = ox
+  win["oz"] = oz
+  win["pcx"] = pcx
+  win["pcz"] = pcz
+  let grid = win["grid"]
+  for (dz := -2; dz <= 2; dz++) {
+    for (dx := -2; dx <= 2; dx++) {
+      gen_chunk_into(grid, ox, oz, pcx + dx, pcz + dz, seed)
+    }
+  }
+  return win
+}
+
+// cell_at returns the material at an integer world cell, or 1 (wall)
+// outside the window. Outside cells are never visible during normal
+// play because the window covers more than the fog distance.
+pub cell_at := fn(win, wx, wz) {
+  let lx = wx - win["ox"]
+  let lz = wz - win["oz"]
+  if (lx < 0 || lx >= WIN || lz < 0 || lz >= WIN) {
+    return 1
+  }
+  return win["grid"][lz * WIN + lx]
+}
+
+pub is_wall_cell := fn(win, wx, wz) {
+  return cell_at(win, wx, wz) != 0
+}
+
+// find_spawn picks a guaranteed-clear spot on the west side of the
+// chunk. Local (2,12) is on the clear ring; the game starts facing north
+// along the corridor. The 3x3 check is a safety net if generation ever
+// changes.
+pub find_spawn := fn(win, pcx, pcz) {
+  let basex = pcx * CHUNK
+  let basez = pcz * CHUNK
+  let cand = [[2, 12], [2, 8], [2, 2], [12, 8]]
+  for (i := 0; i < len(cand); i++) {
+    let lx = cand[i][0]
+    let lz = cand[i][1]
+    let ok = 1
+    for (dz := -1; dz <= 1; dz++) {
+      for (dx := -1; dx <= 1; dx++) {
+        if (is_wall_cell(win, basex + lx + dx, basez + lz + dz)) {
+          ok = 0
+        }
+      }
+    }
+    if (ok == 1) {
+      return [float(basex + lx) + 0.5, float(basez + lz) + 0.5]
+    }
+  }
+  return [float(basex + 2) + 0.5, float(basez + 2) + 0.5]
+}

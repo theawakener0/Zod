@@ -1,0 +1,259 @@
+// palette.zd — 96-colour Backrooms palette and precomputed SGR tables.
+//
+// Six families of sixteen shades:
+//   0..15    ceiling (warm fluorescent tile -> dark olive)
+//   16..31   floor   (damp carpet, light -> dark)
+//   32..47   wall hit on a z-side (wallpaper yellow)
+//   48..63   wall hit on an x-side (slightly darker, cooler)
+//   64..79   trim (baseboards, chair rails, door frames)
+//   80..95   light (fluorescent panels)
+//
+// Cell index = (top * 96 + bottom) * 24 + glyph. Half-block cells use
+// glyph 0; ASCII cells use glyph 1..23. The presenter keeps separate
+// pair-head and glyph-head tables so the hot path never builds SGR.
+
+import "config.zd" as config
+import "std/math" as math
+
+let PALETTE_N = config.PALETTE_N
+let GLYPH_N = config.GLYPH_N
+let FAMILIES = 6
+let SHADES = 16
+
+// Glyph 0 is reserved for the half-block renderer. The remaining slots
+// are a texture pack: box drawing for structure, blocks for shading,
+// and small marks for carpet and ceiling grain.
+let UNICODE_GLYPHS = [
+  "▀", "│", "─", "┼", "·", " ", "═", "▓", "▒", "░",
+  "╱", "╲", "▄", "▐", "▌", "▔", "▁", "┃", "━", "╳",
+  "•", "◦", "∙", "┄"
+]
+
+// Strict 7-bit fallback. Slot 0 stays the half-block because it is only
+// used by the truecolor renderer; --plain-ascii starts in ASCII mode.
+let ASCII_GLYPHS = [
+  "▀", "|", "-", "+", ".", " ", "=", "#", "%", ":",
+  "\\", "/", "n", "]", "[", "_", "_", "|", "=", "X",
+  "o", ".", ",", "~"
+]
+
+// Three control colours per family: bright, mid, dark. A smoothstep
+// curve keeps the middle of each ramp from going muddy.
+let C0R = [255, 220, 246, 226, 150, 255]
+let C0G = [249, 206, 226, 208, 136, 255]
+let C0B = [228, 172, 132, 122, 106, 244]
+let C1R = [214, 166, 204, 184, 94, 246]
+let C1G = [204, 150, 180, 164, 86, 238]
+let C1B = [176, 116, 96, 92, 68, 206]
+let C2R = [78, 34, 76, 60, 20, 140]
+let C2G = [78, 38, 68, 58, 20, 138]
+let C2B = [58, 28, 40, 36, 16, 112]
+
+pub R := make(PALETTE_N, 0)
+pub G := make(PALETTE_N, 0)
+pub B := make(PALETTE_N, 0)
+
+let smooth = fn(t) {
+  return t * t * (3.0 - 2.0 * t)
+}
+
+let mix = fn(a, b, t) {
+  return float(a) + (float(b) - float(a)) * t
+}
+
+for (f := 0; f < FAMILIES; f++) {
+  for (i := 0; i < SHADES; i++) {
+    let t = smooth(float(i) / 15.0)
+    let r = 0.0
+    let g = 0.0
+    let b = 0.0
+    if (t <= 0.5) {
+      r = mix(C0R[f], C1R[f], t * 2.0)
+      g = mix(C0G[f], C1G[f], t * 2.0)
+      b = mix(C0B[f], C1B[f], t * 2.0)
+    } else {
+      r = mix(C1R[f], C2R[f], (t - 0.5) * 2.0)
+      g = mix(C1G[f], C2G[f], (t - 0.5) * 2.0)
+      b = mix(C1B[f], C2B[f], (t - 0.5) * 2.0)
+    }
+    let idx = f * SHADES + i
+    R[idx] = int(r + 0.5)
+    G[idx] = int(g + 0.5)
+    B[idx] = int(b + 0.5)
+  }
+}
+
+// xterm256 picks the closer of the 6x6x6 colour cube and the 24-step
+// grey ramp. Used only when truecolor is unavailable or --256 is passed.
+let CUBE_LEVELS = [0, 95, 135, 175, 215, 255]
+
+let nearest_cube = fn(v) {
+  let best = 1000000
+  let qi = 0
+  for (i := 0; i < 6; i++) {
+    let d = v - CUBE_LEVELS[i]
+    if (d < 0) {
+      d = -d
+    }
+    if (d < best) {
+      best = d
+      qi = i
+    }
+  }
+  return qi
+}
+
+pub xterm256 := fn(r, g, b) {
+  let qr = nearest_cube(r)
+  let qg = nearest_cube(g)
+  let qb = nearest_cube(b)
+  let cr = CUBE_LEVELS[qr]
+  let cg = CUBE_LEVELS[qg]
+  let cb = CUBE_LEVELS[qb]
+  let dr = r - cr
+  let dg = g - cg
+  let db = b - cb
+  let cube_dist = dr * dr + dg * dg + db * db
+
+  let luma = (r * 299 + g * 587 + b * 114) / 1000
+  let gi = int((float(luma - 8) / 10.0) + 0.5)
+  if (gi < 0) {
+    gi = 0
+  }
+  if (gi > 23) {
+    gi = 23
+  }
+  let gv = 8 + gi * 10
+  let gr = r - gv
+  let gg = g - gv
+  let gb = b - gv
+  let grey_dist = gr * gr + gg * gg + gb * gb
+  if (grey_dist < cube_dist) {
+    return 232 + gi
+  }
+  return 16 + 36 * qr + 6 * qg + qb
+}
+
+let pair_true = fn(top, bottom) {
+  return __sprintf(
+    "\x1b[38;2;%d;%d;%dm\x1b[48;2;%d;%d;%dm",
+    [R[top], G[top], B[top], R[bottom], G[bottom], B[bottom]]
+  )
+}
+
+let pair_256 = fn(top, bottom) {
+  return __sprintf(
+    "\x1b[38;5;%dm\x1b[48;5;%dm",
+    [xterm256(R[top], G[top], B[top]), xterm256(R[bottom], G[bottom], B[bottom])]
+  )
+}
+
+let glyph_true = fn(top) {
+  let family = (top / SHADES) * SHADES
+  let shade = top % SHADES
+  let bgshade = shade + 5
+  if (bgshade > 15) {
+    bgshade = 15
+  }
+  let bg = family + bgshade
+  return __sprintf(
+    "\x1b[38;2;%d;%d;%dm\x1b[48;2;%d;%d;%dm",
+    [R[top], G[top], B[top], R[bg], G[bg], B[bg]]
+  )
+}
+
+let glyph_256 = fn(top) {
+  let family = (top / SHADES) * SHADES
+  let shade = top % SHADES
+  let bgshade = shade + 5
+  if (bgshade > 15) {
+    bgshade = 15
+  }
+  let bg = family + bgshade
+  return __sprintf(
+    "\x1b[38;5;%dm\x1b[48;5;%dm",
+    [xterm256(R[top], G[top], B[top]), xterm256(R[bg], G[bg], B[bg])]
+  )
+}
+
+pub build := fn(mode, plain) {
+  let pair = make(PALETTE_N * PALETTE_N, "")
+  let glyph = make(PALETTE_N * GLYPH_N, "")
+  let runs = make(GLYPH_N * 81, "")
+  let fog = make(PALETTE_N * 16, 0)
+  let darken = make(PALETTE_N, 0)
+  let is256 = mode == "256"
+  let gs = UNICODE_GLYPHS
+  if (plain == 1) {
+    gs = ASCII_GLYPHS
+  }
+
+  // Half-block heads: foreground = top subpixel, background = bottom.
+  for (top := 0; top < PALETTE_N; top++) {
+    for (bottom := 0; bottom < PALETTE_N; bottom++) {
+      let idx = top * PALETTE_N + bottom
+      if (is256) {
+        pair[idx] = pair_256(top, bottom)
+      } else {
+        pair[idx] = pair_true(top, bottom)
+      }
+    }
+  }
+
+  // ASCII heads: foreground = glyph colour, background = a darker shade
+  // of the same family so fog and material colour still read as a field.
+  for (top := 0; top < PALETTE_N; top++) {
+    for (g := 1; g < GLYPH_N; g++) {
+      let idx = top * GLYPH_N + g
+      if (is256) {
+        glyph[idx] = glyph_256(top)
+      } else {
+        glyph[idx] = glyph_true(top)
+      }
+    }
+  }
+
+  // Fog darkens within a family, preserving hue instead of turning the
+  // distance into a flat black wall.
+  for (c := 0; c < PALETTE_N; c++) {
+    let family = (c / SHADES) * SHADES
+    let shade = c % SHADES
+    for (f := 0; f < 16; f++) {
+      let s = shade + f
+      if (s > 15) {
+        s = 15
+      }
+      fog[c * 16 + f] = family + s
+    }
+    let ds = shade + 2
+    if (ds > 15) {
+      ds = 15
+    }
+    darken[c] = family + ds
+  }
+
+  // Repeated glyphs of every length used by a row (1..80).
+  for (g := 0; g < GLYPH_N; g++) {
+    for (n := 1; n <= 80; n++) {
+      runs[g * 81 + n] = __str_repeat(gs[g], n)
+    }
+  }
+
+  return {
+    "pair": pair,
+    "glyph": glyph,
+    "runs": runs,
+    "fog": fog,
+    "darken": darken,
+    "glyphs": gs,
+    "mode": mode,
+    "plain": plain
+  }
+}
+
+pub glyphs := fn(plain) {
+  if (plain == 1) {
+    return ASCII_GLYPHS
+  }
+  return UNICODE_GLYPHS
+}

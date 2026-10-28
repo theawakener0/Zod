@@ -42,7 +42,8 @@ func Start(in io.Reader, out io.Writer) {
 			fmt.Printf("\x1b[2J\x1b[H")
 			continue
 		case "/exit":
-			os.Exit(0)
+			// Return so main.run's deferred terminal cleanup runs.
+			return
 		}
 
 		var err error

@@ -1,0 +1,688 @@
+// render.zd — 2.5D DDA raycaster and run-length presenter.
+//
+// One DDA pass per frame fills 80 column records. Both fill modes then
+// read those records. Half-block mode samples a procedural texture for
+// every subpixel; ASCII mode samples one texel and one glyph per cell.
+// The presenter emits precomputed SGR strings only when the colour pair
+// or glyph colour changes.
+
+import "config.zd" as config
+import "std/math" as math
+import "textures.zd" as textures
+
+let W = config.W
+let H = config.H
+let SUB_H = config.SUB_H
+let FOV_PLANE = config.FOV_PLANE
+let PROJ = config.PROJ
+let FOG_END = config.FOG_END
+let MAX_STEPS = config.MAX_STEPS
+let PALETTE_N = config.PALETTE_N
+let GLYPH_N = config.GLYPH_N
+let FOG_STEPS = config.FOG_STEPS
+let FOG_CURVE = config.FOG_CURVE
+let WIN = config.WIN
+let RUN_STRIDE = W + 1
+
+let TEX_N = textures.TEX_N
+let TEX_SCALE = textures.TEX_SCALE
+let TEX_OFFSET = textures.TEX_OFFSET
+let TEX = textures.build()
+let FLOOR_COLOR = TEX["floor_color"]
+let FLOOR_GLYPH = TEX["floor_glyph"]
+let CEIL_COLOR = TEX["ceil_color"]
+let CEIL_GLYPH = TEX["ceil_glyph"]
+let WALL1Z_COLOR = TEX["wall1z_color"]
+let WALL1Z_GLYPH = TEX["wall1z_glyph"]
+let WALL1X_COLOR = TEX["wall1x_color"]
+let WALL1X_GLYPH = TEX["wall1x_glyph"]
+let WALL2_COLOR = TEX["wall2_color"]
+let WALL2_GLYPH = TEX["wall2_glyph"]
+let WALL3_COLOR = TEX["wall3_color"]
+let WALL3_GLYPH = TEX["wall3_glyph"]
+let WALL4_COLOR = TEX["wall4_color"]
+let WALL4_GLYPH = TEX["wall4_glyph"]
+
+// Camera-plane coordinate for each column, -1 (left) .. +1 (right).
+let CAM_X = make(W, 0.0)
+for (i := 0; i < W; i++) {
+  CAM_X[i] = 2.0 * float(i) / float(W - 1) - 1.0
+}
+
+// Perspective floor/ceiling tables for every possible horizon (0..60).
+// A row one subrow from the horizon is 30 cells away; rows at the
+// screen edge are about one cell away. The fog table is already curved.
+let PLANE_DIST = make(61 * SUB_H, 0.0)
+let PLANE_FOG = make(61 * SUB_H, 0)
+for (h := 0; h <= 60; h++) {
+  let base = h * SUB_H
+  for (r := 0; r < SUB_H; r++) {
+    let dd = r - h
+    if (dd < 0) {
+      dd = -dd
+    }
+    let d = FOG_END
+    if (dd > 0) {
+      d = 0.5 * PROJ / float(dd)
+    }
+    if (d > FOG_END) {
+      d = FOG_END
+    }
+    PLANE_DIST[base + r] = d
+    let f = int(d * float(FOG_STEPS) / FOG_END)
+    if (f < 0) {
+      f = 0
+    }
+    if (f >= FOG_STEPS) {
+      f = FOG_STEPS - 1
+    }
+    PLANE_FOG[base + r] = FOG_CURVE[f]
+  }
+}
+
+pub new_cols := fn() {
+  return {
+    "dist": make(W, 0.0),
+    "side": make(W, 0),
+    "mat": make(W, 0),
+    "top": make(W, 0),
+    "bottom": make(W, 0),
+    "wall": make(W, 0),
+    "hit": make(W, 0),
+    "wallx": make(W, 0.0),
+    "rdx": make(W, 0.0),
+    "rdz": make(W, 0.0),
+    "fog": make(W, 0),
+    "px": 0.0,
+    "pz": 0.0
+  }
+}
+
+// cast_columns traces one ray per terminal column and fills the column
+// records. Perpendicular distance removes fisheye; pitch only moves the
+// horizon.
+pub cast_columns := fn(win, px, pz, yaw, cols, horizon) {
+  let dist = cols["dist"]
+  let side = cols["side"]
+  let mat = cols["mat"]
+  let top = cols["top"]
+  let bottom = cols["bottom"]
+  let wall = cols["wall"]
+  let hit = cols["hit"]
+  let wallx = cols["wallx"]
+  let ray_x = cols["rdx"]
+  let ray_z = cols["rdz"]
+  let fog_col = cols["fog"]
+  cols["px"] = px
+  cols["pz"] = pz
+
+  let grid = win["grid"]
+  let ox = win["ox"]
+  let oz = win["oz"]
+
+  let dirX = math.cos(yaw)
+  let dirZ = math.sin(yaw)
+  let planeX = 0.0 - dirZ * FOV_PLANE
+  let planeZ = dirX * FOV_PLANE
+
+  let mapX0 = math.floor(px)
+  let mapZ0 = math.floor(pz)
+  let fracX = px - float(mapX0)
+  let fracZ = pz - float(mapZ0)
+  let horizonf = float(horizon)
+
+  for (x := 0; x < W; x++) {
+    let cam = CAM_X[x]
+    let rdx = dirX + planeX * cam
+    let rdz = dirZ + planeZ * cam
+    ray_x[x] = rdx
+    ray_z[x] = rdz
+
+    // A ray exactly along an axis would divide by zero. A huge delta
+    // makes that axis effectively never cross a boundary.
+    let ddx = 1000000.0
+    if (rdx > 0.000000001 || rdx < -0.000000001) {
+      ddx = math.abs(1.0 / rdx)
+    }
+    let ddz = 1000000.0
+    if (rdz > 0.000000001 || rdz < -0.000000001) {
+      ddz = math.abs(1.0 / rdz)
+    }
+
+    let mapX = mapX0
+    let mapZ = mapZ0
+    let stepX = 1
+    let stepZ = 1
+    let sideX = (1.0 - fracX) * ddx
+    if (rdx < 0.0) {
+      stepX = -1
+      sideX = fracX * ddx
+    }
+    let sideZ = (1.0 - fracZ) * ddz
+    if (rdz < 0.0) {
+      stepZ = -1
+      sideZ = fracZ * ddz
+    }
+
+    let didHit = 0
+    let hitSide = 0
+    let hitMat = 1
+    for (step := 0; step < MAX_STEPS; step++) {
+      if (sideX < sideZ) {
+        sideX = sideX + ddx
+        mapX = mapX + stepX
+        hitSide = 0
+      } else {
+        sideZ = sideZ + ddz
+        mapZ = mapZ + stepZ
+        hitSide = 1
+      }
+      let lx = mapX - ox
+      let lz = mapZ - oz
+      if (lx < 0 || lx >= WIN || lz < 0 || lz >= WIN) {
+        // The window covers more than the fog distance, so leaving it is
+        // treated as open fog, not as a fake wall at the window edge.
+        break
+      }
+      let m = grid[lz * WIN + lx]
+      if (m != 0) {
+        didHit = 1
+        hitMat = m
+        break
+      }
+    }
+
+    if (didHit == 0) {
+      // Open fog columns must not inherit the last DDA step's side:
+      // that would alternate between two wall bands and two ASCII edge
+      // glyphs. Use the darker x-side band for every fog column.
+      hitSide = 0
+    }
+
+    let d = FOG_END
+    let wx = 0.5
+    if (didHit == 1) {
+      if (hitSide == 0) {
+        d = sideX - ddx
+      } else {
+        d = sideZ - ddz
+      }
+      if (d < 0.0001) {
+        d = 0.0001
+      }
+      if (d > FOG_END) {
+        d = FOG_END
+      }
+      if (hitSide == 0) {
+        wx = pz + d * rdz
+      } else {
+        wx = px + d * rdx
+      }
+      wx = wx - float(math.floor(wx))
+    }
+
+    let lineH = PROJ / d
+    let wtopf = horizonf - lineH * 0.5
+    let wbotf = horizonf + lineH * 0.5
+    let wt = int(wtopf)
+    let wb = int(wbotf)
+    if (float(wb) < wbotf) {
+      wb = wb + 1
+    }
+    if (wt < 0) {
+      wt = 0
+    }
+    if (wb > SUB_H) {
+      wb = SUB_H
+    }
+    if (wb <= wt) {
+      if (wt >= SUB_H) {
+        wt = SUB_H - 1
+      }
+      wb = wt + 1
+    }
+
+    let bucket = int(d * float(FOG_STEPS) / FOG_END)
+    if (bucket < 0) {
+      bucket = 0
+    }
+    if (bucket >= FOG_STEPS) {
+      bucket = FOG_STEPS - 1
+    }
+    let fogv = FOG_CURVE[bucket]
+
+    let base = 32
+    if (hitSide == 0) {
+      base = 48
+    }
+    if (hitMat == 2 || hitMat == 3) {
+      base = 48
+    }
+    if (hitMat == 4) {
+      base = 64
+    }
+    let wc = base + fogv
+    if (wc > base + 15) {
+      wc = base + 15
+    }
+    if (didHit == 0) {
+      wc = 63
+    }
+
+    dist[x] = d
+    side[x] = hitSide
+    mat[x] = hitMat
+    top[x] = wt
+    bottom[x] = wb
+    wall[x] = wc
+    hit[x] = didHit
+    wallx[x] = wx
+    fog_col[x] = fogv
+  }
+  return cols
+}
+
+// fill_halfblock paints one U+2580 per cell: foreground = top subrow,
+// background = bottom subrow. Floor and ceiling texels are sampled with
+// true perspective; wall texels use u = hit fraction and v = height.
+pub fill_halfblock := fn(cols, cells, horizon, pal) {
+  let dist = cols["dist"]
+  let side = cols["side"]
+  let mat = cols["mat"]
+  let top = cols["top"]
+  let bottom = cols["bottom"]
+  let wallx = cols["wallx"]
+  let ray_x = cols["rdx"]
+  let ray_z = cols["rdz"]
+  let fog_col = cols["fog"]
+  let hit = cols["hit"]
+  let px = cols["px"]
+  let pz = cols["pz"]
+  let fog_tex = pal["fog"]
+  let darken = pal["darken"]
+  let cbase = horizon * SUB_H
+  let bx = (px + TEX_OFFSET) * TEX_SCALE
+  let bz = (pz + TEX_OFFSET) * TEX_SCALE
+  let horizonf = float(horizon)
+
+  // Hoist all per-column wall/ray work out of the 60-row loop.
+  let wtop_a = make(W, 0.0)
+  let wbot_a = make(W, 0.0)
+  let inv_a = make(W, 0.0)
+  let vbase_a = make(W, 0.0)
+  let ut_a = make(W, 0)
+  let brx_a = make(W, 0.0)
+  let brz_a = make(W, 0.0)
+  for (x := 0; x < W; x++) {
+    let lineh = PROJ / dist[x]
+    let wtop = horizonf - lineh * 0.5
+    let inv = 64.0 / lineh
+    wtop_a[x] = wtop
+    wbot_a[x] = wtop + lineh
+    inv_a[x] = inv
+    vbase_a[x] = (0.0 - wtop) * inv
+    let ut = int(wallx[x] * 64.0)
+    if (ut < 0) {
+      ut = 0
+    }
+    if (ut > 63) {
+      ut = 63
+    }
+    ut_a[x] = ut
+    brx_a[x] = ray_x[x] * TEX_SCALE
+    brz_a[x] = ray_z[x] * TEX_SCALE
+  }
+
+  for (y := 0; y < H; y++) {
+    let r0 = y * 2
+    let r1 = r0 + 1
+    let row = y * W
+    for (x := 0; x < W; x++) {
+      let wt = top[x]
+      let wb = bottom[x]
+      let wtop = wtop_a[x]
+      let wbot = wbot_a[x]
+      let inv = inv_a[x]
+      let vbase = vbase_a[x]
+      let ut = ut_a[x]
+      let wfog = fog_col[x]
+      let wtex = WALL1Z_COLOR
+      let matx = mat[x]
+      if (matx == 2) {
+        wtex = WALL2_COLOR
+      } else if (matx == 3) {
+        wtex = WALL3_COLOR
+      } else if (matx == 4) {
+        wtex = WALL4_COLOR
+      } else if (side[x] == 0) {
+        wtex = WALL1X_COLOR
+      }
+      let brx = brx_a[x]
+      let brz = brz_a[x]
+      let didHit = hit[x]
+
+      let tc = 0
+      let bc = 0
+      if (r1 < wt) {
+        // Both subpixels are ceiling, sampled independently in depth.
+        let pd0 = PLANE_DIST[cbase + r0]
+        let tx0 = int(bx + pd0 * brx) % TEX_N
+        let tz0 = int(bz + pd0 * brz) % TEX_N
+        let tex0 = CEIL_COLOR[tz0 * TEX_N + tx0]
+        tc = fog_tex[tex0 * 16 + PLANE_FOG[cbase + r0]]
+        let pd1 = PLANE_DIST[cbase + r1]
+        let tx1 = int(bx + pd1 * brx) % TEX_N
+        let tz1 = int(bz + pd1 * brz) % TEX_N
+        let tex1 = CEIL_COLOR[tz1 * TEX_N + tx1]
+        bc = fog_tex[tex1 * 16 + PLANE_FOG[cbase + r1]]
+      } else if (r0 >= wb) {
+        // Both subpixels are floor, sampled independently in depth.
+        let pd0 = PLANE_DIST[cbase + r0]
+        let tx0 = int(bx + pd0 * brx) % TEX_N
+        let tz0 = int(bz + pd0 * brz) % TEX_N
+        let tex0 = FLOOR_COLOR[tz0 * TEX_N + tx0]
+        tc = fog_tex[tex0 * 16 + PLANE_FOG[cbase + r0]]
+        let pd1 = PLANE_DIST[cbase + r1]
+        let tx1 = int(bx + pd1 * brx) % TEX_N
+        let tz1 = int(bz + pd1 * brz) % TEX_N
+        let tex1 = FLOOR_COLOR[tz1 * TEX_N + tx1]
+        bc = fog_tex[tex1 * 16 + PLANE_FOG[cbase + r1]]
+      } else {
+        // Mixed cell: a wall edge, a thin wall, or two wall subrows.
+        if (r0 < wt) {
+          let pd = PLANE_DIST[cbase + r0]
+          let tx = int(bx + pd * brx) % TEX_N
+          let tz = int(bz + pd * brz) % TEX_N
+          let tex = CEIL_COLOR[tz * TEX_N + tx]
+          tc = fog_tex[tex * 16 + PLANE_FOG[cbase + r0]]
+        } else if (r0 < wb) {
+          if (didHit == 0) {
+            tc = 63
+          } else {
+            let vt = int(vbase + (float(r0) + 0.5) * inv)
+            if (vt < 0) {
+              vt = 0
+            }
+            if (vt > 63) {
+              vt = 63
+            }
+            let tex = wtex[vt * TEX_N + ut]
+            tc = fog_tex[tex * 16 + wfog]
+            if ((r0 == wt && wtop >= 0.0) || (r0 == wb - 1 && wbot <= float(SUB_H))) {
+              tc = darken[tc]
+            }
+          }
+        } else {
+          let pd = PLANE_DIST[cbase + r0]
+          let tx = int(bx + pd * brx) % TEX_N
+          let tz = int(bz + pd * brz) % TEX_N
+          let tex = FLOOR_COLOR[tz * TEX_N + tx]
+          tc = fog_tex[tex * 16 + PLANE_FOG[cbase + r0]]
+        }
+
+        if (r1 < wt) {
+          let pd = PLANE_DIST[cbase + r1]
+          let tx = int(bx + pd * brx) % TEX_N
+          let tz = int(bz + pd * brz) % TEX_N
+          let tex = CEIL_COLOR[tz * TEX_N + tx]
+          bc = fog_tex[tex * 16 + PLANE_FOG[cbase + r1]]
+        } else if (r1 < wb) {
+          if (didHit == 0) {
+            bc = 63
+          } else {
+            let vt = int(vbase + (float(r1) + 0.5) * inv)
+            if (vt < 0) {
+              vt = 0
+            }
+            if (vt > 63) {
+              vt = 63
+            }
+            let tex = wtex[vt * TEX_N + ut]
+            bc = fog_tex[tex * 16 + wfog]
+            if ((r1 == wt && wtop >= 0.0) || (r1 == wb - 1 && wbot <= float(SUB_H))) {
+              bc = darken[bc]
+            }
+          }
+        } else {
+          let pd = PLANE_DIST[cbase + r1]
+          let tx = int(bx + pd * brx) % TEX_N
+          let tz = int(bz + pd * brz) % TEX_N
+          let tex = FLOOR_COLOR[tz * TEX_N + tx]
+          bc = fog_tex[tex * 16 + PLANE_FOG[cbase + r1]]
+        }
+      }
+
+      cells[row + x] = (tc * PALETTE_N + bc) * GLYPH_N
+    }
+  }
+  return cells
+}
+
+// fill_ascii uses one glyph and one foreground colour per cell. Glyphs
+// come from the material atlas, with explicit overrides for wall tops,
+// baseboards, thin walls, and corners. Ceiling and floor backgrounds
+// are tinted by the palette head, so fog still reads as depth.
+pub fill_ascii := fn(cols, cells, horizon, pal) {
+  let dist = cols["dist"]
+  let side = cols["side"]
+  let mat = cols["mat"]
+  let top = cols["top"]
+  let bottom = cols["bottom"]
+  let wallx = cols["wallx"]
+  let ray_x = cols["rdx"]
+  let ray_z = cols["rdz"]
+  let fog_col = cols["fog"]
+  let hit = cols["hit"]
+  let px = cols["px"]
+  let pz = cols["pz"]
+  let fog_tex = pal["fog"]
+  let cbase = horizon * SUB_H
+  let bx = (px + TEX_OFFSET) * TEX_SCALE
+  let bz = (pz + TEX_OFFSET) * TEX_SCALE
+  let horizonf = float(horizon)
+
+  let wtop_a = make(W, 0.0)
+  let wbot_a = make(W, 0.0)
+  let inv_a = make(W, 0.0)
+  let vbase_a = make(W, 0.0)
+  let ut_a = make(W, 0)
+  let brx_a = make(W, 0.0)
+  let brz_a = make(W, 0.0)
+  for (x := 0; x < W; x++) {
+    let lineh = PROJ / dist[x]
+    let wtop = horizonf - lineh * 0.5
+    let inv = 64.0 / lineh
+    wtop_a[x] = wtop
+    wbot_a[x] = wtop + lineh
+    inv_a[x] = inv
+    vbase_a[x] = (0.0 - wtop) * inv
+    let ut = int(wallx[x] * 64.0)
+    if (ut < 0) {
+      ut = 0
+    }
+    if (ut > 63) {
+      ut = 63
+    }
+    ut_a[x] = ut
+    brx_a[x] = ray_x[x] * TEX_SCALE
+    brz_a[x] = ray_z[x] * TEX_SCALE
+  }
+
+  for (y := 0; y < H; y++) {
+    let r0 = y * 2
+    let r1 = r0 + 1
+    let row = y * W
+    for (x := 0; x < W; x++) {
+      let wt = top[x]
+      let wb = bottom[x]
+      let wtop = wtop_a[x]
+      let wbot = wbot_a[x]
+      let inv = inv_a[x]
+      let vbase = vbase_a[x]
+      let ut = ut_a[x]
+      let wfog = fog_col[x]
+      let wtex = WALL1Z_COLOR
+      let wglyph = WALL1Z_GLYPH
+      let matx = mat[x]
+      if (matx == 2) {
+        wtex = WALL2_COLOR
+        wglyph = WALL2_GLYPH
+      } else if (matx == 3) {
+        wtex = WALL3_COLOR
+        wglyph = WALL3_GLYPH
+      } else if (matx == 4) {
+        wtex = WALL4_COLOR
+        wglyph = WALL4_GLYPH
+      } else if (side[x] == 0) {
+        wtex = WALL1X_COLOR
+        wglyph = WALL1X_GLYPH
+      }
+      let brx = brx_a[x]
+      let brz = brz_a[x]
+      let didHit = hit[x]
+
+      let color = 0
+      let glyph = 5
+
+      if (r0 < wt) {
+        if (r1 >= wt) {
+          // Ceiling-to-wall transition. If the wall is thinner than a
+          // cell, draw a corner mark instead of sampling the floor.
+          if (didHit == 0) {
+            color = 63
+            glyph = 5
+          } else if (r1 >= wb) {
+            color = 63
+            glyph = 3
+          } else {
+            let vt = int(vbase + (float(r1) + 0.5) * inv)
+            if (vt < 0) {
+              vt = 0
+            }
+            if (vt > 63) {
+              vt = 63
+            }
+            let tex = wtex[vt * TEX_N + ut]
+            color = fog_tex[tex * 16 + wfog]
+            glyph = 15
+          }
+        } else {
+          // ASCII uses the outer ceiling subrow for its one glyph.
+          let pd = PLANE_DIST[cbase + r0]
+          let tx = int(bx + pd * brx) % TEX_N
+          let tz = int(bz + pd * brz) % TEX_N
+          let idx = tz * TEX_N + tx
+          let tex = CEIL_COLOR[idx]
+          let fog = PLANE_FOG[cbase + r0]
+          color = fog_tex[tex * 16 + fog]
+          glyph = CEIL_GLYPH[idx]
+        }
+      } else if (r0 < wb) {
+        if (didHit == 0) {
+          color = 63
+          glyph = 5
+        } else {
+          let vt = int(vbase + (float(r0) + 0.5) * inv)
+          if (vt < 0) {
+            vt = 0
+          }
+          if (vt > 63) {
+            vt = 63
+          }
+          let idx = vt * TEX_N + ut
+          let tex = wtex[idx]
+          color = fog_tex[tex * 16 + wfog]
+          glyph = wglyph[idx]
+          if (r0 == wt && wtop >= 0.0) {
+            glyph = 15
+          }
+          if (r1 >= wb) {
+            glyph = 6
+          }
+          if (r1 == wb - 1 && wbot <= float(SUB_H)) {
+            glyph = 6
+          }
+          if (wb - wt <= 2) {
+            glyph = 1
+            if (side[x] == 0) {
+              glyph = 2
+            }
+          }
+          if (x > 0 && didHit == 1 && hit[x - 1] == 1) {
+            let dd = dist[x] - dist[x - 1]
+            if (dd > 1.5 || dd < -1.5 || side[x] != side[x - 1]) {
+              glyph = 3
+            }
+          }
+        }
+      } else {
+        // ASCII uses the outer floor subrow for its one glyph.
+        let pd = PLANE_DIST[cbase + r1]
+        let tx = int(bx + pd * brx) % TEX_N
+        let tz = int(bz + pd * brz) % TEX_N
+        let idx = tz * TEX_N + tx
+        let tex = FLOOR_COLOR[idx]
+        let fog = PLANE_FOG[cbase + r1]
+        color = fog_tex[tex * 16 + fog]
+        glyph = FLOOR_GLYPH[idx]
+      }
+
+      cells[row + x] = (color * PALETTE_N) * GLYPH_N + glyph
+    }
+  }
+  return cells
+}
+
+// present emits one string: colour heads only when the pair or glyph
+// colour changes, repeated glyph runs from a table, one reset at the end.
+pub present := fn(cells, pal, parts) {
+  let pair = pal["pair"]
+  let glyph_head = pal["glyph"]
+  let runs = pal["runs"]
+  let np = 0
+  let last = ""
+
+  for (y := 0; y < H; y++) {
+    let x = 0
+    loop {
+      if (x >= W) {
+        break
+      }
+      let c = cells[y * W + x]
+      let n = 1
+      loop {
+        if (x + n >= W) {
+          break
+        }
+        if (cells[y * W + x + n] != c) {
+          break
+        }
+        n = n + 1
+      }
+      let g = c % GLYPH_N
+      let pair_idx = c / GLYPH_N
+      let h = ""
+      if (g == 0) {
+        h = pair[pair_idx]
+      } else {
+        let top = pair_idx / PALETTE_N
+        h = glyph_head[top * GLYPH_N + g]
+      }
+      if (h != last) {
+        parts[np] = h
+        np = np + 1
+        last = h
+      }
+      parts[np] = runs[g * RUN_STRIDE + n]
+      np = np + 1
+      x = x + n
+    }
+    if (y < H - 1) {
+      parts[np] = "\r\n"
+      np = np + 1
+    }
+  }
+  parts[np] = "\x1b[0m"
+  np = np + 1
+  return __str_join(__arr_slice(parts, 0, np), "")
+}

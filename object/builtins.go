@@ -1124,6 +1124,9 @@ var Builtins = []struct {
 			if !ok {
 				return newError("argument to `__exit` must be INTEGER. got=%s", args[0].Type())
 			}
+			// os.Exit skips main's cleanup defer, so restore terminal
+			// modes here as well. TermCleanup is idempotent.
+			TermCleanup()
 			os.Exit(int(n.Value))
 			return NULL
 		},
@@ -2302,6 +2305,50 @@ var Builtins = []struct {
 			}
 			if err := termDisableRaw(); err != nil {
 				return newError("could not disable raw mode: %s", err.Error())
+			}
+			return NULL
+		},
+	}},
+	{"__term_mouse_enable", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 0 {
+				return newError("wrong number of arguments. got=%d, want=0", len(args))
+			}
+			if err := termEnableMouse(); err != nil {
+				return newError("could not enable mouse mode: %s", err.Error())
+			}
+			return NULL
+		},
+	}},
+	{"__term_mouse_disable", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 0 {
+				return newError("wrong number of arguments. got=%d, want=0", len(args))
+			}
+			if err := termDisableMouse(); err != nil {
+				return newError("could not disable mouse mode: %s", err.Error())
+			}
+			return NULL
+		},
+	}},
+	{"__term_alt_screen_enter", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 0 {
+				return newError("wrong number of arguments. got=%d, want=0", len(args))
+			}
+			if err := termEnterAltScreen(); err != nil {
+				return newError("could not enter alternate screen: %s", err.Error())
+			}
+			return NULL
+		},
+	}},
+	{"__term_alt_screen_leave", &Builtin{
+		Fn: func(args ...Object) Object {
+			if len(args) != 0 {
+				return newError("wrong number of arguments. got=%d, want=0", len(args))
+			}
+			if err := termLeaveAltScreen(); err != nil {
+				return newError("could not leave alternate screen: %s", err.Error())
 			}
 			return NULL
 		},

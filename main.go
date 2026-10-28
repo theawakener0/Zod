@@ -54,36 +54,40 @@ func parseArgs(args []string) (cliOptions, error) {
 }
 
 func main() {
+	installSignalCleanup()	
+	os.Exit(run())
+}
+
+func run() int {
 	opts, err := parseArgs(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return 1
 	}
 	if opts.showVersion {
 		fmt.Printf("zod %s\n", version)
-		return
+		return 0
 	}
 
-	defer func() {
-		_ = obj.TermDisableRaw()
-	}()
+	defer obj.TermCleanup()
 
 	if opts.file != "" {
 		source, err := os.ReadFile(opts.file)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+			return 1
 		}
 		err = repl.Execute(string(source), os.Stdout, filepath.Dir(opts.file))
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+			return 1
 		}
-		return
+		return 0
 	}
 
 	printWelcome()
 	repl.Start(os.Stdin, os.Stdout)
+	return 0
 }
 
 func printWelcome() {

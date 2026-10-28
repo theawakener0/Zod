@@ -1,0 +1,330 @@
+// backrooms.zd — first-person infinite Backrooms for the Zod terminal.
+//
+// Run: go run . examples/demo/backrooms/backrooms.zd
+// Headless smoke/benchmark:
+//   go run . examples/demo/backrooms/backrooms.zd --auto --frames=300
+//
+// Controls: WASD / arrows move, drag to look, M toggles ASCII,
+// Q or Esc quits. The view is 80x30 terminal cells (80x60 half-block
+// pixels) at 30 fps, with 96 colours, 16-step fog, and procedural
+// carpet, wallpaper, ceiling-tile, light-panel, and trim textures.
+
+import "std/term" as term
+import "std/time" as time
+import "std/anim" as anim
+import "std/os" as os
+import "std/str" as str
+import "std/math" as math
+import "std/crypto" as crypto
+import "std/fs" as fs
+
+import "config.zd" as config
+import "world.zd" as world
+import "render.zd" as render
+import "collision.zd" as collision
+import "input.zd" as input
+import "palette.zd" as palette
+
+let W = config.W
+let H = config.H
+let FPS = config.FPS
+let MOVE_SPEED = config.MOVE_SPEED
+let PLAYER_R = config.PLAYER_R
+let DT_MAX = config.DT_MAX
+let PI = math.pi
+let TAU = math.tau
+
+// ---- arguments -----------------------------------------------------------
+
+let ARGS = os.args()
+let AUTO = 0
+let FRAMES = 120
+let SEED = 1
+let ASCII_START = 0
+let PLAIN = 0
+let MODE = "true"
+let DUMP = ""
+
+for (i := 0; i < len(ARGS); i++) {
+  let a = ARGS[i]
+  if (a == "--auto") {
+    AUTO = 1
+  } else if (a == "--ascii") {
+    ASCII_START = 1
+  } else if (a == "--plain-ascii") {
+    PLAIN = 1
+    ASCII_START = 1
+  } else if (a == "--256") {
+    MODE = "256"
+  } else if (str.starts_with(a, "--frames=")) {
+    let v = try(int(str.slice(a, 9, len(a))))
+    if (v[0]) {
+      FRAMES = v[1]
+    }
+  } else if (str.starts_with(a, "--seed=")) {
+    let v = try(int(str.slice(a, 7, len(a))))
+    if (v[0]) {
+      SEED = v[1]
+    }
+  } else if (str.starts_with(a, "--dump=")) {
+    DUMP = str.slice(a, 7, len(a))
+  }
+}
+if (FRAMES < 1) {
+  FRAMES = 1
+}
+
+// ---- headless ------------------------------------------------------------
+
+let run_headless = fn(frames, seed, ascii) {
+  let win = world.new_window(seed)
+  world.rebuild(win, seed, 0, 0)
+  let spawn = world.find_spawn(win, 0, 0)
+  let px = spawn[0]
+  let pz = spawn[1]
+  let yaw = 0.0 - PI / 2.0
+  let cols = render.new_cols()
+  let pal = palette.build(MODE, PLAIN)
+  let cells = make(W * H, 0)
+  let parts = make(5000, "")
+  let last_hash = ""
+
+  let start = time.now_ms()
+  for (f := 0; f < frames; f++) {
+    yaw = yaw + 0.011
+    if (yaw > PI) {
+      yaw = yaw - TAU
+    }
+    let step = 0.055
+    let dx = math.cos(yaw) * step
+    let dz = math.sin(yaw) * step
+    let np = collision.move(win, px, pz, dx, dz, PLAYER_R)
+    px = np[0]
+    pz = np[1]
+    let ncx = world.chunk_coord_f(px)
+    let ncz = world.chunk_coord_f(pz)
+    if (ncx != win["pcx"] || ncz != win["pcz"]) {
+      world.rebuild(win, seed, ncx, ncz)
+    }
+    let horizon = 30
+    render.cast_columns(win, px, pz, yaw, cols, horizon)
+    if (ascii == 1) {
+      render.fill_ascii(cols, cells, horizon, pal)
+    } else {
+      render.fill_halfblock(cols, cells, horizon, pal)
+    }
+    let frame = render.present(cells, pal, parts)
+    if (f == frames - 1) {
+      last_hash = crypto.sha256(frame)
+      if (DUMP != "") {
+        let wr = try(fs.write_file(DUMP, frame))
+        if (!wr[0]) {
+          __eprint("backrooms: could not write " + DUMP + ": " + string(wr[1]) + "\n")
+          return 1
+        }
+      }
+    }
+  }
+  let elapsed = time.now_ms() - start
+  println("backrooms: " + string(frames) + " frames, " + string(elapsed) + " ms total, " + string(elapsed / frames) + " ms/frame")
+  println("last frame sha256=" + last_hash)
+  return 0
+}
+
+// ---- terminal ------------------------------------------------------------
+
+let show_title = fn() {
+  __print("\x1b[2J\x1b[H")
+  __print("\x1b[38;2;236;216;124m")
+  __print("  T H E   B A C K R O O M S\n\n")
+  __print("\x1b[38;2;190;172;110m")
+  __print("  You noclipped out of reality.\n")
+  __print("  The hum never stops.\n\n")
+  __print("\x1b[38;2;150;140;110m")
+  __print("  WASD / arrows   move\n")
+  __print("  drag            look\n")
+  __print("  M               toggle ASCII\n")
+  __print("  Q / Esc         quit\n\n")
+  __print("\x1b[38;2;120;112;90m")
+  __print("  Press any key to begin...")
+  let k = try(term.wait_key(2500))
+  if (!k[0]) {
+    return true
+  }
+  let key = k[1]
+  if (key == null) {
+    return true
+  }
+  if (key == "q" || key == "Q" || key == "\x1b" || key == "\x03") {
+    return false
+  }
+  return true
+}
+
+let cleanup = fn() {
+  let a = try(term.disable_mouse())
+  let alt = try(term.leave_alt_screen())
+  __print("\x1b[0m\x1b[?2026l\x1b[?7h\x1b[?25h")
+  let b = try(term.disable_raw())
+}
+
+let game_loop = fn(seed, ascii_start) {
+  let win = world.new_window(seed)
+  world.rebuild(win, seed, 0, 0)
+  let spawn = world.find_spawn(win, 0, 0)
+  let px = spawn[0]
+  let pz = spawn[1]
+  let inp = input.new()
+  // The input map owns the camera yaw so mouse drag and keyboard turn
+  // cannot drift apart. Start facing north along the spawn corridor.
+  inp["yaw"] = 0.0 - PI / 2.0
+  let pal = palette.build(MODE, PLAIN)
+  let cols = render.new_cols()
+  let cells = make(W * H, 0)
+  let parts = make(5000, "")
+  let ascii = ascii_start
+  let pacer = anim.frame_pacer(FPS)
+  let last = time.now_ms()
+  let bob_phase = 0.0
+  let bob_amp = 0.0
+
+  loop {
+    let now = time.now_ms()
+    let events = term.poll_events()
+    if (input.handle(inp, events, now)) {
+      break
+    }
+    if (inp["toggle_ascii"]) {
+      // --plain-ascii is an ASCII-only fallback; keep it on the 7-bit
+      // pack instead of switching back to the half-block renderer.
+      if (PLAIN == 0) {
+        ascii = 1 - ascii
+      }
+      inp["toggle_ascii"] = false
+    }
+
+    let dt = float(now - last) / 1000.0
+    last = now
+    if (dt > DT_MAX) {
+      dt = DT_MAX
+    }
+    if (dt < 0.0) {
+      dt = 0.0
+    }
+
+    let ax = input.axis(inp, now)
+    let fwd = ax[0]
+    let strafe = ax[1]
+    let turn = ax[2]
+    input.apply_turn(inp, turn, dt)
+
+    let dirX = math.cos(inp["yaw"])
+    let dirZ = math.sin(inp["yaw"])
+    let rightX = 0.0 - dirZ
+    let rightZ = dirX
+    let dx = (dirX * float(fwd) + rightX * float(strafe)) * MOVE_SPEED * dt
+    let dz = (dirZ * float(fwd) + rightZ * float(strafe)) * MOVE_SPEED * dt
+    if (fwd != 0 && strafe != 0) {
+      dx = dx * 0.70710678
+      dz = dz * 0.70710678
+    }
+    let np = collision.move(win, px, pz, dx, dz, PLAYER_R)
+    px = np[0]
+    pz = np[1]
+
+    let ncx = world.chunk_coord_f(px)
+    let ncz = world.chunk_coord_f(pz)
+    if (ncx != win["pcx"] || ncz != win["pcz"]) {
+      world.rebuild(win, seed, ncx, ncz)
+    }
+
+    if (fwd != 0 || strafe != 0) {
+      bob_amp = 0.55
+      bob_phase = bob_phase + dt * 9.0
+    } else {
+      bob_amp = bob_amp * 0.88
+    }
+    let bob = math.sin(bob_phase) * bob_amp
+    let horizon = input.horizon(inp, bob)
+
+    render.cast_columns(win, px, pz, inp["yaw"], cols, horizon)
+    if (ascii == 1) {
+      render.fill_ascii(cols, cells, horizon, pal)
+    } else {
+      render.fill_halfblock(cols, cells, horizon, pal)
+    }
+    let frame = render.present(cells, pal, parts)
+
+    __print(term.sync_begin())
+    __print(term.home())
+    __print(frame)
+    __print(term.sync_end())
+    anim.pacer_wait(pacer)
+  }
+  return 0
+}
+
+let terminal_session = fn(seed, ascii) {
+  if (!show_title()) {
+    return 0
+  }
+  __print("\x1b[2J\x1b[H")
+  return game_loop(seed, ascii)
+}
+
+let run_terminal = fn(seed, ascii) {
+  let wr = try(term.width())
+  let hr = try(term.height())
+  if (!wr[0] || !hr[0]) {
+    println("backrooms: no terminal found. Re-run with --auto for headless mode.")
+    return 1
+  }
+  let tw = wr[1]
+  let th = hr[1]
+  if (tw < W || th < H) {
+    println("backrooms: terminal too small (need 80x30, have " + string(tw) + "x" + string(th) + ").")
+    return 1
+  }
+
+  let raw = try(term.enable_raw())
+  if (!raw[0]) {
+    println("backrooms: " + string(raw[1]))
+    return 1
+  }
+  let mouse = try(term.enable_mouse())
+  if (!mouse[0]) {
+    println("backrooms: " + string(mouse[1]))
+    let d = try(term.disable_raw())
+    return 1
+  }
+  let alt = try(term.enter_alt_screen())
+  if (!alt[0]) {
+    println("backrooms: " + string(alt[1]))
+    let m = try(term.disable_mouse())
+    let d = try(term.disable_raw())
+    return 1
+  }
+
+  __print("\x1b[?7l\x1b[?25l\x1b[2J\x1b[H")
+  let r = try(terminal_session(seed, ascii))
+  cleanup()
+  if (!r[0]) {
+    __eprint("backrooms: " + string(r[1]) + "\n")
+    return 1
+  }
+  return 0
+}
+
+let main = fn() {
+  if (AUTO == 1) {
+    return run_headless(FRAMES, SEED, ASCII_START)
+  }
+  let r = try(run_terminal(SEED, ASCII_START))
+  if (!r[0]) {
+    __eprint("backrooms: " + string(r[1]) + "\n")
+    return 1
+  }
+  return r[1]
+}
+
+os.exit(main())

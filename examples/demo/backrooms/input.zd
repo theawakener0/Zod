@@ -1,0 +1,159 @@
+// input.zd — keyboard state and drag-to-look.
+//
+// Terminals do not report key-up, so each key event refreshes a
+// timestamp and the movement axis stays active for KEY_TIMEOUT ms.
+// Mouse motion is only accepted while the left button is held (the
+// terminal is in 1002 button-event mode). Per-frame motion is summed and
+// applied once, so a burst of reports cannot cause repeated trig.
+
+import "config.zd" as config
+import "std/math" as math
+
+let KEY_TIMEOUT = config.KEY_TIMEOUT
+let MOUSE_YAW = config.MOUSE_YAW
+let MOUSE_PITCH = config.MOUSE_PITCH
+let PITCH_LIMIT = config.PITCH_LIMIT
+let HORIZON = config.HORIZON
+let HORIZON_MIN = config.HORIZON_MIN
+let HORIZON_MAX = config.HORIZON_MAX
+let TURN_SPEED = config.TURN_SPEED
+let TAU = math.tau
+
+// wrap_angle maps an angle into [-pi, pi). Mouse drags can accumulate
+// many radians between frames, so a single subtraction is not enough.
+pub wrap_angle := fn(a) {
+  return a - TAU * math.floor((a + math.pi) / TAU)
+}
+
+// apply_turn advances the same yaw field that mouse drag writes, so
+// keyboard turning and mouse look share one camera angle.
+pub apply_turn := fn(inp, turn, dt) {
+  inp["yaw"] = wrap_angle(inp["yaw"] + float(turn) * TURN_SPEED * dt)
+  return inp["yaw"]
+}
+
+pub new := fn() {
+  return {
+    "last_x": 0,
+    "last_y": 0,
+    "dragging": false,
+    "pending_dx": 0,
+    "pending_dy": 0,
+    "yaw": 0.0,
+    "pitch": 0.0,
+    "toggle_ascii": false,
+    "keys": {
+      "fwd": 0,
+      "back": 0,
+      "left": 0,
+      "right": 0,
+      "turnl": 0,
+      "turnr": 0
+    }
+  }
+}
+
+// handle consumes one frame of events and returns true to quit.
+pub handle := fn(inp, events, now) {
+  let keys = inp["keys"]
+  let n = len(events)
+  for (i := 0; i < n; i++) {
+    let ev = events[i]
+    if (ev["type"] == "mouse") {
+      let m = ev["mouse"]
+      let action = m["action"]
+      let button = m["button"]
+      if (action == "press" && button == 0) {
+        inp["dragging"] = true
+        inp["last_x"] = m["x"]
+        inp["last_y"] = m["y"]
+      } else if (action == "release" && button == 0) {
+        inp["dragging"] = false
+      } else if (action == "move" && inp["dragging"]) {
+        let dx = m["x"] - inp["last_x"]
+        let dy = m["y"] - inp["last_y"]
+        inp["last_x"] = m["x"]
+        inp["last_y"] = m["y"]
+        // Ignore pointer warps and resize jumps.
+        if (dx > -20 && dx < 20 && dy > -20 && dy < 20) {
+          inp["pending_dx"] = inp["pending_dx"] + dx
+          inp["pending_dy"] = inp["pending_dy"] + dy
+        }
+      }
+    } else {
+      let key = ev["key"]
+      if (key == "q" || key == "Q" || key == "\x1b" || key == "\x03") {
+        return true
+      }
+      if (key == "m" || key == "M") {
+        inp["toggle_ascii"] = true
+      } else if (key == "w" || key == "W" || key == "\x1b[A") {
+        keys["fwd"] = now
+      } else if (key == "s" || key == "S" || key == "\x1b[B") {
+        keys["back"] = now
+      } else if (key == "a" || key == "A") {
+        keys["left"] = now
+      } else if (key == "d" || key == "D") {
+        keys["right"] = now
+      } else if (key == "\x1b[D") {
+        keys["turnl"] = now
+      } else if (key == "\x1b[C") {
+        keys["turnr"] = now
+      }
+    }
+  }
+
+  let pdx = inp["pending_dx"]
+  let pdy = inp["pending_dy"]
+  if (pdx != 0 || pdy != 0) {
+    inp["yaw"] = inp["yaw"] + float(pdx) * MOUSE_YAW
+    inp["pitch"] = inp["pitch"] - float(pdy) * MOUSE_PITCH
+    if (inp["pitch"] > PITCH_LIMIT) {
+      inp["pitch"] = PITCH_LIMIT
+    }
+    if (inp["pitch"] < -PITCH_LIMIT) {
+      inp["pitch"] = -PITCH_LIMIT
+    }
+    inp["pending_dx"] = 0
+    inp["pending_dy"] = 0
+  }
+  return false
+}
+
+// axis returns [forward, strafe, turn] as -1/0/+1 intents.
+pub axis := fn(inp, now) {
+  let k = inp["keys"]
+  let f = 0
+  if (k["fwd"] > 0 && now - k["fwd"] < KEY_TIMEOUT) {
+    f = f + 1
+  }
+  if (k["back"] > 0 && now - k["back"] < KEY_TIMEOUT) {
+    f = f - 1
+  }
+  let s = 0
+  if (k["right"] > 0 && now - k["right"] < KEY_TIMEOUT) {
+    s = s + 1
+  }
+  if (k["left"] > 0 && now - k["left"] < KEY_TIMEOUT) {
+    s = s - 1
+  }
+  let t = 0
+  if (k["turnr"] > 0 && now - k["turnr"] < KEY_TIMEOUT) {
+    t = t + 1
+  }
+  if (k["turnl"] > 0 && now - k["turnl"] < KEY_TIMEOUT) {
+    t = t - 1
+  }
+  return [f, s, t]
+}
+
+pub horizon := fn(inp, bob) {
+  let h = int(HORIZON + inp["pitch"] + bob + 0.5)
+  if (h < HORIZON_MIN) {
+    h = HORIZON_MIN
+  }
+  if (h > HORIZON_MAX) {
+    h = HORIZON_MAX
+  }
+  return h
+}
