@@ -168,7 +168,7 @@ func termReadKeyRaw() (string, error) {
 		return "", fmt.Errorf("could not read key: %w", err)
 	}
 	if n == 0 {
-		return "", fmt.Errorf("could not read key: EOF")
+		return "", nil
 	}
 	if b[0] != 0x1b {
 		return string(b[:1]), nil
