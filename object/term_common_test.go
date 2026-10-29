@@ -253,6 +253,7 @@ func TestTermReadKeyTailDoesNotBlock(t *testing.T) {
 	if _, err := w.WriteString(";5M"); err != nil {
 		t.Fatal(err)
 	}
+	_ = w.Close()
 	type result struct {
 		s   string
 		err error
