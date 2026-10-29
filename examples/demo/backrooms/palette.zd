@@ -17,6 +17,7 @@ import "std/math" as math
 
 let PALETTE_N = config.PALETTE_N
 let GLYPH_N = config.GLYPH_N
+let RUN_STRIDE = config.W + 1
 let FAMILIES = 6
 let SHADES = 16
 
@@ -29,10 +30,10 @@ let UNICODE_GLYPHS = [
   "•", "◦", "∙", "┄"
 ]
 
-// Strict 7-bit fallback. Slot 0 stays the half-block because it is only
-// used by the truecolor renderer; --plain-ascii starts in ASCII mode.
+// Strict 7-bit fallback. Slot 0 is never emitted by ASCII cells, but it
+// stays 7-bit too so every glyph in this pack is safe on a bare console.
 let ASCII_GLYPHS = [
-  "▀", "|", "-", "+", ".", " ", "=", "#", "%", ":",
+  " ", "|", "-", "+", ".", " ", "=", "#", "%", ":",
   "\\", "/", "n", "]", "[", "_", "_", "|", "=", "X",
   "o", ".", ",", "~"
 ]
@@ -179,7 +180,7 @@ let glyph_256 = fn(top) {
 pub build := fn(mode, plain) {
   let pair = make(PALETTE_N * PALETTE_N, "")
   let glyph = make(PALETTE_N * GLYPH_N, "")
-  let runs = make(GLYPH_N * 81, "")
+  let runs = make(GLYPH_N * RUN_STRIDE, "")
   let fog = make(PALETTE_N * 16, 0)
   let darken = make(PALETTE_N, 0)
   let is256 = mode == "256"
@@ -232,10 +233,10 @@ pub build := fn(mode, plain) {
     darken[c] = family + ds
   }
 
-  // Repeated glyphs of every length used by a row (1..80).
+  // Repeated glyphs of every length used by a row (1..W).
   for (g := 0; g < GLYPH_N; g++) {
-    for (n := 1; n <= 80; n++) {
-      runs[g * 81 + n] = __str_repeat(gs[g], n)
+    for (n := 1; n <= config.W; n++) {
+      runs[g * RUN_STRIDE + n] = __str_repeat(gs[g], n)
     }
   }
 
@@ -243,6 +244,7 @@ pub build := fn(mode, plain) {
     "pair": pair,
     "glyph": glyph,
     "runs": runs,
+    "run_stride": RUN_STRIDE,
     "fog": fog,
     "darken": darken,
     "glyphs": gs,

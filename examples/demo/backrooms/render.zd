@@ -22,7 +22,6 @@ let GLYPH_N = config.GLYPH_N
 let FOG_STEPS = config.FOG_STEPS
 let FOG_CURVE = config.FOG_CURVE
 let WIN = config.WIN
-let RUN_STRIDE = W + 1
 
 let TEX_N = textures.TEX_N
 let TEX_SCALE = textures.TEX_SCALE
@@ -639,6 +638,7 @@ pub present := fn(cells, pal, parts) {
   let pair = pal["pair"]
   let glyph_head = pal["glyph"]
   let runs = pal["runs"]
+  let run_stride = pal["run_stride"]
   let np = 0
   let last = ""
 
@@ -673,7 +673,7 @@ pub present := fn(cells, pal, parts) {
         np = np + 1
         last = h
       }
-      parts[np] = runs[g * RUN_STRIDE + n]
+      parts[np] = runs[g * run_stride + n]
       np = np + 1
       x = x + n
     }

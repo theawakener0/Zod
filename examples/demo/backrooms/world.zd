@@ -100,12 +100,14 @@ pub gen_chunk_into := fn(grid, ox, oz, cx, cz, seed) {
 
   let r = {"s": rng_seed(seed, cx, cz)}
 
-  // One guaranteed two-cell opening in each owned boundary. Avoid the
-  // corners so the clear ring always has a floor path around them.
-  let nox = 2 + rng_next(r) % 12
+  // One guaranteed two-cell opening in each owned boundary. Keep the
+  // opening and both door-frame cells strictly inside this chunk's
+  // owned row/column: x=15 and z=15 belong to the neighbouring chunk,
+  // which is generated later and would overwrite a corner frame.
+  let nox = 2 + rng_next(r) % 11
   grid[bz * WIN + bx + nox] = 0
   grid[bz * WIN + bx + nox + 1] = 0
-  let woz = 2 + rng_next(r) % 12
+  let woz = 2 + rng_next(r) % 11
   grid[(bz + woz) * WIN + bx] = 0
   grid[(bz + woz + 1) * WIN + bx] = 0
 

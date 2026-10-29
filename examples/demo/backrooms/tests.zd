@@ -17,6 +17,7 @@ import "render.zd" as render
 import "collision.zd" as collision
 import "input.zd" as input
 import "palette.zd" as palette
+import "textures.zd" as textures
 
 let test_state = {"failures": 0}
 
@@ -29,6 +30,20 @@ let check = fn(name, cond) {
 
 let near = fn(a, b, eps) {
   return math.abs(a - b) <= eps
+}
+
+// Half-block cells pack (top * PALETTE_N + bottom) * GLYPH_N + 0.
+let cell_top = fn(c) {
+  return (c / config.GLYPH_N) / config.PALETTE_N
+}
+
+let cell_bottom = fn(c) {
+  return (c / config.GLYPH_N) % config.PALETTE_N
+}
+
+// A wall texel may be wallpaper (32..47 or 48..63) or trim (64..79).
+let is_wall_texel = fn(c) {
+  return (c >= 32 && c <= 79)
 }
 
 // ---- mouse parser -------------------------------------------------------
@@ -272,6 +287,168 @@ for (i := 0; i < config.WIN * config.WIN; i++) {
 check("door frames present", mat_counts[4] > 0)
 check("wall material variety", mat_counts[1] > 0 && mat_counts[2] > 0 && mat_counts[3] > 0)
 
+// Each boundary has exactly one adjacent pair of floor cells, and both
+// flanking wall cells use the dark door-frame material. This is stricter
+// than the "at least one run" check above and catches frames that were
+// overwritten or misplaced.
+let frames_exact = 1
+for (dz := 0; dz < 5; dz++) {
+  for (dx := 0; dx < 5; dx++) {
+    let cbx = dx * config.CHUNK
+    let cbz = dz * config.CHUNK
+    let nz = make(2, -1)
+    let nn = 0
+    for (lx := 0; lx < config.CHUNK; lx++) {
+      if (grid_c[cbz * config.WIN + cbx + lx] == 0) {
+        if (nn < 2) {
+          nz[nn] = lx
+        }
+        nn = nn + 1
+      }
+    }
+    if (nn != 2 || nz[1] != nz[0] + 1 || nz[0] <= 0 || nz[1] >= config.CHUNK - 1) {
+      frames_exact = 0
+    } else if (grid_c[cbz * config.WIN + cbx + nz[0] - 1] != 4 ||
+               grid_c[cbz * config.WIN + cbx + nz[1] + 1] != 4) {
+      frames_exact = 0
+    }
+
+    let wz = make(2, -1)
+    let wn = 0
+    for (lz := 0; lz < config.CHUNK; lz++) {
+      if (grid_c[(cbz + lz) * config.WIN + cbx] == 0) {
+        if (wn < 2) {
+          wz[wn] = lz
+        }
+        wn = wn + 1
+      }
+    }
+    if (wn != 2 || wz[1] != wz[0] + 1 || wz[0] <= 0 || wz[1] >= config.CHUNK - 1) {
+      frames_exact = 0
+    } else if (grid_c[(cbz + wz[0] - 1) * config.WIN + cbx] != 4 ||
+               grid_c[(cbz + wz[1] + 1) * config.WIN + cbx] != 4) {
+      frames_exact = 0
+    }
+  }
+}
+check("exact boundary openings and frames", frames_exact == 1)
+
+// Door-frame material must only appear on an owned boundary row/column,
+// never in an interior wall or a pillar.
+let frame_positions_ok = 1
+for (i := 0; i < config.WIN * config.WIN; i++) {
+  if (grid_c[i] == 4) {
+    let wx = win_c["ox"] + i % config.WIN
+    let wz = win_c["oz"] + i / config.WIN
+    if (world.local_coord(wx) != 0 && world.local_coord(wz) != 0) {
+      frame_positions_ok = 0
+    }
+  }
+}
+check("door frames on owned boundaries", frame_positions_ok == 1)
+
+// The guaranteed spawn must stay clear across many seeds and in a
+// negative chunk, not just for the seed used by the golden frame.
+let spawns_ok = 1
+for (s := 0; s < 12; s++) {
+  let sw = world.new_window(s)
+  world.rebuild(sw, s, 0, 0)
+  let sp = world.find_spawn(sw, 0, 0)
+  if (!near(sp[0], 2.5, 0.0001) || !near(sp[1], 12.5, 0.0001)) {
+    spawns_ok = 0
+  }
+  for (dz := -1; dz <= 1; dz++) {
+    for (dx := -1; dx <= 1; dx++) {
+      if (world.is_wall_cell(sw, int(sp[0]) + dx, int(sp[1]) + dz)) {
+        spawns_ok = 0
+      }
+    }
+  }
+}
+let nsw = world.new_window(7)
+world.rebuild(nsw, 7, -1, -1)
+let nsp = world.find_spawn(nsw, -1, -1)
+for (dz := -1; dz <= 1; dz++) {
+  for (dx := -1; dx <= 1; dx++) {
+    if (world.is_wall_cell(nsw, int(nsp[0]) + dx, int(nsp[1]) + dz)) {
+      spawns_ok = 0
+    }
+  }
+}
+check("multi-seed and negative-chunk spawn", spawns_ok == 1)
+
+// ---- texture atlases ----------------------------------------------------
+
+let atlas = textures.build()
+let atlas_again = textures.build()
+let atlas_bases = ["floor", "ceil", "wall1z", "wall1x", "wall2", "wall3", "wall4"]
+let atlas_ok = 1
+let atlas_same = 1
+let fam_hits = make(6, 0)
+for (a := 0; a < len(atlas_bases); a++) {
+  let base = atlas_bases[a]
+  let colors = atlas[base + "_color"]
+  let glyphs = atlas[base + "_glyph"]
+  let colors2 = atlas_again[base + "_color"]
+  let glyphs2 = atlas_again[base + "_glyph"]
+  if (len(colors) != textures.TEX_N * textures.TEX_N || len(glyphs) != textures.TEX_N * textures.TEX_N) {
+    atlas_ok = 0
+  }
+  for (i := 0; i < len(colors); i++) {
+    let c = colors[i]
+    let g = glyphs[i]
+    if (c >= 0 && c < config.PALETTE_N) {
+      fam_hits[c / 16] = 1
+    } else {
+      atlas_ok = 0
+    }
+    if (g < 1 || g >= config.GLYPH_N) {
+      atlas_ok = 0
+    }
+    if (c != colors2[i] || g != glyphs2[i]) {
+      atlas_same = 0
+    }
+  }
+}
+check("atlas size and ranges", atlas_ok == 1)
+check("atlas deterministic", atlas_same == 1)
+let fam_all = 1
+for (f := 0; f < 6; f++) {
+  if (fam_hits[f] == 0) {
+    fam_all = 0
+  }
+}
+check("atlas uses all colour families", fam_all == 1)
+
+// Material-specific families: the ceiling panel must be light, the floor
+// must be carpet, and the door-frame atlas must be entirely trim.
+let ceil_light = 0
+let ceil_colors = atlas["ceil_color"]
+for (i := 0; i < len(ceil_colors); i++) {
+  if (ceil_colors[i] >= 80 && ceil_colors[i] <= 95) {
+    ceil_light = 1
+  }
+}
+check("ceiling has light panels", ceil_light == 1)
+
+let floor_only = 1
+let floor_colors = atlas["floor_color"]
+for (i := 0; i < len(floor_colors); i++) {
+  if (floor_colors[i] < 16 || floor_colors[i] > 31) {
+    floor_only = 0
+  }
+}
+check("floor atlas is carpet family", floor_only == 1)
+
+let wall4_only = 1
+let wall4_colors = atlas["wall4_color"]
+for (i := 0; i < len(wall4_colors); i++) {
+  if (wall4_colors[i] < 64 || wall4_colors[i] > 79) {
+    wall4_only = 0
+  }
+}
+check("door-frame atlas is trim family", wall4_only == 1)
+
 // ---- DDA ----------------------------------------------------------------
 
 let blank = fn(seed, pcx, pcz) {
@@ -341,6 +518,25 @@ check("dda negative window hit", ncols["hit"][40] == 1)
 check("dda negative window dist", near(ncols["dist"][40], 3.5, 0.02))
 check("dda negative window side", ncols["side"][40] == 0)
 
+// A 45-degree ray needs ~48 grid crossings to reach a wall 23.5 cells
+// away. This exercises the full MAX_STEPS diagonal budget instead of the
+// axis-aligned case, which only needs 24 steps.
+let dw4 = blank(12, 2, 2)
+put_wall(dw4, 64, 64, 1)
+let cols4 = render.new_cols()
+render.cast_columns(dw4, 40.5, 40.5, math.pi / 4.0, cols4, 30)
+check("dda diagonal max reach hit", cols4["hit"][40] == 1)
+check("dda diagonal max reach fog", near(cols4["dist"][40], config.FOG_END, 0.0001))
+
+// A wall one cell farther would need more crossings than MAX_STEPS.
+// It must degrade to open fog rather than leak a stale hit.
+let dw5 = blank(12, 2, 2)
+put_wall(dw5, 65, 65, 1)
+let cols5 = render.new_cols()
+render.cast_columns(dw5, 40.5, 40.5, math.pi / 4.0, cols5, 30)
+check("dda diagonal step cap", cols5["hit"][40] == 0)
+check("dda diagonal step cap fog", cols5["wall"][40] == 63)
+
 // ---- collision ----------------------------------------------------------
 
 let cw = blank(5, 0, 0)
@@ -395,9 +591,21 @@ let pal_256 = palette.build("256", 0)
 let pal_plain = palette.build("true", 1)
 check("palette mode", pal_true["mode"] == "true" && pal_256["mode"] == "256")
 check("palette plain flag", pal_true["plain"] == 0 && pal_plain["plain"] == 1)
+check("run stride config", pal_true["run_stride"] == config.W + 1 && pal_plain["run_stride"] == config.W + 1)
+check("run table size", len(pal_true["runs"]) == config.GLYPH_N * (config.W + 1))
 check("fog family clamp", pal_true["fog"][0 * 16 + 0] == 0 && pal_true["fog"][0 * 16 + 15] == 15)
 check("fog light family", pal_true["fog"][80 * 16 + 15] == 95)
 check("darken family", pal_true["darken"][0] == 2 && pal_true["darken"][15] == 15)
+
+let plain_glyphs_ok = 1
+let pgs = palette.glyphs(1)
+for (g := 0; g < config.GLYPH_N; g++) {
+  if (len(pgs[g]) != 1) {
+    plain_glyphs_ok = 0
+  }
+}
+check("plain glyph pack is 7-bit", plain_glyphs_ok == 1)
+check("plain glyph 0 safe", pgs[0] == " ")
 
 let fw = world.new_window(1)
 world.rebuild(fw, 1, 0, 0)
@@ -406,7 +614,7 @@ let fcols = render.new_cols()
 render.cast_columns(fw, fspawn[0], fspawn[1], 0.0 - math.pi / 2.0, fcols, 30)
 let cells = make(config.W * config.H, 0)
 render.fill_halfblock(fcols, cells, 30, pal_true)
-let parts = make(5000, "")
+let parts = make(config.W * config.H * 2 + config.H + 2, "")
 let frame = render.present(cells, pal_true, parts)
 
 let rows = str.split(frame, "\r\n")
@@ -419,6 +627,41 @@ check("frame cells", glyph_total == config.W * config.H)
 check("one reset", len(str.split(frame, "\x1b[0m")) - 1 == 1)
 check("frame ends reset", str.ends_with(frame, "\x1b[0m"))
 check("truecolor heads", str.index_of(frame, "38;2;") >= 0)
+
+// A wall 0.5 cells away is taller than the view. Both subpixels of every
+// cell must be wall texels (no ceiling/floor leak), and the wall must
+// still be clipped to the full 60-subrow screen.
+let closew = blank(11, 0, 0)
+put_wall(closew, 41, 40, 1)
+let ccols = render.new_cols()
+render.cast_columns(closew, 40.5, 40.5, 0.0, ccols, 30)
+check("close wall hit", ccols["hit"][40] == 1)
+check("close wall distance", near(ccols["dist"][40], 0.5, 0.001))
+check("close wall clipped", ccols["top"][40] == 0 && ccols["bottom"][40] == 60)
+render.fill_halfblock(ccols, cells, 30, pal_true)
+let close_ok = 1
+for (y := 0; y < config.H; y++) {
+  for (x := 0; x < config.W; x++) {
+    let c = cells[y * config.W + x]
+    if (!is_wall_texel(cell_top(c)) || !is_wall_texel(cell_bottom(c))) {
+      close_ok = 0
+    }
+  }
+}
+check("close wall covers view", close_ok == 1)
+
+// At exactly one cell away the wall fills 60 subrows, so the top and
+// bottom texel rows are visible and must be darkened as edges.
+render.cast_columns(closew, 40.0, 40.5, 0.0, ccols, 30)
+check("full wall hit", ccols["hit"][40] == 1)
+check("full wall spans view", ccols["top"][40] == 0 && ccols["bottom"][40] == 60)
+render.fill_halfblock(ccols, cells, 30, pal_true)
+let top_edge = cell_top(cells[0 * config.W + 40])
+let top_next = cell_top(cells[1 * config.W + 40])
+let bot_edge = cell_bottom(cells[29 * config.W + 40])
+let bot_prev = cell_bottom(cells[28 * config.W + 40])
+check("wall top edge darkens", top_edge % 16 >= top_next % 16)
+check("wall bottom edge darkens", bot_edge % 16 >= bot_prev % 16)
 
 // The spawn frame should exercise several palette families at once:
 // ceiling, floor, wallpaper, trim, and the fluorescent panel.
@@ -455,6 +698,23 @@ let plain_frame = render.present(cells, pal_plain, parts)
 check("plain no halfblock", str.index_of(plain_frame, "▀") == -1)
 check("plain no box glyphs", str.index_of(plain_frame, "│") == -1 && str.index_of(plain_frame, "▓") == -1 && str.index_of(plain_frame, "═") == -1)
 check("plain rows", len(str.split(plain_frame, "\r\n")) == 30)
+let plain_no_unicode = 1
+let unicode_pack = palette.glyphs(0)
+for (g := 0; g < config.GLYPH_N; g++) {
+  if (unicode_pack[g] != " " && str.index_of(plain_frame, unicode_pack[g]) >= 0) {
+    plain_no_unicode = 0
+  }
+}
+check("plain frame uses only 7-bit glyphs", plain_no_unicode == 1)
+
+// The 256-colour path must also work for the textured ASCII pack.
+let pal_256_plain = palette.build("256", 1)
+render.fill_ascii(fcols, cells, 30, pal_256_plain)
+let ascii_256_frame = render.present(cells, pal_256_plain, parts)
+check("ascii 256 uses 256", str.index_of(ascii_256_frame, "38;5;") >= 0)
+check("ascii 256 no truecolor", str.index_of(ascii_256_frame, "38;2;") == -1)
+check("ascii 256 no halfblock", str.index_of(ascii_256_frame, "▀") == -1)
+check("ascii 256 rows", len(str.split(ascii_256_frame, "\r\n")) == 30)
 
 // Golden frame: seed 5, spawn cell, facing north, horizon 30, half-block.
 let gw = world.new_window(5)
@@ -464,10 +724,10 @@ let gcols = render.new_cols()
 render.cast_columns(gw, gspawn[0], gspawn[1], 0.0 - math.pi / 2.0, gcols, 30)
 let gcells = make(config.W * config.H, 0)
 render.fill_halfblock(gcols, gcells, 30, pal_true)
-let gparts = make(5000, "")
+let gparts = make(config.W * config.H * 2 + config.H + 2, "")
 let gframe = render.present(gcells, pal_true, gparts)
 let golden = crypto.sha256(gframe)
-let GOLDEN = "0e12b6d9e1e5a3356535e4d39da50e7fa42d740f171230a46a24c6415f9092af"
+let GOLDEN = "2d5aa1bb69ed97918358900421210acb19281de14a4b661d9396eb226ff5bf58"
 check("golden frame " + golden, golden == GOLDEN)
 
 // ---- input --------------------------------------------------------------

@@ -86,7 +86,7 @@ let run_headless = fn(frames, seed, ascii) {
   let cols = render.new_cols()
   let pal = palette.build(MODE, PLAIN)
   let cells = make(W * H, 0)
-  let parts = make(5000, "")
+  let parts = make(W * H * 2 + H + 2, "")
   let last_hash = ""
 
   let start = time.now_ms()
@@ -181,7 +181,7 @@ let game_loop = fn(seed, ascii_start) {
   let pal = palette.build(MODE, PLAIN)
   let cols = render.new_cols()
   let cells = make(W * H, 0)
-  let parts = make(5000, "")
+  let parts = make(W * H * 2 + H + 2, "")
   let ascii = ascii_start
   let pacer = anim.frame_pacer(FPS)
   let last = time.now_ms()

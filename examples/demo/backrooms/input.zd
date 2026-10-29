@@ -106,7 +106,7 @@ pub handle := fn(inp, events, now) {
   let pdx = inp["pending_dx"]
   let pdy = inp["pending_dy"]
   if (pdx != 0 || pdy != 0) {
-    inp["yaw"] = inp["yaw"] + float(pdx) * MOUSE_YAW
+    inp["yaw"] = wrap_angle(inp["yaw"] + float(pdx) * MOUSE_YAW)
     inp["pitch"] = inp["pitch"] - float(pdy) * MOUSE_PITCH
     if (inp["pitch"] > PITCH_LIMIT) {
       inp["pitch"] = PITCH_LIMIT
