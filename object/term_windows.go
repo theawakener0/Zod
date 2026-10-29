@@ -101,6 +101,12 @@ func termHasInput() (bool, error) {
 }
 
 func termReadKeyRaw() (string, error) {
+	if termSGRDiscard {
+		ok, _ := termHasInput()
+		if !ok {
+			return "", nil
+		}
+	}
 	var b [1]byte
 	n, err := os.Stdin.Read(b[:])
 	if err != nil {
