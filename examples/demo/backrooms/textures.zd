@@ -27,7 +27,54 @@ let hash2 = fn(x, y) {
   return h
 }
 
-// build_floor: damp office carpet. Fine grain, broad stains, darker
+// fade and lerp drive the tileable value noise below.
+let fade = fn(t) {
+  return t * t * (3.0 - 2.0 * t)
+}
+
+let lerp = fn(a, b, t) {
+  return a + (b - a) * t
+}
+
+// vnoise samples a tileable 0..1 value-noise field. cell must divide
+// TEX_N; the lattice wraps so the 64x64 atlas still tiles seamlessly.
+let vnoise = fn(x, y, cell) {
+  let period = TEX_N / cell
+  let gx = x / cell
+  let gy = y / cell
+  let fx = float(x % cell) / float(cell)
+  let fy = float(y % cell) / float(cell)
+  let sx = fade(fx)
+  let sy = fade(fy)
+  let x0 = gx % period
+  let y0 = gy % period
+  let x1 = (gx + 1) % period
+  let y1 = (gy + 1) % period
+  let a = float(hash2(x0 + 11, y0 + 23) % 1000) / 1000.0
+  let b = float(hash2(x1 + 11, y0 + 23) % 1000) / 1000.0
+  let c = float(hash2(x0 + 11, y1 + 23) % 1000) / 1000.0
+  let d = float(hash2(x1 + 11, y1 + 23) % 1000) / 1000.0
+  return lerp(lerp(a, b, sx), lerp(c, d, sx), sy)
+}
+
+// soft is a smoothstep mask for v in [lo, hi].
+let soft = fn(v, lo, hi) {
+  let t = (v - lo) / (hi - lo)
+  if (t < 0.0) {
+    t = 0.0
+  }
+  if (t > 1.0) {
+    t = 1.0
+  }
+  return t * t * (3.0 - 2.0 * t)
+}
+
+// grain_offset maps 0..1 noise to a rounded -amp..+amp shade offset.
+let grain_offset = fn(v, amp) {
+  return math.round((v - 0.5) * 2.0 * float(amp))
+}
+
+// build_floor: damp office carpet. Soft pile grain, broad stains, darker
 // seams every two cells, and a subtle checker in the pile.
 let build_floor = fn() {
   let color = make(TEX_N * TEX_N, 0)
@@ -35,21 +82,12 @@ let build_floor = fn() {
   for (ty := 0; ty < TEX_N; ty++) {
     for (tx := 0; tx < TEX_N; tx++) {
       let idx = ty * TEX_N + tx
-      let n = hash2(tx + 11, ty + 23) % 100
-      let broad = hash2(tx / 8 + 31, ty / 8 + 47) % 100
+      let grain = vnoise(tx, ty, 4)
+      let broad = vnoise(tx, ty, 8)
       let shade = 4
-      if (n < 28) {
-        shade = shade + 1
-      }
-      if (n > 86) {
-        shade = shade + 2
-      }
-      if (broad < 16) {
-        shade = shade + 3
-      }
-      if (broad > 94) {
-        shade = shade - 1
-      }
+      shade = shade + grain_offset(grain, 1)
+      shade = shade + int(soft(broad, 0.58, 0.95) * 3.0 + 0.5)
+      shade = shade - int(soft(broad, 0.96, 1.0) + 0.5)
       if (tx % 16 == 0 || ty % 16 == 0) {
         shade = shade + 2
       }
@@ -88,14 +126,9 @@ let build_ceiling = fn() {
   for (ty := 0; ty < TEX_N; ty++) {
     for (tx := 0; tx < TEX_N; tx++) {
       let idx = ty * TEX_N + tx
-      let n = hash2(tx + 101, ty + 211) % 100
+      let grain = vnoise(tx, ty, 4)
       let shade = 4
-      if (n < 24) {
-        shade = shade + 1
-      }
-      if (n > 90) {
-        shade = shade + 2
-      }
+      shade = shade + grain_offset(grain, 1)
       let fx = tx % 8
       let fz = ty % 8
       if (fx == 0 || fz == 0) {
@@ -137,13 +170,13 @@ let build_ceiling = fn() {
       }
 
       if (tx >= 17 && tx <= 30 && ty >= 17 && ty <= 22) {
-        c = 80 + (n % 3)
+        c = 80 + int(vnoise(tx, ty, 4) * 2.999)
         g = 7
       } else if ((tx == 16 || tx == 31) && ty >= 16 && ty <= 23) {
-        c = 64 + 4 + (n % 2)
+        c = 68
         g = 2
       } else if ((ty == 16 || ty == 23) && tx >= 16 && tx <= 31) {
-        c = 64 + 4 + (n % 2)
+        c = 68
         g = 6
       }
 
@@ -165,8 +198,8 @@ let build_wall = fn(base, style) {
   for (ty := 0; ty < TEX_N; ty++) {
     for (tx := 0; tx < TEX_N; tx++) {
       let idx = ty * TEX_N + tx
-      let n = hash2(tx + style * 37, ty + style * 53) % 100
-      let broad = hash2(tx / 8 + style * 11, ty / 8 + style * 17) % 100
+      let grain = vnoise(tx, ty, 4)
+      let broad = vnoise(tx, ty, 8)
       let shade = 5
       let g = 1
 
@@ -175,35 +208,23 @@ let build_wall = fn(base, style) {
         if (stripe == 0) {
           shade = 6
         } else {
-          shade = 7 
+          shade = 7
         }
-        if (n < 12) {
-          shade = shade - 1
-        }
-        if (n > 92) {
-          shade = shade + 1
-        }
-        if (broad < 6) {
-          shade = shade + 2
-        }
+        shade = shade + grain_offset(grain, 1)
+        shade = shade + int(soft(broad, 0.94, 1.0) * 2.0 + 0.5)
         if (tx % 16 == 0) {
           shade = shade + 1
           g = 2
         }
-        if (broad < 4) {
+        if (broad > 0.94) {
           g = 8
         }
-        if (n > 96) {
+        if (grain > 0.82) {
           g = 9
         }
       } else if (style == 2) {
         shade = 7
-        if (n < 30) {
-          shade = shade + 1
-        }
-        if (n > 82) {
-          shade = shade + 2
-        }
+        shade = shade + grain_offset(grain, 1)
         if (ty % 16 == 0) {
           shade = shade + 3
           g = 2
@@ -214,8 +235,8 @@ let build_wall = fn(base, style) {
           shade = shade + 2
           g = 1
         }
-        if (broad < 18) {
-          shade = shade + 2
+        shade = shade + int(soft(broad, 0.80, 0.95) * 2.0 + 0.5)
+        if (broad > 0.86) {
           g = 8
         }
       } else if (style == 3) {
@@ -225,23 +246,16 @@ let build_wall = fn(base, style) {
         } else {
           shade = 9
         }
-        if (n < 20) {
-          shade = shade - 1
-        }
-        if (n > 78) {
-          shade = shade + 2
-        }
-        if (broad < 24) {
-          shade = shade + 3
-        }
+        shade = shade + grain_offset(grain, 1)
+        shade = shade + int(soft(broad, 0.68, 0.88) * 2.0 + 0.5)
         if (tx % 20 == 0) {
           shade = shade + 2
         }
         g = 8
-        if (broad < 12) {
+        if (broad > 0.86) {
           g = 7
         }
-        if (n > 90) {
+        if (grain > 0.84) {
           g = 9
         }
       } else {
@@ -255,10 +269,8 @@ let build_wall = fn(base, style) {
         } else {
           g = 17
         }
-        if (n > 88) {
-          shade = shade + 2
-        }
-        if (n > 94) {
+        shade = shade + int(soft(grain, 0.85, 0.98) * 2.0 + 0.5)
+        if (grain > 0.9) {
           g = 7
         }
       }
@@ -269,7 +281,7 @@ let build_wall = fn(base, style) {
       }
 
       if ((style == 1 || style == 3) && ty >= 38 && ty <= 41) {
-        color[idx] = 64 + 4 + (n % 2)
+        color[idx] = 68
         glyph[idx] = 6
       } else if (ty >= 56) {
         let bs = 3 + (ty - 56) / 3

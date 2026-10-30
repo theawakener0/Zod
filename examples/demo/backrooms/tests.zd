@@ -420,6 +420,32 @@ for (f := 0; f < 6; f++) {
 }
 check("atlas uses all colour families", fam_all == 1)
 
+// The shaded atlases should not fall back to per-texel white noise. This
+// measures how often horizontally adjacent texels change shade; structural
+// seams and grids still contribute, so the threshold is deliberately loose.
+let shade_change_fraction = fn(colors) {
+  let changed = 0
+  let total = 0
+  for (y := 0; y < textures.TEX_N; y++) {
+    for (x := 1; x < textures.TEX_N; x++) {
+      total = total + 1
+      if ((colors[y * textures.TEX_N + x] % 16) != (colors[y * textures.TEX_N + x - 1] % 16)) {
+        changed = changed + 1
+      }
+    }
+  }
+  return float(changed) / float(total)
+}
+
+let floor_grain = shade_change_fraction(atlas["floor_color"])
+let ceil_grain = shade_change_fraction(atlas["ceil_color"])
+let wall2_grain = shade_change_fraction(atlas["wall2_color"])
+let wall3_grain = shade_change_fraction(atlas["wall3_color"])
+check("floor grain is smooth", floor_grain < 0.40)
+check("ceiling grain is smooth", ceil_grain < 0.40)
+check("wall2 grain is smooth", wall2_grain < 0.40)
+check("wall3 grain is smooth", wall3_grain < 0.40)
+
 // Material-specific families: the ceiling panel must be light, the floor
 // must be carpet, and the door-frame atlas must be entirely trim.
 let ceil_light = 0
@@ -727,7 +753,7 @@ render.fill_halfblock(gcols, gcells, 30, pal_true)
 let gparts = make(config.W * config.H * 2 + config.H + 2, "")
 let gframe = render.present(gcells, pal_true, gparts)
 let golden = crypto.sha256(gframe)
-let GOLDEN = "2d5aa1bb69ed97918358900421210acb19281de14a4b661d9396eb226ff5bf58"
+let GOLDEN = "fdd3a56d696a2682d5fd74b6384c22d884471fbca6403d84382a3dc5b24be62b"
 check("golden frame " + golden, golden == GOLDEN)
 
 // ---- input --------------------------------------------------------------
