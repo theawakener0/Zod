@@ -22,6 +22,29 @@ func collectWithString(seq string) string {
 	})
 }
 
+// callTermReadKey runs termReadKey in a goroutine so a regression that
+// blocks fails the test instead of hanging the package until the go test
+// timeout.
+func callTermReadKey(t *testing.T, timeout time.Duration, when string) (string, error) {
+	t.Helper()
+	type result struct {
+		s   string
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		s, err := termReadKey()
+		done <- result{s, err}
+	}()
+	select {
+	case res := <-done:
+		return res.s, res.err
+	case <-time.After(timeout):
+		t.Fatalf("termReadKey blocked %s", when)
+		return "", nil
+	}
+}
+
 func TestCollectEscapeSequenceSGRMouse(t *testing.T) {
 	cases := []string{
 		"\x1b[<0;10;5M",     // left press
@@ -218,6 +241,40 @@ func TestSGRTailDiscardLetterTail(t *testing.T) {
 	}
 }
 
+// termHasInput must report a drained pipe as empty. On Windows,
+// WaitForSingleObject always signals a synchronous pipe, which made
+// the escape assembler block in a read after consuming the last byte.
+func TestTermHasInputPipe(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStdin := os.Stdin
+	os.Stdin = r
+	defer func() {
+		os.Stdin = oldStdin
+		_ = r.Close()
+		_ = w.Close()
+	}()
+
+	if ok, err := termHasInput(); err != nil || ok {
+		t.Fatalf("empty pipe: termHasInput() = %v, %v; want false, nil", ok, err)
+	}
+	if _, err := w.WriteString("x"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := termHasInput(); err != nil || !ok {
+		t.Fatalf("pipe with data: termHasInput() = %v, %v; want true, nil", ok, err)
+	}
+	var b [1]byte
+	if _, err := r.Read(b[:]); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := termHasInput(); err != nil || ok {
+		t.Fatalf("drained pipe: termHasInput() = %v, %v; want false, nil", ok, err)
+	}
+}
+
 // A swallowed tail may be the last buffered byte. termReadKey must
 // return "no key" instead of blocking for an unrelated future key;
 // poll_events depends on this to keep rendering after a malformed report.
@@ -239,7 +296,7 @@ func TestTermReadKeyTailDoesNotBlock(t *testing.T) {
 	if _, err := w.WriteString("\x1b[<0;abc"); err != nil {
 		t.Fatal(err)
 	}
-	got, err := termReadKey()
+	got, err := callTermReadKey(t, 5*time.Second, "while assembling a truncated report")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,25 +310,12 @@ func TestTermReadKeyTailDoesNotBlock(t *testing.T) {
 	if _, err := w.WriteString(";5M"); err != nil {
 		t.Fatal(err)
 	}
-	type result struct {
-		s   string
-		err error
+	got, err = callTermReadKey(t, time.Second, "after consuming the last tail byte")
+	if err != nil {
+		t.Fatal(err)
 	}
-	done := make(chan result, 1)
-	go func() {
-		s, err := termReadKey()
-		done <- result{s, err}
-	}()
-	select {
-	case res := <-done:
-		if res.err != nil {
-			t.Fatal(res.err)
-		}
-		if res.s != "" {
-			t.Fatalf("termReadKey() = %q, want an empty no-key result", res.s)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("termReadKey blocked after consuming the last tail byte")
+	if got != "" {
+		t.Fatalf("termReadKey() = %q, want an empty no-key result", got)
 	}
 
 	if _, err := w.WriteString("q"); err != nil {

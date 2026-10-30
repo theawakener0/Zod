@@ -5,10 +5,15 @@ package object
 import (
 	"fmt"
 	"os"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/term"
 )
+
+// PeekNamedPipe is not wrapped by x/sys/windows. It reports how many
+// bytes are buffered in a pipe without consuming them or blocking.
+var procPeekNamedPipe = windows.NewLazySystemDLL("kernel32.dll").NewProc("PeekNamedPipe")
 
 func TermDisableRaw() error {
 	return termDisableRaw()
@@ -89,10 +94,31 @@ func termHasInput() (bool, error) {
 	if handle == 0 || handle == windows.InvalidHandle {
 		return false, nil
 	}
+	// WaitForSingleObject reports input readiness only for console
+	// input handles. A synchronous pipe handle is effectively always
+	// signaled, even when its buffer is empty, so waiting on it would
+	// claim input and the subsequent read would block. Query the pipe
+	// directly instead.
+	if ft, err := windows.GetFileType(handle); err == nil && ft == windows.FILE_TYPE_PIPE {
+		var avail uint32
+		r1, _, _ := procPeekNamedPipe.Call(
+			uintptr(handle),
+			0,                               // lpBuffer
+			0,                               // nBufferSize
+			0,                               // lpBytesRead
+			uintptr(unsafe.Pointer(&avail)), // lpTotalBytesAvail
+			0,                               // lpBytesLeftThisMessage
+		)
+		if r1 == 0 {
+			// A broken or unqueryable pipe must not look readable, or
+			// poll_key would enter a blocking read.
+			return false, nil
+		}
+		return avail > 0, nil
+	}
 	// Console input handles are signaled when the input buffer is
-	// non-empty; pipe handles when data is available. Never return an
-	// error: an Error object is truthy in Zod and poll_key would block
-	// in read_key.
+	// non-empty. Never return an error: an Error object is truthy in
+	// Zod and poll_key would block in read_key.
 	event, err := windows.WaitForSingleObject(handle, 0)
 	if err != nil {
 		return false, nil
